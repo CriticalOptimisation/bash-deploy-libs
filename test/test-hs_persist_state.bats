@@ -62,7 +62,7 @@ setup() {
   run bash -lc '
   source "$LIB"; 
   init(){ local foo=secret; hs_persist_state foo; };
-  cleanup(){ local foo=already; eval "$1" 2>&1; hs_cleanup_output; }; 
+  cleanup(){ local foo=already; hs_cleanup_output; eval "$1" 2>&1; }; 
   state=$(init); 
   cleanup "$state"'
   [ "$status" -ne 0 ]
@@ -83,7 +83,7 @@ setup() {
   run bash -lc '
   source "$LIB"; 
   init(){ local foo=""; hs_persist_state foo; };
-  cleanup(){ local foo; eval "$1"; printf "%s" "$foo"; };  
+  cleanup(){ local foo; eval "$1"; printf "%s" "$foo"; hs_cleanup_output; };  
   state=$(init); 
   cleanup "$state"'
   [ "$status" -eq 0 ]
@@ -91,13 +91,23 @@ setup() {
 }
 
 @test "overwrite empty local variable with persisted value" {
-  run bash -lc 'source "$LIB"; init(){ local foo=secret; hs_persist_state foo; }; state=$(init); cleanup(){ local foo=""; eval "$1"; printf "%s" "$foo"; }; cleanup "$state"'
+  run bash -lc '
+  source "$LIB"; 
+  init(){ local foo=secret; hs_persist_state foo; }; 
+  cleanup(){ local foo=""; eval "$1"; printf "%s" "$foo"; hs_cleanup_output; }; 
+  state=$(init); 
+  cleanup "$state"'
   [ "$status" -eq 0 ]
   [ "$output" = "secret" ]
 }
 
 @test "preserve special characters in persisted values" {
-  run bash -lc 'source "$LIB"; init(){ local foo='\''a b "c" $d'\''; hs_persist_state foo; }; state=$(init); cleanup(){ local foo; eval "$1"; printf "%s" "$foo"; }; cleanup "$state"'
+  run bash -lc '
+  source "$LIB"; 
+  init(){ local foo='\''a b "c" $d'\''; hs_persist_state foo; }; 
+  cleanup(){ local foo; eval "$1"; printf "%s" "$foo"; hs_cleanup_output; }; 
+  state=$(init); 
+  cleanup "$state"'
   [ "$status" -eq 0 ]
   [ "$output" = "a b \"c\" \$d" ]
 }
@@ -120,6 +130,7 @@ setup() {
   [ "${lines[1]}" = "secret" ]
 }
 
+# This test uses kill -0 to check if a PID exists
 @test "hs_get_pid_of_subshell returns a valid PID" {
   run bash -lc '
     source "$LIB"
@@ -128,8 +139,7 @@ setup() {
       printf "No such PID %s" "$pid"
       exit 1
     fi
-    exec 3>&-
-    wait "$pid" 2>/dev/null || true
+    hs_cleanup_output
     printf "%s" "$pid"
   '
   [ "$status" -eq 0 ]
