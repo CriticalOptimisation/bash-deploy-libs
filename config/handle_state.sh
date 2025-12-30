@@ -67,6 +67,7 @@ hs_setup_output_to_stdout() {
     #   hs_cleanup_output, or redefined globally with the kill token embedded.
     # Description:
     #   Sends the magic kill token to the logging FIFO to terminate the background reader.
+    #   Waits for the background reader to exit and redefines itself to a no-op.
     # Parameters:
     #   None
     printf -v _hs_qtoken '%q' "$_hs_fifo_kill_token"
@@ -206,8 +207,9 @@ hs_get_pid_of_subshell() {
     pid=${pid%%[^0-9]*}
     printf '%s' "$pid"
 }
-    # Initialize logging when the script is sourced
-    hs_setup_output_to_stdout
+
+# Initialize logging when the script is sourced
+hs_setup_output_to_stdout
 
 # Note: Remember to call hs_cleanup at the end of your main script to clean up resources.
 
