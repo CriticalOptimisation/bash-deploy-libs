@@ -197,8 +197,10 @@ hs_read_persisted_state() {
 #    1 - Internal error: hs_cleanup_output not defined or doesn't have the expected format.
 hs_get_pid_of_subshell() {
     # Extract the PID of the background reader process from the function definition
-    local func_def=$(declare -f hs_cleanup_output)
-    local pid=${func_def##*wait }
+    local func_def
+    func_def=$(declare -f hs_cleanup_output)
+    local pid
+    pid=${func_def##*wait }
     # The above string substitution will just return $func_det without an error if "wait " is not found.
     if [ "$pid" = "$func_def" ]; then
         echo "hs_cleanup_output function not found or has unexpected format" >&2
