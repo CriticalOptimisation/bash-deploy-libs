@@ -3,6 +3,9 @@
 # Description: Helper functions to carry state information between initialization and cleanup functions.
 # Author: Jean-Marc Le Peuvédic (https://calcool.ai)
 
+# Sentinel
+[[ -z ${__HANDLE_STATE_SH_INCLUDED:-} ]] && __HANDLE_STATE_SH_INCLUDED=1 || return 0
+
 # --- logging from $(command) using a FIFO ---------------------------------------
 # This section sets up a FIFO and a background reader process to allow functions
 # to log messages to the main script's stdout/stderr even when they are called
@@ -18,6 +21,8 @@
 #   the logging is set up.
 # Usage:
 #   Do not call directly; called automatically when this file is sourced.
+#   When done with the library, call `hs_cleanup_output` to terminate the background reader
+#   or else a 5 seconds idle timeout will occur.
 hs_setup_output_to_stdout() {
     # Test if already set up
     if hs_get_pid_of_subshell >/dev/null 2>&1; then
