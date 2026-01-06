@@ -6,6 +6,28 @@
 # Sentinel
 [[ -z ${__HANDLE_STATE_SH_INCLUDED:-} ]] && __HANDLE_STATE_SH_INCLUDED=1 || return 0
 
+# Library usage:
+#   In an initialization function, call hs_persist_state with the names of local variables
+#   that need to be preserved for later use in a cleanup function.
+# Example:
+#   init_function() {
+#       local temp_file="/tmp/some_temp_file"
+#       local resource_id="resource_123"
+#       hs_persist_state temp_file resource_id
+#       exit 0
+#   }
+#   cleanup() {
+#       local temp_file
+#       local resource_id
+#       eval "$1"  # Recreate local variables from the state string
+#       # Now temp_file and resource_id are available for cleanup operations
+#       rm -f "$temp_file"
+#       echo "Cleaned up resource: $resource_id"
+#   }
+#
+# Upper level usage: state=$(init_function)
+#                    cleanup "$state"
+
 # --- logging from $(command) using a FIFO ---------------------------------------
 # This section sets up a FIFO and a background reader process to allow functions
 # to log messages to the main script's stdout/stderr even when they are called
@@ -100,35 +122,28 @@ hs_setup_output_to_stdout() {
     }"
 }
 
-#         Commands to recreate those variables with their current values, but
-#         **without creating or overwriting global environment variables**. The generated code
-#         will only assign to a variable if it is already declared *local* in the receiving
-#         scope (i.e., the cleanup function should `local varname` before `eval`ing the state).
-#         Does not persist state in files.
-#         It is the caller's responsibility to capture the output and pass it to the cleanup function,
-#         catching errors as needed (e.g. with `trap`) to ensure the cleanup function is called.
-#
-# Library usage:
-#   In an initialization function, call hs_persist_state with the names of local variables
-#   that need to be preserved for later use in a cleanup function.
-# Example:
-#   init_function() {
-#       local temp_file="/tmp/some_temp_file"
-#       local resource_id="resource_123"
-#       hs_persist_state temp_file resource_id
-#       exit 0
-#   }
+# --- hs_persist_state ----------------------------------------------------------
+# Function:
+#   hs_persist_state
+# Description:
+#   Emits a bash code snippet that, when eval'd in the receiving scope,
+#   will recreate the specified local variables with their current values.
+#   The emitted code checks if the variable is declared `local` in the receiving
+#   scope before assigning to it, to avoid polluting global scope.
+#   If the variable already exists and is non-empty in the receiving scope,
+#   an error message is printed and the assignment is skipped.
+# Arguments:
+#   -s <state> - optional; if provided, appends the emitted code to variable
+#                definitions found in <state> (bash code snippet).
+#   $@ - names of local variables to persist.
+# Usage examples:
+#   # direct eval
+#   state=$(hs_persist_state var1 var2)
 #   cleanup() {
-#       local temp_file
-#       local resource_id
-#       eval "$1"  # Recreate local variables from the state string
-#       # Now temp_file and resource_id are available for cleanup operations
-#       rm -f "$temp_file"
-#       echo "Cleaned up resource: $resource_id"
+#       local var1 var2
+#       eval "$1"
+#       # vars are available here
 #   }
-#
-# Upper level usage: state=$(init_function)
-#                    cleanup "$state"
 hs_persist_state() {
     local var_name
     for var_name in "$@"; do
