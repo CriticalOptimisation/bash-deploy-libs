@@ -73,6 +73,7 @@ hs_setup_output_to_stdout() {
     # Description:
     #   Sends the magic kill token to the logging FIFO to terminate the background reader.
     #   Waits for the background reader to exit and redefines itself to a no-op.
+    #   Redefines hs_echo to a simple echo.
     # Parameters:
     #   None
     printf -v _hs_qtoken '%q' "$_hs_fifo_kill_token"
@@ -80,22 +81,23 @@ hs_setup_output_to_stdout() {
         if hs_echo $_hs_qtoken ; then
             wait $_hs_fifo_reader_pid 2>/dev/null
             hs_cleanup_output() { :; }
+            hs_echo() { echo \"\$*\" ; }
         fi
         return 0
     }"
-}
-
-# Function:
-#   hs_echo
-# Description:
-#   Writes messages to the logging FIFO for display in the main script's stdout.
-#   Specifically designed to work inside subshells called via `$(...)`.
-# Arguments:
-#   $* - echo options -neE or message parts to echo
-hs_echo() {
-    # Mimic Bash echo argument concatenation behavior.
-    # Here IFS acts on "$*" expansion to insert spaces between arguments.
-    IFS=" " echo "$*" >&"${_hs_fifo_fd}"
+        
+    # Function:
+    #   hs_echo
+    # Description:
+    #   Writes messages to the logging FIFO for display in the main script's stdout.
+    #   Specifically designed to work inside subshells called via `$(...)`.
+    #   Mimic Bash echo argument concatenation behavior.
+    #   Here IFS acts on "$*" expansion to insert spaces between arguments.
+    # Arguments:
+    #   $* - echo options -neE or message parts to echo
+    eval "hs_echo() {
+        IFS=\" \" echo \"\$*\" >&\"${_hs_fifo_fd}\"
+    }"
 }
 
 #         Commands to recreate those variables with their current values, but
