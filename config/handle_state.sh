@@ -145,6 +145,15 @@ hs_setup_output_to_stdout() {
 #       # vars are available here
 #   }
 hs_persist_state() {
+    # Read optional -s <state> argument
+    local existing_state=""
+    if [ "${1:-}" = "-s" ]; then
+        shift
+        existing_state="$1"
+        shift
+        # Emit existing state first
+        printf '%s\n' "$existing_state"
+    fi
     local var_name
     for var_name in "$@"; do
         # Check if the variable exists in the caller (local or global). We avoid

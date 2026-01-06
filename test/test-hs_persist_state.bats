@@ -11,6 +11,17 @@ setup() {
     return 1
   fi
 }
+# Define a helper to create a fake simplified persisted state
+make_state() {
+  while [ "$#" -gt 0 ]; do
+    local var_name="$1"
+    shift
+    local var_value="${1-}"
+    shift
+    printf 'local %s=%q\n' "$var_name" "$var_value"
+  done
+}
+export -f make_state  # makes it available in bash -lc calls
 
 @test "eval without local should succeed and leave globals unchanged" {
   run bash -lc '
@@ -161,3 +172,24 @@ setup() {
   [ "$status" -eq 0 ]
   [ "$output" = "[WARN] hs_setup_output_to_stdout: already set up; skipping." ]
 }
+
+@test "hs_persist_state with -s appends to existing state" {
+  run bash -lc '
+    source "$LIB"
+    init() {
+      local bar=two
+      hs_persist_state -s "$1" bar
+    }
+    cleanup(){ 
+      local foo bar 
+      eval "$1"
+      printf "%s:%s" "$foo" "$bar" 
+      hs_cleanup_output 
+    }
+    state1=$(make_state foo one)
+    state2=$(init "$state1")
+    cleanup "$state2"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "one:two" ]
+} 
