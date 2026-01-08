@@ -48,7 +48,7 @@
 hs_setup_output_to_stdout() {
     # Test if already set up
     if hs_get_pid_of_subshell >/dev/null 2>&1; then
-        hs_echo "[WARN] hs_setup_output_to_stdout: already set up; skipping." >&2
+        echo "[WARN] hs_setup_output_to_stdout: already set up; skipping." >&2
         return 0
     fi
     # Create a FIFO using a proper temporary file and file descriptor 3 
@@ -122,6 +122,10 @@ hs_setup_output_to_stdout() {
     }"
 }
 
+# --- Public error codes --------------------------------------------------------
+readonly HS_ERR_RESERVED_VAR_NAME=1
+readonly HS_ERR_VAR_NAME_COLLISION=2
+
 # --- hs_persist_state ----------------------------------------------------------
 # Function:
 #   hs_persist_state
@@ -146,25 +150,41 @@ hs_setup_output_to_stdout() {
 #   }
 hs_persist_state() {
     # Read optional -s <state> argument
-    local existing_state=""
+    local __existing_state=""
     if [ "${1:-}" = "-s" ]; then
         shift
-        existing_state="$1"
+        __existing_state="$1"
         shift
         # Emit existing state first
-        printf '%s\n' "$existing_state"
+        printf '%s\n' "$__existing_state"
     fi
-    local var_name
-    for var_name in "$@"; do
+    local __var_name
+    for __var_name in "$@"; do
+        # Check that the value of __var_name is neither "__var_name" nor "__existing_state"
+        if [ "$__var_name" = "__var_name" ] || [ "$__var_name" = "__existing_state" ]; then
+            echo "[ERROR] hs_persist_state: refusing to persist reserved variable name '$__var_name'." >&2  
+            return "$HS_ERR_RESERVED_VAR_NAME"
+        fi
+        # In a subshell, declare "$__var_name" as local to capture its value and
+        # attempt to restore it from "$__existing_state".
+        (
+            local "$__var_name"
+            eval "$__existing_state"
+            # Check if the variable pointed to by __var_name has been initialized
+            if ! [ -z "${!__var_name+x}" ]; then
+                echo "[ERROR] hs_persist_state: variable '$__var_name' is already defined in the state, with value '${!__var_name}'." >&2
+                return 1
+            fi
+        ) || return "$HS_ERR_VAR_NAME_COLLISION"
         # Check if the variable exists in the caller (local or global). We avoid
         # using `local -p` here because that only inspects locals of this
         # function, not the caller's scope. If the variable exists, capture its
         # value and emit a guarded assignment that will only set it in the
         # receiving scope if that scope has declared it `local`.
-        if [ "${!var_name+x}" ]; then
+        if [ "${!__var_name+x}" ]; then
             # Get the value of the variable
             local var_value
-            eval "var_value=\"\${$var_name}\"" || eval "var_value=\"\$$var_name\""
+            eval "var_value=\"\${$__var_name}\"" || eval "var_value=\"\$$__var_name\""
             # Emit a snippet that, when eval'd in the receiving scope, will
             # restore the existing, empty local variables from the saved state.
             printf "
@@ -176,7 +196,7 @@ if local -p %s >/dev/null 2>&1; then
     %s=%q
   fi
 fi
-" "$var_name" "$var_name" "$var_name" "$var_name" "$var_name" "$var_value"
+" "$__var_name" "$__var_name" "$__var_name" "$__var_name" "$__var_name" "$var_value"
         fi
     done
 }
