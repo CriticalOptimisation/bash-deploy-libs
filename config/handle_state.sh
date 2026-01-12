@@ -189,8 +189,8 @@ hs_persist_state() {
             # restore the existing, empty local variables from the saved state.
             printf "
 if local -p %s >/dev/null 2>&1; then
-  if [ -n \"\${%s+x}\" ] && [ -n \"\${%s}\" ]; then
-    printf \"[ERROR] local %s already defined; refusing to overwrite\\n\" >&2
+  if [ -n \"\${%s+x}\" ] && [ -n \"\${%1s}\" ]; then
+    printf \"[ERROR] local %1s already defined; refusing to overwrite\\n\" >&2
     return 1
   else
     %s=%q

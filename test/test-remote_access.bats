@@ -14,9 +14,15 @@ setup_file() {
     echo "Missing $LIB_STATE" >&2
     return 1
   fi
+  # shellcheck source=../config/handle_state.sh
   source "$LIB_STATE"  # Automatically calls hs_setup_output_to_stdout
   hs_cleanup_output
   export -f hs_setup_output_to_stdout hs_cleanup_output
+
+  # Start sshd server listening on ports 22 and 2222 for testing
+  export SSHD_TEST_PORTS="22 2222"
+  source "$BATS_TEST_DIRNAME/sshd_test_helper.sh"
+  start_sshd_test_servers "$SSHD_TEST_PORTS"
 }
 setup() {
   hs_setup_output_to_stdout
@@ -30,9 +36,10 @@ teardown() {
 make_state() {
   local SSH_AUTH_SOCK="${1-}"
   local SSH_AGENT_PID="${2-}"
-  local global_alias_defined="${3-true}"
+  declare -a global_aliases
+  local global_aliases=("${3-22}")
   local ssh_agent_started="${4-false}"
-  hs_persist_state SSH_AUTH_SOCK SSH_AGENT_PID global_alias_defined ssh_agent_started
+  hs_persist_state SSH_AUTH_SOCK SSH_AGENT_PID global_aliases ssh_agent_started
 }
 export -f make_state  # makes it available in bash -lc calls
 
@@ -68,7 +75,7 @@ export -f make_state  # makes it available in bash -lc calls
 
 @test "ra_ensure_ssh_access requires a remote host" {
   run bash -lc '
-    # shellcheck source=/dev/null
+    # shellcheck source=../config/remote_access.sh
     source "$LIB_REMOTE"
     ra_ensure_ssh_access
     rc=$?
@@ -82,17 +89,31 @@ export -f make_state  # makes it available in bash -lc calls
   [[ "$output" == *"Remote host is required for ensure_ssh_access."* ]]
 }
 
+@test "ra_ensure_ssh_access requires a non-empty port" {
+  run bash -lc '
+    # shellcheck source=../config/remote_access.sh
+    source "$LIB_REMOTE"
+    ra_ensure_ssh_access "localhost" ""
+    rc=$?
+    if type ra_ssh >/dev/null 2>&1; then
+      echo "ra_ssh should not be defined"
+      rc=99
+    fi
+    exit "$rc"
+  '
+  [ "$status" -eq 109 ]  # RA_ERR_MISSING_PARAMETER
+  [[ "$output" == *"Port is required for ensure_ssh_access."* ]]
+}
 @test "ra_ensure_ssh_access defines ra_ssh alias on success" {
   run bash -lc '
-    # shellcheck source=/dev/null
+    # shellcheck source=../config/remote_access.sh
     source "$LIB_REMOTE"
-    ra_ensure_ssh_access "localhost" 22 1
+    ra_ensure_ssh_access "kubb.home" 22 1
     rc=$?
     if ! type ra_ssh >/dev/null 2>&1; then
       echo "ra_ssh not defined"
       rc=95
     fi
-    hs_cleanup_output
     exit "$rc"
   '
   [ "$status" -eq 0 ]

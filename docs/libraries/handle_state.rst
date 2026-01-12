@@ -9,12 +9,13 @@ Location
 Purpose
 -------
 
-This library provides two core capabilities for Bash scripts:
+This library provides two core capabilities for Bash libraries:
 
 - Persisting local variable state from one function to another (typically
   initialization to cleanup) via a generated snippet that can be `eval`'d.
-- Capturing output from subshells (including `$(...)` command substitutions)
-  and redirecting it to the main script output stream via a FIFO.
+- As its state persistence functions output code on stdout, the library allows
+  provides the means to display messages to stdout from within initialization 
+  functions using a logging FIFO and background reader process.
 
 Quick Start
 -----------
@@ -24,10 +25,13 @@ Source the file once, then use `hs_persist_state` in the init function and
 
 .. code-block:: bash
 
-   # Source once in your main script
+   # Source once in the main script of your library
    source "$(dirname "$0")/config/handle_state.sh"
 
    init_function() {
+       # Direct output to stdout would mess up the state snippet, so use hs_echo if needed
+       hs_echo "Initializing..."
+       # Define some opaque library resources
        local temp_file="/tmp/some_temp_file"
        local resource_id="resource_123"
        hs_persist_state temp_file resource_id
@@ -40,7 +44,9 @@ Source the file once, then use `hs_persist_state` in the init function and
        echo "Cleaned up resource: $resource_id"
    }
 
-   state=$(init_function)
+   # Capture the opaque state snippet emitted on stdout
+   state=$(init_function)  
+   # Your main script logic here
    cleanup "$state"
 
 Public API
@@ -58,6 +64,12 @@ creates `hs_cleanup_output`, and defines `hs_echo` for use inside subshells.
 - Side effects: creates a FIFO via a temporary file, opens it on a file
   descriptor, and removes the FIFO path while the descriptor remains open.
 
+  .. warning::
+    This library allocates a new, unused file descriptor for internal job operations.
+    While this descriptor will not interfere with any file descriptors already in use,
+    please note that file descriptors are a global resource. The library will break down
+    if downstream code attempts to use or manipulate its private file descriptor.
+
 hs_cleanup_output
 ~~~~~~~~~~~~~~~~~
 
@@ -69,7 +81,7 @@ hs_echo
 ~~~~~~~
 
 Defined dynamically by `hs_setup_output_to_stdout`. Writes messages to the FIFO
-so they appear in the main script output even when called from subshells.
+so they appear in the main script stdout even when stdout of a subshell is being captured.
 
 - Usage: `hs_echo "message"`
 - Notes: preserves Bash echo argument concatenation behavior.
@@ -81,7 +93,16 @@ Emits Bash code that restores specified local variables in a receiving scope.
 The emitted snippet only assigns values if the target variable is declared
 `local` in the receiving scope and is still empty.
 
-- Usage: `hs_persist_state var1 var2` or `hs_persist_state -s "$state" var1`
+The function accepts an optional `-s "$state"` argument to provide an existing
+state snippet. Libraries are encouraged to provide the same option to their
+initialization functions to allow callers to chain state snippets together.
+
+When appending to an existing state snippet, the function checks for name collisions
+and refuses to overwrite existing variables. Some library combinations can be 
+incompatible with the chaining approach because they use overlapping variable names.
+The alternate solution is to keep and eval separate state snippets for each library.
+
+- Usage: `hs_persist_state [-s "$state"] var1 var2 ...`
 - Output: a string of Bash code intended to be `eval`'d by the caller.
 - Errors:
   - Refuses to persist reserved names `__var_name` and `__existing_state`.
@@ -90,8 +111,11 @@ The emitted snippet only assigns values if the target variable is declared
 hs_read_persisted_state
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Prints a previously generated state snippet without evaluating it. This allows
-callers to `eval` the snippet within their own scope (where locals are declared).
+This function is a simple wrapper around `echo`. There is no way in Bash to
+set variables in the caller scope without `eval`ing code, so this function
+is only provided for symmetry with `hs_persist_state`. Its output must be
+`eval`'d by the caller to restore state anyway and the effect is identical to
+`eval "$state"`. Code readability is slightly improved by using this function.
 
 - Usage: `eval "$(hs_read_persisted_state "$state")"`
 

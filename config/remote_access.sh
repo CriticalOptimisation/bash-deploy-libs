@@ -2,12 +2,9 @@
 # Helper library for remote access operations used by installer scripts.
 #
 # This file provides small, well-specified functions that ensure that the
-# remote host is reachable, that SSH access is available, that docker compose is installed,
-# and that a service account exists.
+# remote host is reachable, that SSH access is available.
 #  - DNS / ping checks
 #  - SSH reachability (with optional temporary ssh-agent helper)
-#  - Docker Compose installation check
-#  - Remote service account checks and (attempted) creation
 #
 # Design constraints:
 #  - Do NOT rely on global error handling (no set -e/ERR traps). Each function
@@ -114,17 +111,19 @@ ra_ensure_dns_works_and_host_is_reachable() {
 # --- SSH helpers ----------------------------------------------------------
 
 # Function:
-#   ensure_ssh_access <remote_host> [port [timeout_seconds]]
+#   ensure_ssh_access [-s <state>] <remote_host> [port [timeout_seconds]]
 # Description:
 #   Tries to run a non-interactive ssh command. If it fails and ssh-agent is
 #   available, it tries to start a temporary agent and add keys with a short
 #   timeout. Returns 0 on success, non-zero otherwise.
 #   If it returns zero, the function prints on stdout a state snippet generated
 #   by `hs_persist_state`. The caller should pass this snippet to the cleanup
-#   function `stop_temporary_ssh_agent` to stop the temporary agent when done.
+#   function `ra_cleanup_ssh_access` to stop the temporary agent when done.
 #   If it returns non-zero, it prints informative messages on stderr and
 #   returns a meaningful error code.
 # Parameters:
+#   -s <state>            Optional. If provided, adds to the state from the
+#                         argument. Lets state keep track of multiple ra_ssh* functions.
 #   <remote_host>         The remote host to connect to (user@host or host
 #                         depending on your SSH config).
 #   [port]                Optional SSH port (default: 22).
@@ -143,8 +142,18 @@ ra_ensure_dns_works_and_host_is_reachable() {
 #   that the caller should pass to the cleanup function to stop the agent.
 # Usage:
 #   state=$(ra_ensure_ssh_access "remote.example.com" 22 1) || exit 4
-#   ...
+#   ... possibly connect to other hosts, calling ra_ensure_ssh_access [-s <state>]
+#       if the port is different ...
+#   ra_cleanup_ssh_access "$state"   -- stops temporary ssh-agent if any
+#   Depending on reliance on ssh-agent, the cleanup step may disable SSH access
+#   and always deletes the ra_ssh* functions defined by ensure_ssh_access.
 ra_ensure_ssh_access() {
+	# Read optional -s <state> parameter
+	local existing_state=""
+	if [ "$1" = "-s" ]; then
+		existing_state=$(printf "%s\n" "$2")
+		shift 2
+	fi
 	# Read parameters
 	local remote_host="$1"
 	local port="${2:-22}"
@@ -172,19 +181,52 @@ ra_ensure_ssh_access() {
 	fi
 
 	# Prepare ssh command
-	local global_alias_defined=false
+	## Declare global_aliases as an array of integers representing ports with defined ra_ssh<port> functions
+	declare -a global_aliases
+	local global_aliases   # Read from existing state
+	hs_read_persisted_state "$existing_state"
+
+	local _port=""
+	if [ "$port" -ne 22 ]; then
+		_port=$(printf '_%s' "$port" | tr -d '[:space:]')
+	fi
+	## If the ra_ssh$_port function already exists, extract the ConnectTimeout value
+	if type "ra_ssh$_port" >/dev/null 2>&1; then
+		# shellcheck disable=SC2086
+		local existing_definition
+		existing_definition=$(declare -f "ra_ssh$_port")
+		local existing_timeout
+		existing_timeout=$(echo "$existing_definition" | grep -oP 'ConnectTimeout="\K[0-9]+')
+		# Redefine timeout_seconds as the greater of the existing and requested timeouts
+		if [ -n "$existing_timeout" ] && [ "$existing_timeout" -gt "$timeout_seconds" ]; then
+			timeout_seconds="$existing_timeout"
+			log_warn "Using existing ConnectTimeout of $timeout_seconds seconds for ra_ssh$_port"
+		fi
+	fi
 	eval "
-ra_ssh() {
+ra_ssh$_port() {
    \"$SSH\" -A -q -o BatchMode=yes -p \"$port\" -o ConnectTimeout=\"$timeout_seconds\" \"\$@\"
 }"
-	global_alias_defined=true
+	## Add $port to global_aliases if not already present
+	local port_found=false
+	for p in "${global_aliases[@]}"; do
+		if [ "$p" -eq "$port" ]; then
+			port_found=true
+			break
+		fi
+	done
+	if [ "$port_found" = false ]; then
+		global_aliases+=("$port")
+	fi
+	## Define local shorthand
+	local ssh="ra_ssh$_port"
 
 	ensure_dns_works_and_host_is_reachable "$remote_host" || return $?
 
-	# Test connection
-	if ra_ssh "$remote_host" exit >/dev/null 2>&1; then
+	# Test SSH connection
+	if "$ssh" "$remote_host" exit >/dev/null 2>&1; then
 		log_info "# SSH access to $remote_host OK"
-		hs_persist_state global_alias_defined
+		hs_persist_state -s "$existing_state" global_aliases
 		return 0
 	fi
 
@@ -227,13 +269,13 @@ ra_ssh() {
 		if [ "$_added_any" = false ]; then
 			log_err "No SSH keys could be added to the agent."
 			# No need to try further
-			ra_cleanup_ssh_access "$(hs_persist_state SSH_AUTH_SOCK SSH_AGENT_PID global_alias_defined ssh_agent_started)"
+			ra_cleanup_ssh_access "$(hs_persist_state SSH_AUTH_SOCK SSH_AGENT_PID global_aliases ssh_agent_started)"
 			return "$RA_ERR_NO_VALID_SSH_KEY"
 		fi
 	fi
 
-	if ra_ssh "$remote_host" exit >/dev/null 2>&1; then
-		hs_persist_state SSH_AUTH_SOCK SSH_AGENT_PID global_alias_defined ssh_agent_started
+	if "$ssh" "$remote_host" exit >/dev/null 2>&1; then
+		hs_persist_state SSH_AUTH_SOCK SSH_AGENT_PID global_aliases ssh_agent_started
 		return 0
 	fi
 
@@ -246,82 +288,23 @@ ra_cleanup_ssh_access()
 {
 	local SSH_AUTH_SOCK
 	local SSH_AGENT_PID
-	local global_alias_defined
+	local global_aliases
 	local ssh_agent_started
 	eval "$(hs_read_persisted_state "$1")"
-	if [ "$global_alias_defined" = true ]; then
-		unset -f ra_ssh
-	fi
+	# Loop over global_aliases and unset each ra_ssh<port> function
+	for port in "${global_aliases[@]}"; do
+		local _port=""
+		if [ "$port" -ne 22 ]; then
+			_port=$(printf '_%s' "$port" | tr -d '[:space:]')
+		fi
+		if type "ra_ssh$_port" >/dev/null 2>&1; then
+			unset -f "ra_ssh$_port"
+		fi
+	done
 	if [ "$ssh_agent_started" = true ] && [ -n "${SSH_AGENT_PID:-}" ]; then
 		ssh-agent -k >/dev/null 2>&1
 		log_info "Stopped temporary ssh-agent (PID $SSH_AGENT_PID)"
 	fi
-}
-
-# --- Remote account management --------------------------------------------
-# Function:
-#   ra_ensure_remote_user
-# Description:
-#   Ensures that <remote_user> exists on <remote_host>. If it doesn't, attempts
-#   to create it (requires sudo on the remote host). Returns 0 on success.
-# Parameters:
-#   <remote_host>   The remote host to connect to (user@host or host
-#                   depending on your SSH config).
-#   <remote_user>   The remote user to check/create.
-#   <assume_yes>    If true, assumes 'yes' to any prompts when encountering
-#                   an existing user.
-# Returns:
-#   0 if the user exists or was created successfully.
-#   Non-zero otherwise.
-#   Can return any code returned by ra_ensure_ssh_access.
-# State persistence:
-#   Saves the name of the remote user in case it is needed for cleanup.
-# Usage:
-#   ra_ensure_remote_user "remote.example.com" "plex" true || exit
-ra_ensure_remote_user() {
-	local remote_host="$1"
-	local remote_user="$2"
-	local assume_yes="$3"
-	local SSH_CALL=(ssh -A -q -o BatchMode=yes -o ConnectTimeout=1)
-
-	if ! "${SSH_CALL[@]}" "$remote_host" getent group "$remote_user" >/dev/null 2>&1; then
-		log_warn "The group '$remote_user' does not exist on $remote_host"
-	fi
-
-	if "${SSH_CALL[@]}" "$remote_host" id -u "$remote_user" >/dev/null 2>&1; then
-		log_info "Remote user '$remote_user' exists on $remote_host"
-		return 0
-	fi
-
-	log_info "Attempting to create service account '$remote_user' on $remote_host"
-	local cmd
-	cmd=(sudo useradd -rmU -c "service account" -s /usr/sbin/nologin -G docker "$remote_user")
-	local rc=0
-	# Use -t to force pseudo-tty so sudo can prompt if needed
-	"${SSH_CALL[@]}" -t "$remote_host" "${cmd[*]}" || rc=$?
-
-	if [ $rc -ne 0 ]; then
-		if [ $rc -eq 9 ]; then
-			log_warn "Account $remote_user already exists (rc=9)."
-			if [ "$assume_yes" = true ]; then
-				log_info "Assuming existing account is suitable (assume_yes=true)"
-				return 0
-			fi
-			# Ask user locally whether to continue
-			read -r -p "User $remote_user already exists on $remote_host. Continue? [y/N] " answer
-			answer=${answer,,}
-			if [[ -z "$answer" || "$answer" == "n" || "$answer" == "no" ]]; then
-				log_err "Operation aborted by user."
-				return 6
-			fi
-			return 0
-		fi
-		log_err "Failed to create remote user '$remote_user' (rc=$rc)."
-		return 7
-	fi
-
-	log_info "Service account '$remote_user' created on $remote_host"
-	return 0
 }
 
 # --- Cleanup helpers -------------------------------------------------------

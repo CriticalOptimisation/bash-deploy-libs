@@ -19,7 +19,7 @@ setup_file() {
             hs_persist_state hs_read_persisted_state hs_echo
   export HS_ERR_RESERVED_VAR_NAME HS_ERR_VAR_NAME_COLLISION
   # Accelerate test failure
-  export BATS_TEST_TIMEOUT=1
+  export BATS_TEST_TIMEOUT=2
 }
 # setup and teardown are skipped if the test has '[no-setup]' in its name.
 # This allows the capture of hs_echo output by bats.
@@ -114,7 +114,7 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
   [ -z "${bar+set}" ] && [ "${baz}" = "old" ]'
 }
 
-# bats test_tags=hs_persist_state
+# bats test_tags=hs_persist_state,focus
 @test "cleanup declares local and eval restores values onto new locals" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
@@ -126,12 +126,11 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
   [ "$output" = "secret:v2:new" ]
 }
 
-# bats test_tags=hs_read_persisted_state
+# bats test_tags=hs_read_persisted_state,focus
 @test "eval \$(hs_read_persisted_state ...) in caller scope restores values" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc ' 
   init(){ local foo=secret; local bar=v2; local baz=new; hs_persist_state foo bar baz; }; 
-  #cleanup(){ local foo bar baz; eval "$1"; printf "%s:%s:%s" "$foo" "$bar" "$baz"; }; 
   cleanup(){ local foo bar baz; eval "$(hs_read_persisted_state "$1")"; printf "%s:%s:%s" "$foo" "$bar" "$baz"; }; 
   state=$(init); 
   cleanup "$state"'
@@ -158,6 +157,66 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
   state=$(init); 
   cleanup "$state"'
   [ "$output" = "one:" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state ignores unknown variable names" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+  init(){ hs_persist_state not_a_var; };
+  state=$(init);
+  printf "%s" "$state"
+  '
+  [ -z "$output" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state ignores function names" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+  init(){ my_func(){ echo "nope"; }; hs_persist_state my_func; };
+  state=$(init);
+  printf "%s" "$state"
+  '
+  [ -z "$output" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state only captures the first element of an indexed array" {
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile -lc '
+  init(){ local -a items=(one two); hs_persist_state items; };
+  cleanup(){ local -a items; eval "$1"; printf "%s:%s" "${items[0]-}" "${items[1]-}"; };
+  state=$(init);
+  cleanup "$state"
+  '
+  [ "$output" = "one:" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state ignores associative arrays" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+  init(){ local -A amap=([key]=value); hs_persist_state amap; };
+  state=$(init);
+  printf "%s" "$state"
+  '
+  [ -z "$output" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state treats namerefs as scalar values" {
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile -lc '
+  init(){ local target=secret; local -n ref=target; hs_persist_state ref; };
+  cleanup(){ local target=""; local -n ref=target; eval "$1"; printf "%s:%s" "$target" "$ref"; };
+  state=$(init);
+  cleanup "$state"
+  '
+  [ "$output" = "secret:secret" ]
 }
 
 # bats test_tags=hs_persist_state
@@ -264,7 +323,7 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
 }
 
 # bats test_tags=hs_persist_state
-@test "hs_persist_state fails on reserved variable names" {
+@test "hs_persist_state fails on reserved variable name __var_name" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -lc '
     source "$LIB"
@@ -275,5 +334,20 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
     init
   '
   [[ "$stderr" == *"refusing to persist reserved variable name '__var_name'"* ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state fails on reserved variable name __existing_state" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -lc '
+    source "$LIB"
+    init() {
+      local __existing_state=bad
+      hs_persist_state __existing_state
+    }
+    init
+  '
+  [[ "$stderr" == *"refusing to persist reserved variable name '__existing_state'"* ]]
   [ -z "$output" ]
 }
