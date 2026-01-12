@@ -191,7 +191,7 @@ Workarounds
 - Other complex constructs can sometimes be replaced by scalar strings or rebuilt
   from scalars using custom logic.
 
-.. code::
+.. code-block:: bash
   # In the init function
   local -a myarray=("value1" "value2" "value with spaces"
   encoded=$(printf '%s\0' "${myarray[@]}" | base64 -w0)
