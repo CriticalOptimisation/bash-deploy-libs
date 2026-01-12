@@ -1,0 +1,13 @@
+# Editor/OS files
+.DS_Store
+*~
+*.swp
+*.swo
+
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+
+# Sphinx build output
+/docs/_build/
