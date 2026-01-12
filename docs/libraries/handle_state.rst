@@ -108,6 +108,10 @@ The alternate solution is to keep and eval separate state snippets for each libr
   - Refuses to persist reserved names `__var_name` and `__existing_state`.
   - Rejects collisions when a variable already exists in the provided state.
 
+.. warning::
+  The function cannot properly capture arrays, namerefs, associative arrays nor
+  functions. Only scalar string variables are supported.
+
 hs_read_persisted_state
 ~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -154,6 +158,49 @@ State Persistence
 in a guarded assignment snippet, and prints that snippet. The guards ensure that
 only `local` variables are populated in the receiving scope and that non-empty
 locals are not overwritten.
+
+Supported Variables
+-------------------
+
+`hs_persist_state` reliably preserves local scalar variables (strings or numbers)
+that are defined in the calling scope and re-declared as `local` in the receiving
+scope.
+
+Known Limitations (Tracked)
+---------------------------
+
+The following behaviors are tracked in GitHub and should be considered when
+using this library:
+
+- Unknown variable names are silently ignored instead of erroring:
+  `Issue #1 <https://github.com/CriticalOptimisation/bash-deploy-libs/issues/1>`_.
+- Function names are silently ignored instead of erroring:
+  `Issue #2 <https://github.com/CriticalOptimisation/bash-deploy-libs/issues/2>`_.
+- Indexed arrays only preserve the first element (marked major):
+  `Issue #3 <https://github.com/CriticalOptimisation/bash-deploy-libs/issues/3>`_.
+- Associative arrays are silently ignored:
+  `Issue #4 <https://github.com/CriticalOptimisation/bash-deploy-libs/issues/4>`_.
+- Namerefs are persisted as scalars (indirection is lost):
+  `Issue #5 <https://github.com/CriticalOptimisation/bash-deploy-libs/issues/5>`_.
+
+Workarounds
+-----------
+
+- Associative arrays can be represented as two indexed arrays (keys and values).
+- Indexed arrays can be represented as a string with encoding.
+- Other complex constructs can sometimes be replaced by scalar strings or rebuilt
+  from scalars using custom logic.
+
+.. code::
+  # In the init function
+  local -a myarray=("value1" "value2" "value with spaces"
+  encoded=$(printf '%s\0' "${myarray[@]}" | base64 -w0)
+  hs_persist_state encoded
+  # In the cleanup function
+  local encoded
+  eval "$(hs_read_persisted_state "$1")"
+  declare -a newarray
+  mapfile -d '' -t newarray < <(printf '%s' "$encoded" | base64 -d)
 
 Caveats
 -------
