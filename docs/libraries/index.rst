@@ -8,3 +8,5 @@ pieces they ship.
    :maxdepth: 1
 
    handle_state
+   library_template
+   command_guard
