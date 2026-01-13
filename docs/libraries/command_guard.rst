@@ -55,4 +55,24 @@ default builtin restricted PATH. The resolved path must be absolute and
 executable.
 
 It is an error to call guard on aliases and shell builtins. An error message 
-will be printed on stderr and the script will be aborted. Subshells 
+will be printed on stderr and the script will be aborted. 
+
+Subshells will be exited but the overall script may continue to run. Avoid
+using constructs that generate subshells in favor of returning results by
+out-variables.
+
+.. code-block: bash
+  myfunction() {
+    local arg1=$1
+    local -n out=$2
+
+    # ... compute result ...
+    out=$result
+  }
+  
+  if myfunction "$arg" result; then
+    : # use "$result"
+  else
+    : # handle failure. "$result" may not be set.
+  fi
+
