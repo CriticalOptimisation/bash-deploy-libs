@@ -10,21 +10,25 @@ setup_file() {
     echo "Missing library $LIB" >&2
     return 1
   fi
-  # shellcheck source=../config/command_guard.sh
+  # shellcheck source=config/command_guard.sh
   source "$LIB"
+  export -f guard _cg_resolve_command_path
+  export CG_ERR_MISSING_COMMAND CG_ERR_INVALID_NAME CG_ERR_NOT_FOUND
 }
 
+# bats test_tags=guard
 @test "guard defines a function that shadows the command" {
+  # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
-    source "$BATS_TEST_DIRNAME/../config/command_guard.sh"
     guard uname
     [ "$(type -t uname)" = "function" ]
   '
 }
 
+# bats test_tags=guard
 @test "guarded command dispatches to the resolved full path" {
+  # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
-    source "$BATS_TEST_DIRNAME/../config/command_guard.sh"
     guard uname
     full_path="$(PATH=/usr/bin:/bin command -v -- uname)"
     [ -x "$full_path" ]
@@ -34,10 +38,29 @@ setup_file() {
   '
 }
 
+# bats test_tags=guard
 @test "guard rejects invalid function names" {
-  run -2 bash --noprofile -lc '
-    source "$BATS_TEST_DIRNAME/../config/command_guard.sh"
+  run -"$CG_ERR_INVALID_NAME" bash --noprofile -lc '
     guard "bad-name"
   '
   [[ "$output" == *"invalid command name"* ]]
+}
+
+# bats test_tags=guard
+@test "guard is not fooled by alias expansion" {
+  # shellcheck disable=SC2016
+  run -1 --separate-stderr bash --noprofile -lci '
+    alias myalias="echo fooled"
+    guard myalias
+  '
+  [[ "$stderr" == "[BUG] guard: 'myalias' is an alias"* ]]
+}
+
+# bats test_tags=guard
+@test "guard is not fooled by a builtin" {
+  # shellcheck disable=SC2016
+  run -1 --separate-stderr bash --noprofile -lci '
+    guard exec
+  '
+  [[ "$stderr" == "[BUG] guard: 'exec' is a builtin"* ]]
 }

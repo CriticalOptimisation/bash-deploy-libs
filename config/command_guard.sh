@@ -9,7 +9,6 @@
 # --- Public error codes --------------------------------------------------------
 readonly CG_ERR_MISSING_COMMAND=1
 readonly CG_ERR_INVALID_NAME=2
-readonly CG_ERR_NOT_FOUND=3
 
 # --- Internal helpers ---------------------------------------------------------
 # Function:
@@ -22,12 +21,17 @@ _cg_resolve_command_path() {
     local cmd="$1"
     local resolved
 
-    resolved="$(PATH='/usr/bin:/bin' command -v -- "$cmd")" || return 1
-    if [ -z "$resolved" ] || [ "${resolved#/}" = "$resolved" ] || [ ! -x "$resolved" ]; then
-        return 1
+    # Option -p supersedes PATH with a builtin default value
+    resolved="$(command -pv -- "$cmd")" || return 1
+    # "command -v" worked.
+    printf '%s' "$resolved"
+    # Check that it's an executabla and has an absolute path
+    # Fast path: if it's an executable with an absolute path, return it
+    if [[ -x "$resolved" && "${resolved#/}" != "$resolved" ]]; then
+        return 0
     fi
 
-    printf '%s' "$resolved"
+    return 1
 }
 
 # --- Public API ---------------------------------------------------------------
@@ -65,8 +69,16 @@ guard() {
     fi
 
     full_path="$(_cg_resolve_command_path "$cmd")" || {
-        echo "[ERROR] guard: unable to resolve full path for '$cmd'." >&2
-        return "$CG_ERR_NOT_FOUND"
+        if [[ "$full_path" == "$cmd" ]]; then
+            # It's a builtin
+            echo "[BUG] guard: '$cmd' is a builtin and should not be guarded." >&2
+        elif [[ "$full_path" == alias\ * ]]; then
+            # it's an alias
+            echo "[BUG] guard: '$cmd' is an alias and should not be used in scripts." >&2
+        else
+            echo "[ERROR] guard: unable to resolve full path for '$cmd'. Use the full path." >&2
+        fi    
+        exit 1
     }
 
     eval "${cmd}() { \"${full_path}\" \"\$@\"; }"

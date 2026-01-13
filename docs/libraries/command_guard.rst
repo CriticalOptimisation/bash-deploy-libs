@@ -50,6 +50,9 @@ Error Codes
 Behavior Details
 ----------------
 
-Command resolution is performed with `command -v` in a subshell that uses the
-restricted PATH `/usr/bin:/bin`. The resolved path must be absolute and
+Command resolution is performed with `command -pv` in a subshell that uses the
+default builtin restricted PATH. The resolved path must be absolute and
 executable.
+
+It is an error to call guard on aliases and shell builtins. An error message 
+will be printed on stderr and the script will be aborted. Subshells 
