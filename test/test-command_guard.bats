@@ -59,7 +59,7 @@ setup_file() {
 # bats test_tags=guard
 @test "guard is not fooled by a builtin" {
   # shellcheck disable=SC2016
-  run -1 --separate-stderr bash --noprofile -lci '
+  run -1 --separate-stderr bash --noprofile -lc '
     guard exec
   '
   [[ "$stderr" == "[BUG] guard: 'exec' is a builtin"* ]]
