@@ -48,6 +48,11 @@ setup_file() {
 
 # bats test_tags=guard
 @test "guard is not fooled by alias expansion" {
+  # Precheck: ensure -i produces an interactive shell with alias expansion
+  run -0 bash --noprofile -lci '[[ $- == *i* ]] && shopt -q expand_aliases'
+  if [ "$status" -ne 0 ]; then
+    skip "bash -lci not interactive or expand_aliases disabled in this environment"
+  fi
   # shellcheck disable=SC2016
   run -1 --separate-stderr bash --noprofile -lci '
     alias myalias="echo fooled"
