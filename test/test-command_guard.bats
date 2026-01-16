@@ -38,23 +38,19 @@ setup_file() {
   '
 }
 
-# bats test_tags=guard
+# bats test_tags=guard,focus
 @test "guard rejects invalid function names" {
   run -"$CG_ERR_INVALID_NAME" bash --noprofile -lc '
     guard "bad-name"
   '
-  [[ "$output" == *"invalid command name"* ]]
+  [[ "$output" == *"invalid command identifier"* ]]
 }
 
 # bats test_tags=guard
 @test "guard is not fooled by alias expansion" {
-  # Precheck: ensure -i produces an interactive shell with alias expansion
-  run -0 bash --noprofile -lci '[[ $- == *i* ]] && shopt -q expand_aliases'
-  if [ "$status" -ne 0 ]; then
-    skip "bash -lci not interactive or expand_aliases disabled in this environment"
-  fi
   # shellcheck disable=SC2016
-  run -1 --separate-stderr bash --noprofile -lci '
+  run -"$CG_ERR_NOT_FOUND" --separate-stderr bash --noprofile --norc -lc '
+    shopt -s expand_aliases
     alias myalias="echo fooled"
     guard myalias
   '
@@ -64,8 +60,39 @@ setup_file() {
 # bats test_tags=guard
 @test "guard is not fooled by a builtin" {
   # shellcheck disable=SC2016
-  run -1 --separate-stderr bash --noprofile -lc '
+  run -"$CG_ERR_NOT_FOUND" --separate-stderr bash --noprofile -lc '
     guard exec
   '
   [[ "$stderr" == "[BUG] guard: 'exec' is a builtin"* ]]
+}
+
+# bats test_tags=guard
+@test "guard returns non-zero without exiting an interactive shell" {
+  # shellcheck disable=SC2016
+  run -"$CG_ERR_NOT_FOUND" --separate-stderr bash --noprofile --norc -lc '
+    shopt -s expand_aliases
+    alias myalias="echo fooled"
+    guard myalias
+    status=$?
+    echo "after"
+    exit "$status"
+  '
+  [[ "$output" == *"after"* ]]
+  [[ "$stderr" == "[BUG] guard: 'myalias' is an alias"* ]]
+}
+
+# bats test_tags=guard
+@test "guard exits when called from a subshell" {
+  # shellcheck disable=SC2016
+  run -"$CG_ERR_NOT_FOUND" --separate-stderr bash --noprofile --norc -lc '
+    shopt -s expand_aliases
+    alias myalias="echo fooled"
+    (guard myalias; echo "inside")
+    subshell_status=$?
+    echo "subshell=$subshell_status"
+    exit "$subshell_status"
+  '
+  [[ "$output" == *"subshell=3"* ]]
+  [[ "$output" != *"inside"* ]]
+  [[ "$stderr" == "[BUG] guard: 'myalias' is an alias"* ]]
 }
