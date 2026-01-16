@@ -9,6 +9,7 @@
 # --- Public error codes --------------------------------------------------------
 readonly CG_ERR_MISSING_COMMAND=1
 readonly CG_ERR_INVALID_NAME=2
+readonly CG_ERR_NOT_FOUND=3
 
 # --- Internal helpers ---------------------------------------------------------
 # Function:
@@ -59,12 +60,12 @@ guard() {
     local full_path
 
     if [ -z "$cmd" ]; then
-        echo "[ERROR] guard: missing command name." >&2
+        echo "[ERROR] Usage: 'guard <command>' Missing command argument." >&2
         return "$CG_ERR_MISSING_COMMAND"
     fi
 
     if ! [[ "$cmd" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-        echo "[ERROR] guard: invalid command name '$cmd'." >&2
+        echo "[ERROR] guard: invalid command identifier.'$cmd'." >&2
         return "$CG_ERR_INVALID_NAME"
     fi
 
@@ -78,8 +79,7 @@ guard() {
         else
             echo "[ERROR] guard: unable to resolve full path for '$cmd'. Use the full path." >&2
         fi    
-        exit 1
+        [[ "$BASHPID" != "$$" ]] && exit $CG_ERR_NOT_FOUND || return $CG_ERR_NOT_FOUND
     }
-
     eval "${cmd}() { \"${full_path}\" \"\$@\"; }"
 }
