@@ -96,7 +96,6 @@ setup_file() {
   [[ "$output" != *"inside"* ]]
   [[ "$stderr" == "[BUG] guard: 'myalias' is an alias"* ]]
 }
-
 # --- PR#1: Multiple commands support (should fail initially) ---
 
 # bats test_tags=guard,pr1

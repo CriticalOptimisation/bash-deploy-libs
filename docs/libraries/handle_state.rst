@@ -111,7 +111,6 @@ The alternate solution is to keep and eval separate state snippets for each libr
 .. warning::
   The function cannot properly capture arrays, namerefs, associative arrays nor
   functions. Only scalar string variables are supported.
-
 hs_read_persisted_state
 ~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -201,7 +200,6 @@ Workarounds
   eval "$(hs_read_persisted_state "$1")"
   declare -a newarray
   mapfile -d '' -t newarray < <(printf '%s' "$encoded" | base64 -d)
-
 Caveats
 -------
 
