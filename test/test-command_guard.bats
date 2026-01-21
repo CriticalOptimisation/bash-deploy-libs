@@ -360,3 +360,61 @@ setup_file() {
   '
   [[ "$stderr" != *"WARNING: Non-guarded command"* ]]
 }
+
+# --- PR#4: Zero commands and options support (should fail initially) ---
+
+# bats test_tags=guard,pr4
+@test "PR#4: guard with zero commands emits warning and returns 0" {
+  skip "Feature not yet implemented - PR#4"
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    source "$LIB"
+    guard
+  '
+  [[ "$stderr" == *"WARNING: No commands specified"* ]]
+}
+
+# bats test_tags=guard,pr4
+@test "PR#4: guard with -q suppresses warnings for zero commands" {
+  skip "Feature not yet implemented - PR#4"
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    source "$LIB"
+    guard -q
+  '
+  [[ "$stderr" != *"WARNING"* ]]
+}
+
+# bats test_tags=guard,pr4
+@test "PR#4: guard with -- separates options from commands" {
+  skip "Feature not yet implemented - PR#4"
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile -lc '
+    source "$LIB"
+    guard -- uname
+    [ "$(type -t uname)" = "function" ]
+  '
+}
+
+# bats test_tags=guard,pr4
+@test "PR#4: guard with -q -- suppresses warnings and separates options" {
+  skip "Feature not yet implemented - PR#4"
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    source "$LIB"
+    guard -q --
+    [ "$(type -t uname)" != "function" ]
+  '
+  [[ "$stderr" != *"WARNING"* ]]
+}
+
+# bats test_tags=guard,pr4
+@test "PR#4: guard backward compatible with single command after options" {
+  skip "Feature not yet implemented - PR#4"
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile -lc '
+    source "$LIB"
+    guard -q -- uname
+    [ "$(type -t uname)" = "function" ]
+  '
+}
