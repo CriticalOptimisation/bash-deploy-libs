@@ -42,11 +42,15 @@ _cg_resolve_command_path() {
 #   Defines a function named <command> that shadows the external command and
 #   dispatches to it by full path with all arguments forwarded.
 # Usage:
-#   guard <command>
+#   guard [command ...]
 # Example:
 #   guard ls
 #   ls -l
 #   # runs /usr/bin/ls -l (or /bin/ls)
+#   guard uname date hostname
+#   uname
+#   date
+#   hostname
 # Errors:
 #   CG_ERR_MISSING_COMMAND, CG_ERR_INVALID_NAME, CG_ERR_NOT_FOUND
 # Notes:
@@ -56,30 +60,46 @@ _cg_resolve_command_path() {
 #   This function uses eval to define the shadowing function; input is validated
 #   to be a legal Bash identifier before eval is invoked.
 guard() {
-    local cmd="$1"
-    local full_path
-
-    if [ -z "$cmd" ]; then
-        echo "[ERROR] Usage: 'guard <command>' Missing command argument." >&2
+    if [ $# -eq 0 ]; then
+        echo "[ERROR] Usage: 'guard <command> [command2 ...]' Missing command argument." >&2
         return "$CG_ERR_MISSING_COMMAND"
     fi
 
-    if ! [[ "$cmd" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-        echo "[ERROR] guard: invalid command identifier.'$cmd'." >&2
-        return "$CG_ERR_INVALID_NAME"
-    fi
+    # First pass: validate all commands
+    local cmd full_path
+    local -a valid_commands=()
+    local -a full_paths=()
 
-    full_path="$(_cg_resolve_command_path "$cmd")" || {
-        if [[ "$full_path" == "$cmd" ]]; then
-            # It's a builtin
-            echo "[BUG] guard: '$cmd' is a builtin and should not be guarded." >&2
-        elif [[ "$full_path" == alias\ * ]]; then
-            # it's an alias
-            echo "[BUG] guard: '$cmd' is an alias and should not be used in scripts." >&2
-        else
-            echo "[ERROR] guard: unable to resolve full path for '$cmd'. Use the full path." >&2
-        fi    
-        [[ "$BASHPID" != "$$" ]] && exit $CG_ERR_NOT_FOUND || return $CG_ERR_NOT_FOUND
-    }
-    eval "${cmd}() { \"${full_path}\" \"\$@\"; }"
+    for cmd in "$@"; do
+        if [ -z "$cmd" ]; then
+            echo "[ERROR] guard: empty command name in arguments." >&2
+            return "$CG_ERR_MISSING_COMMAND"
+        fi
+
+        if ! [[ "$cmd" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+            echo "[ERROR] guard: invalid command identifier '$cmd'." >&2
+            return "$CG_ERR_INVALID_NAME"
+        fi
+
+        full_path="$(_cg_resolve_command_path "$cmd")" || {
+            if [[ "$full_path" == "$cmd" ]]; then
+                # It's a builtin
+                echo "[BUG] guard: '$cmd' is a builtin and should not be guarded." >&2
+            elif [[ "$full_path" == alias\ * ]]; then
+                # it's an alias
+                echo "[BUG] guard: '$cmd' is an alias and should not be used in scripts." >&2
+            else
+                echo "[ERROR] guard: unable to resolve full path for '$cmd'. Use the full path." >&2
+            fi
+            [[ "$BASHPID" != "$$" ]] && exit $CG_ERR_NOT_FOUND || return $CG_ERR_NOT_FOUND
+        }
+        valid_commands+=("$cmd")
+        full_paths+=("$full_path")
+    done
+
+    # Second pass: create functions for all valid commands
+    local i
+    for ((i=0; i<${#valid_commands[@]}; i++)); do
+        eval "${valid_commands[i]}() { \"${full_paths[i]}\" \"\$@\"; }"
+    done
 }
