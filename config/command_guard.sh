@@ -42,15 +42,15 @@ _cg_resolve_command_path() {
 #   Defines a function named <command> that shadows the external command and
 #   dispatches to it by full path with all arguments forwarded.
 # Usage:
-#   guard [command ...]
-# Example:
-#   guard ls
-#   ls -l
-#   # runs /usr/bin/ls -l (or /bin/ls)
+#   guard [-q] [--] [command ...]
+# Options:
+#   -q  Quiet mode: suppress warnings when guard is called without any commands
+#   --  End of options, start of command list
+# Examples:
+#   guard uname
 #   guard uname date hostname
-#   uname
-#   date
-#   hostname
+#   guard -q  # no warning
+#   guard -- uname -login  # Treats "-login" as a command name
 # Errors:
 #   CG_ERR_MISSING_COMMAND, CG_ERR_INVALID_NAME, CG_ERR_NOT_FOUND
 # Notes:
@@ -60,9 +60,28 @@ _cg_resolve_command_path() {
 #   This function uses eval to define the shadowing function; input is validated
 #   to be a legal Bash identifier before eval is invoked.
 guard() {
-    if [ $# -eq 0 ]; then
-        echo "[ERROR] Usage: 'guard <command> [command2 ...]' Missing command argument." >&2
-        return "$CG_ERR_MISSING_COMMAND"
+    local quiet=false
+    local -a commands=()
+
+    # Parse options
+    OPTIND=1
+    while getopts ":q" opt; do
+        case $opt in
+            q) quiet=true ;;
+            \?) echo "[ERROR] guard: unknown option '-$OPTARG'" >&2; return "$CG_ERR_INVALID_NAME" ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    # Remaining args are commands
+    commands=("$@")
+
+    # Handle zero commands as a no-op with optional warning
+    if [ ${#commands[@]} -eq 0 ]; then
+        if [ "$quiet" = false ]; then
+            echo "[WARNING] guard: no commands specified." >&2
+        fi
+        return 0
     fi
 
     # First pass: validate all commands
@@ -70,12 +89,7 @@ guard() {
     local -a valid_commands=()
     local -a full_paths=()
 
-    for cmd in "$@"; do
-        if [ -z "$cmd" ]; then
-            echo "[ERROR] guard: empty command name in arguments." >&2
-            return "$CG_ERR_MISSING_COMMAND"
-        fi
-
+    for cmd in "${commands[@]}"; do
         if ! [[ "$cmd" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
             echo "[ERROR] guard: invalid command identifier '$cmd'." >&2
             return "$CG_ERR_INVALID_NAME"
