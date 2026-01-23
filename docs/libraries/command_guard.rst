@@ -34,17 +34,19 @@ guard
 Defines a function named `<command>` that forwards to the external command by
 full path.
 
-- Usage: `guard <command>`
+- Usage: `guard [-q] [--] [command ...]`
+- Options:
+  - `-q`: Quiet mode, suppresses warnings for zero commands.
+  - `--`: End of options, start of command list.
 - Returns:
-  - `CG_ERR_MISSING_COMMAND` when no command name is provided.
-  - `CG_ERR_INVALID_NAME` when the name is not a valid Bash identifier.
-  - `CG_ERR_NOT_FOUND` when the command cannot be resolved to an executable path.
+  - `0` on success, including when zero commands are provided (with optional warning).
+  - `CG_ERR_INVALID_NAME` when an option is invalid or a command name is not a valid Bash identifier.
+  - `CG_ERR_NOT_FOUND` when a command cannot be resolved to an executable path.
 
 Error Codes
 -----------
 
-- `CG_ERR_MISSING_COMMAND=1`: missing command argument.
-- `CG_ERR_INVALID_NAME=2`: invalid command name.
+- `CG_ERR_INVALID_NAME=2`: invalid command name or option.
 - `CG_ERR_NOT_FOUND=3`: command not found in the restricted PATH.
 
 Behavior Details
