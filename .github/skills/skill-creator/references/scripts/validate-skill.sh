@@ -128,9 +128,9 @@ validate_skill() {
         check "Has Purpose section" "warn"
     fi
     
-    if grep -q "^## " "$skill_file" | head -n 3 > /dev/null; then
-        local section_count
-        section_count=$(grep -c "^## " "$skill_file")
+    local section_count
+    section_count=$(grep -c "^## " "$skill_file" || echo 0)
+    if [[ $section_count -ge 3 ]]; then
         check "Has multiple sections ($section_count sections)" "pass"
     else
         check "Has multiple sections" "warn"
