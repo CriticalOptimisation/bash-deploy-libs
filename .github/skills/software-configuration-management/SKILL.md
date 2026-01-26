@@ -5,43 +5,134 @@ description: Guide for software configuration management processes including iss
 
 # Software Configuration Management
 
+---
+name: software-configuration-management
+description: Guide for software configuration management processes including issue tracking, branching strategies, testing workflows, and code review procedures. Use this skill when managing development processes, creating issues, branching for features, running tests, or conducting reviews. Triggers on requests like "create an issue", "start feature branch", "run tests", "review code", "implement feature", "update code" or any software development workflow task.
+---
+
+# Software Configuration Management
+
 ## Overview
 
 This skill provides comprehensive guidance for managing software development processes using GitHub issues, branching strategies, automated testing, and code review workflows. It ensures consistent, traceable development practices that stabilize and professionalize software projects.
 
-## Workflow Decision Tree
+## Task-Based Structure
 
-Whatever the task appears to be, it is strictly forbidden to change any
-configuration item (anything managed by git) out of the context of a 
-GitHub tracked issue. Reformulate such tasks as an issue identification,
-issue update, issue creation or related issue creation task, as appropriate,
-and behave accordingly.
+The skill operates in two primary modes based on whether the task involves a new issue or implementing an existing issue.
 
-Choose the appropriate workflow based on your current development task:
+### Decision Tree: New Issue vs Existing Issue
 
-### Issue Management
-- **Creating Issues**: Use when reporting bugs, vulnerabilities, requesting features, or documenting tasks
-- **Updating Issues**: Use when modifying existing issues (status, assignees, labels)
-- **Issue Queries**: Use when searching or listing issues
-- **Issue Comments**: Use when assessing the impacts of an issue, or when seeking
-the formal approval of an assessment.
+1. **Is this task related to an existing GitHub issue?**
+   - Yes → Proceed to **Implementing an Existing Issue** (9-step sequential process)
+   - No → Proceed to **Issue Management** (create/update/query issues)
 
-### Branch Management  
-- **Feature Branches**: Use when starting new development work
-- **Branch Merging**: Use when integrating completed work
-- **Branch Cleanup**: Use when removing obsolete branches
+**CRITICAL PROHIBITION**: It is strictly forbidden to modify any git-managed configuration item (source code, documentation, configuration files, etc.) without an approved assessment for an existing GitHub issue. Any request to make changes must be reformulated as issue-related tasks.
 
-### Testing & Validation
-- **Running Tests**: Use when validating code changes
-- **Test Coverage**: Use when assessing test completeness
-- **CI/CD Checks**: Use when verifying build status
+## Issue Management (New Issues)
 
-### Code Review
-- **Review Requests**: Use when requesting feedback on changes
-- **Review Comments**: Use when providing feedback
-- **Approval Process**: Use when finalizing merges
+When dealing with new issues, use these tools:
 
-## Issue Handling
+### Creating Issues
+- Report bugs, vulnerabilities, or request features
+- Document tasks and improvements
+- Use structured templates for consistency
+
+### Updating Issues
+- Modify status, assignees, labels
+- Add comments and progress updates
+
+### Querying Issues
+- Search and list repository issues
+- Analyze issue patterns and priorities
+
+### Issue Assessment
+- Evaluate issue impact and scope
+- Seek formal approval for implementation assessments
+
+## Implementing an Existing Issue (9-Step Sequential Process)
+
+When implementing an existing GitHub issue, follow these nine mandatory steps in sequence. Each step requires completion before proceeding to the next.
+
+### Step 1: Issue Assessment & Approval
+- **Objective**: Establish shared understanding of the issue
+- **Activities**:
+  - Review issue description, comments, and attachments
+  - Assess technical impact and dependencies
+  - Identify required changes to configuration items
+  - Document assessment in issue comments
+- **Approval Required**: Assessment must be approved by a reviewer before proceeding
+- **Prohibition**: No changes to any configuration items until assessment is approved
+
+### Step 2: Branch Creation
+- **Objective**: Create isolated development environment
+- **Activities**:
+  - Create feature branch from main/master
+  - Use naming convention: `feature/issue-{number}-{description}`
+  - Push branch to remote repository
+- **Validation**: Branch exists and is properly named
+
+### Step 3: Implementation Planning
+- **Objective**: Plan the technical solution
+- **Activities**:
+  - Break down assessment into specific tasks
+  - Identify files and components to modify
+  - Plan testing strategy
+  - Update issue with implementation plan
+- **Constraint**: Only plan changes within approved assessment scope
+
+### Step 4: Code Development
+- **Objective**: Implement the approved changes
+- **Activities**:
+  - Modify only configuration items specified in assessment
+  - Follow coding standards and best practices
+  - Commit changes with clear messages referencing the issue
+- **Prohibition**: No changes outside assessment scope without renewed approval
+
+### Step 5: Testing Implementation
+- **Objective**: Validate changes work correctly
+- **Activities**:
+  - Run unit tests for modified components
+  - Execute integration tests
+  - Perform manual testing as needed
+  - Ensure all tests pass
+- **Validation**: Test results documented and approved
+
+### Step 6: Documentation Updates
+- **Objective**: Update all relevant documentation
+- **Activities**:
+  - Update code comments and docstrings
+  - Modify README, API docs, or user guides
+  - Document breaking changes or new features
+- **Constraint**: Documentation changes must align with code changes
+
+### Step 7: Code Review Request
+- **Objective**: Request peer review of changes
+- **Activities**:
+  - Create pull request with clear description
+  - Reference the original issue
+  - Assign appropriate reviewers
+  - Address review feedback iteratively
+- **Validation**: All review comments resolved
+
+### Step 8: Final Integration
+- **Objective**: Merge approved changes
+- **Activities**:
+  - Ensure CI/CD checks pass
+  - Perform final merge (squash or merge commit)
+  - Close the related issue
+  - Update any dependent issues
+- **Validation**: Changes successfully integrated
+
+### Step 9: Post-Implementation Validation
+- **Objective**: Confirm successful deployment
+- **Activities**:
+  - Monitor for any issues post-merge
+  - Update release notes if applicable
+  - Communicate changes to stakeholders
+  - Archive branch if no longer needed
+- **Completion**: Issue fully resolved and validated
+
+## Issue Management (New Issues)
 
 ### Creating Issues
 
@@ -68,85 +159,11 @@ the formal approval of an assessment.
 - **Labeling**: Apply appropriate labels (priority, type, component)
 - **Comments**: Add progress updates or clarifications
 
-## Branching Strategy
+### Issue Assessment
 
-### Feature Branch Workflow
-
-1. **Branch Creation**
-   - Create from main/master branch
-   - Use the same name as the matching issue: `feature/issue-123-add-login`
-   - Push to remote repository
-
-2. **Development**
-   - Regular commits with clear messages
-   - Reference issue numbers in commits
-   - Tests not tagged xfail must pass before commits.
-   - Regressions are not allowed.
-   - Keep branches focused on single features
-
-3. **Integration**
-   - Create pull request as soon as the first review is needed
-   - Request reviews from team members
-   - Address review feedback
-
-### Merge Process
-
-- **Squash Merges**: For feature branches to keep history clean
-- **Merge Commits**: For complex integrations
-- **Fast-forward**: When appropriate for simple changes
-
-## Testing Workflows
-
-### Automated Testing
-
-1. **Unit Tests**
-   - Run after each significant change
-   - Ensure all tests pass before commits
-
-2. **Integration Tests**
-   - Run on feature completion
-   - Validate component interactions
-
-3. **End-to-End Tests**
-   - Run before merging to main
-   - Ensure full system functionality
-
-### Test Validation
-
-- Use appropriate test runners (bats, Jest, pytest, etc.)
-- Check test coverage thresholds
-- Review test results and fix failures
-
-## Code Review Procedures
-
-### Review Process
-
-1. **Request Review**
-   - Create pull request with clear description
-   - Reference related issues
-   - Assign appropriate reviewers
-
-2. **Review Guidelines**
-   - Check code quality and style
-   - Verify tests are included
-   - Ensure documentation is updated
-   - Test changes locally if needed
-
-3. **Approval & Merge**
-   - Require minimum reviewer approvals
-   - Address all blocking comments
-   - Merge when ready
-
-### Review Checklist
-
-- [ ] Code follows project standards
-- [ ] Tests are included and passing
-- [ ] Documentation is updated
-- [ ] Skills telling the AI how to use the new functionality are created/updated
-- [ ] Breaking changes are noted
-- [ ] Performance impact assessed
-- [ ] Source code / documentation / API impacts assessed
-- [ ] Security implications reviewed
+- **Impact Assessment**: Evaluate technical impact and dependencies
+- **Approval Seeking**: Document assessment and seek reviewer approval
+- **Scope Definition**: Clearly define what configuration items will be changed
 
 ## Resources
 
