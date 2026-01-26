@@ -1,6 +1,6 @@
 ---
 name: software-configuration-management
-description: Guide for software configuration management processes including issue tracking, branching strategies, testing workflows, and code review procedures. Use this skill when managing development processes, creating issues, branching for features, running tests, or conducting reviews. Triggers on requests like "create an issue", "start feature branch", "run tests", "review code", or any software development workflow task.
+description: Guide for software configuration management processes including issue tracking, branching strategies, testing workflows, and code review procedures. Use this skill when managing development processes, creating issues, branching for features, running tests, or conducting reviews. Triggers on requests like "create an issue", "start feature branch", "run tests", "review code", "implement feature", "update code" or any software development workflow task.
 ---
 
 # Software Configuration Management
@@ -11,12 +11,20 @@ This skill provides comprehensive guidance for managing software development pro
 
 ## Workflow Decision Tree
 
+Whatever the task appears to be, it is strictly forbidden to change any
+configuration item (anything managed by git) out of the context of a 
+GitHub tracked issue. Reformulate such tasks as an issue identification,
+issue update, issue creation or related issue creation task, as appropriate,
+and behave accordingly.
+
 Choose the appropriate workflow based on your current development task:
 
 ### Issue Management
-- **Creating Issues**: Use when reporting bugs, requesting features, or documenting tasks
+- **Creating Issues**: Use when reporting bugs, vulnerabilities, requesting features, or documenting tasks
 - **Updating Issues**: Use when modifying existing issues (status, assignees, labels)
 - **Issue Queries**: Use when searching or listing issues
+- **Issue Comments**: Use when assessing the impacts of an issue, or when seeking
+the formal approval of an assessment.
 
 ### Branch Management  
 - **Feature Branches**: Use when starting new development work
@@ -41,6 +49,7 @@ Choose the appropriate workflow based on your current development task:
    - Repository information (owner/repo)
    - Issue type (bug, feature, task)
    - Clear title and description
+   - Applicable version showcasing issue (version tag if available, else commit)
    - Labels, assignees, milestones if applicable
 
 2. **Use Templates**
@@ -54,7 +63,7 @@ Choose the appropriate workflow based on your current development task:
 
 ### Updating Issues
 
-- **Status Changes**: Open → In Progress → Resolved
+- **Status Changes**: Open → Triaged → In Progress → Resolved
 - **Assignment**: Add/remove assignees
 - **Labeling**: Apply appropriate labels (priority, type, component)
 - **Comments**: Add progress updates or clarifications
@@ -65,16 +74,18 @@ Choose the appropriate workflow based on your current development task:
 
 1. **Branch Creation**
    - Create from main/master branch
-   - Use descriptive names: `feature/issue-123-add-login`
+   - Use the same name as the matching issue: `feature/issue-123-add-login`
    - Push to remote repository
 
 2. **Development**
    - Regular commits with clear messages
    - Reference issue numbers in commits
+   - Tests not tagged xfail must pass before commits.
+   - Regressions are not allowed.
    - Keep branches focused on single features
 
 3. **Integration**
-   - Create pull request when ready
+   - Create pull request as soon as the first review is needed
    - Request reviews from team members
    - Address review feedback
 
@@ -102,7 +113,7 @@ Choose the appropriate workflow based on your current development task:
 
 ### Test Validation
 
-- Use appropriate test runners (Jest, pytest, etc.)
+- Use appropriate test runners (bats, Jest, pytest, etc.)
 - Check test coverage thresholds
 - Review test results and fix failures
 
@@ -131,8 +142,10 @@ Choose the appropriate workflow based on your current development task:
 - [ ] Code follows project standards
 - [ ] Tests are included and passing
 - [ ] Documentation is updated
+- [ ] Skills telling the AI how to use the new functionality are created/updated
 - [ ] Breaking changes are noted
 - [ ] Performance impact assessed
+- [ ] Source code / documentation / API impacts assessed
 - [ ] Security implications reviewed
 
 ## Resources
