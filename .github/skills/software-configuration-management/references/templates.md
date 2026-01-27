@@ -1,5 +1,7 @@
 # Issue and PR Templates
 
+**Note**: These templates are custom-tailored for this repository and always take precedence over any generic templates provided by the `github-issues` skill. Use these when creating or updating issues to ensure consistency with SCM workflows.
+
 ## Bug Report Template
 
 ```

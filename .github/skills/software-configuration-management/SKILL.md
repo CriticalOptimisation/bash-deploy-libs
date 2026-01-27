@@ -6,176 +6,46 @@ description: Guide for software configuration management processes including iss
 # Software Configuration Management
 
 ## Overview
+This skill keeps the surface area small: it helps you decide whether you are managing a GitHub issue (creating, updating, triaging, or tagging) or actually implementing an approved change. The detailed nine-step implementation workflow lives in the companion reference file so the top-level document can stay focused on task selection and guardrails.
 
-This skill provides comprehensive guidance for managing software development processes using GitHub issues, branching strategies, automated testing, and code review workflows. It ensures consistent, traceable development practices that stabilize and professionalize software projects.
+## Task Selection
+1. **Meta-task path** – Use this skill (and the `github-issues` skill) for issue creation, triage, labeling, or other housekeeping that does _not_ touch git-managed configuration items. Keep the local clone synchronized with `origin/main`, maintain a read-only copy of `main` for reference, and avoid committing until an Issue Assessment is approved.
+2. **Implementation path** – When a GitHub issue requires editing configuration files, trigger the full nine-step workflow in [references/implementation-workflow.md](references/implementation-workflow.md). Step 1 (Issue Assessment & Approval) must be approved before editing files, Step 5 enforces running the planned local tests, and Step 7 requires assigning @CriticalOptimisation/maintainers and obtaining a maintainer review approval before merging.
 
-## Task-Based Structure
+## Meta-task Guidance
+- Confirm you are operating on a clean baseline (`git fetch origin && git status`) before performing any meta-task so you do not misalign with remote `main`.
+- Keep a separate read-only worktree that mirrors `main` for quick references and to prevent accidental commits on the protected branch. Use this dedicated procedure:
+  ```
+  git fetch origin
+  git worktree remove ../repo-main  # if exists
+  git worktree add ../repo-main main
+  # Optionally: chmod -R a-w ../repo-main
+  ```
+  Worktrees can be stored under `.github/worktrees`. VS Code should recognize this worktree, allowing navigation to `main` for reference while keeping the main workspace on the feature branch.
+- Route lightweight branch/tag housekeeping through this skill’s meta-task guidance; only enter the implementation path when configuration work is both scoped and approved.
+## Issue Management Guidance
+When handling issues (creation, updates, triage, labeling, or milestones), use the `github-issues` skill for execution, but follow SCM principles to ensure consistency and traceability:
 
-The skill operates in two primary modes based on whether the task involves a new issue or implementing an existing issue.
+1. **Determine action**: Decide if the task is issue creation, update, query, or other housekeeping.
+2. **Gather context**: Review repo details, existing labels/milestones, and any related issues.
+3. **Structure content**: Always use the custom templates from [references/templates.md](references/templates.md), which are tailored for this repository and override any generic templates in the `github-issues` skill.
+4. **Execute**: Call the appropriate MCP tool or `gh` command via the `github-issues` skill.
+5. **Confirm**: Verify the result on GitHub and ensure the action aligns with meta-task rules (e.g., no configuration changes without assessment approval).
 
-### Decision Tree: New Issue vs Existing Issue
+For repo synchronization, worktree management, and distinguishing meta-tasks from implementation work, refer to the meta-task guidance above. This ensures issues are managed without risking unapproved changes to git-managed items.
+## Implementation Workflow Summary
+Use the companion reference file for the full details, but keep this summary in mind whenever a GitHub issue transitions into actual configuration work. Each numbered item below corresponds to the nine sequential steps in [references/implementation-workflow.md](references/implementation-workflow.md).
 
-1. **Is this task related to an existing GitHub issue?**
-   - Yes → Proceed to **Implementing an Existing Issue** (9-step sequential process)
-   - No → Proceed to **Issue Management** (create/update/query issues)
+1. **Step 1 – Issue Assessment & Approval**: Identify blockers (missing infrastructure, SSH access, secrets, etc.), document the analysis in the issue, and obtain explicit reviewer approval before changing any files.
+2. **Step 2 – Branch Creation**: Create a dedicated feature branch named `{type}/issue-{number}-{short-description}` off `main`, push it to the remote, and keep it tidy (clean status, no stray changes).
+3. **Step 3 – Implementation Planning**: Scope the work, enumerate files/components to change, and sketch the testing strategy. Record this plan in the issue and reference any reviewer feedback.
+4. **Step 4 – Documentation Updates**: Align docs, comments, and AI skills with the code. Use `sphinx-docs` when relevant to ensure documentation builds.
+5. **Step 5 – Tests Development**: Drive the implementation with tests-first work: add or update tests under `test/` only, use shared helpers when needed, and keep coding standards high.
+6. **Step 6 – Functionality Implementation**: Apply the approved code changes, execute the planned local unit/integration tests (CI is a backup), and record the results before moving on.
+7. **Step 7 – Code Review Request**: Open a PR, link the issue, assign @CriticalOptimisation/maintainers, and require an actual maintainer review approval (not just conversation resolution).
+8. **Step 8 – Final Integration**: Wait for the protected branch checks to pass and let GitHub merge automatically once all conditions are satisfied, then synchronize local repo and close any additional issues.
+9. **Step 9 – Post-Implementation Validation**: Monitor for regressions, update release notes if needed, and archive the feature branch when the work is complete.
 
-**CRITICAL PROHIBITION**: It is strictly forbidden to modify any git-managed configuration item (source code, documentation, configuration files, etc.) without an approved assessment for an existing GitHub issue. Any request to make changes must be reformulated as issue-related tasks.
+Every implementation status update should cite the relevant assessment in the issue comments so reviewers understand that the change followed this documented process.
 
-## Issue Management (New Issues)
-
-When dealing with new issues, use these tools:
-
-### Creating Issues
-- Report bugs, vulnerabilities, or request features
-- Document tasks and improvements
-- Use structured templates for consistency
-
-### Updating Issues
-- Modify status, assignees, labels
-- Add comments and progress updates
-
-### Querying Issues
-- Search and list repository issues
-- Analyze issue patterns and priorities
-
-### Issue Assessment
-- Evaluate issue impact and scope
-- Seek formal approval for implementation assessments
-
-## Implementing an Existing Issue (9-Step Sequential Process)
-
-When implementing an existing GitHub issue, follow these nine mandatory steps in sequence. Each step requires completion before proceeding to the next.
-
-### Step 1: Issue Assessment & Approval
-- **Objective**: Establish shared understanding of the issue
-- **Activities**:
-  - Review issue description, comments, and attachments
-  - Assess technical impact and dependencies
-  - Identify required changes to configuration items
-  - Document assessment in issue comments
-- **Approval Required**: Assessment must be formally approved by a reviewer before proceeding
-- **Prohibition**: No changes to any configuration items until assessment is approved
-- **Validation**: Formal approval in GitHub issue conversation.
-
-### Step 2: Branch Creation
-- **Objective**: Create isolated development environment
-- **Activities**:
-  - Create feature branch from main/master
-  - Use naming convention: `feature/issue-{number}-{description}`
-  - Push branch to remote repository
-- **Validation**: Branch exists and is properly named
-
-### Step 3: Implementation Planning
-- **Objective**: Plan the technical solution
-- **Activities**:
-  - Check that the new branch is sane, especially that tests pass
-  - Break down assessment into specific tasks
-  - Identify files and components to modify
-  - Plan testing strategy
-  - Update issue with implementation plan
-  - Review comments left by reviewers in the GitHub issue
-- **Constraint**: Only plan changes within approved assessment scope
-- **Important**: Comprehensive plan must cover program code, documentation, tests and skills.
-- **Validation**: The branch is sane and the plan is comprehensive.
-- **Fallback**: Create related issues in GitHub if step validation fails.
-
-### Step 4: Tests Development
-- **Objective**: Implement the approved changes using a tests-first approach
-- **Activities**:
-  - Modify or create only configuration items specified in assessment
-  - Extend the test suite only: no change out of the `test` folder
-  - Follow coding standards and best practices. Use xfail tag on new tests.
-  - Commit changes with clear messages referencing the issue
-  - If relevant, cherry-pick the submodules bats-support and/or bats-assert from the `devel` branch, and use them to write new more readable bats tests
-- **Prohibition**: Never change an existing test, stub, scaffolding or fixture unless that is the explicit focus of the issue.
-- **Prohibition**: No changes outside assessment scope without renewed approval
-- **Validation**: Old tests must pass unless the issue deals specifically with failing tests, new tests must fail, if any.
-
-### Step 5: Functionality Implementation
-- **Objective**: Validate changes work correctly
-- **Activities**:
-  - For Bash code, use bash-library-template skill
-  - Use relevant skills to properly use the existing libraries in new code
-  - Run unit tests for modified components
-  - Execute integration tests
-  - Perform manual testing as needed
-  - Ensure all tests pass
-  - Expand the test suite to cover edge cases
-- **Validation**: Test results documented and approved
-- **Prohibition**: Updating the tests developed at step 4 at this stage, is prohibited
-
-### Step 6: Documentation Updates
-- **Objective**: Update all relevant documentation
-- **Activities**:
-  - Update code comments and docstrings
-  - Modify README, API docs, Sphinx docs, AI skills or user guides
-  - Document breaking changes, new features, error codes and edge-case behavior
-- **Constraint**: Documentation changes must align with code changes
-- **Validation**: Using sphinx-docs skill, ensure that documentation builds. 
-
-### Step 7: Code Review Request
-- **Objective**: Request peer review of changes
-- **Activities**:
-  - Create pull request with clear description
-  - Reference the original issue
-  - Assign the maintainers team as reviewers
-  - Address review feedback iteratively
-- **Validation**: All review comments resolved and pull request approved
-
-### Step 8: Final Integration
-- **Objective**: Ensure approved changes are integrated
-- **Activities**:
-  - Ensure CI/CD checks pass
-  - Confirm pull request is approved and meets branch protection requirements
-  - Allow GitHub to perform automatic merge when all conditions are met
-  - Update any dependent issues
-- **Validation**: Changes successfully integrated via automatic merge
-
-### Step 9: Post-Implementation Validation
-- **Objective**: Confirm successful deployment
-- **Activities**:
-  - Monitor for any issues post-merge
-  - Update release notes if applicable
-  - Communicate changes to stakeholders
-  - Archive branch if no longer needed
-- **Completion**: Issue fully resolved and validated
-
-## Resources
-
-This skill includes example resource directories that demonstrate how to organize different types of bundled resources:
-
-### scripts/
-Executable code (Python/Bash/etc.) that can be run directly to perform specific operations.
-
-**Examples from other skills:**
-- PDF skill: `fill_fillable_fields.py`, `extract_form_field_info.py` - utilities for PDF manipulation
-- DOCX skill: `document.py`, `utilities.py` - Python modules for document processing
-- Software Configuration Management: `detect_unguarded_calls.sh` - security analysis script for Bash libraries
-
-**Appropriate for:** Python scripts, shell scripts, or any executable code that performs automation, data processing, or specific operations.
-
-**Note:** Scripts may be executed without loading into context, but can still be read by Claude for patching or environment adjustments.
-
-### references/
-Documentation and reference material intended to be loaded into context to inform Claude's process and thinking.
-
-**Examples from other skills:**
-- Product management: `communication.md`, `context_building.md` - detailed workflow guides
-- BigQuery: API reference documentation and query examples
-- Finance: Schema documentation, company policies
-
-**Appropriate for:** In-depth documentation, API references, database schemas, comprehensive guides, or any detailed information that Claude should reference while working.
-
-### assets/
-Files not intended to be loaded into context, but rather used within the output Claude produces.
-
-**Examples from other skills:**
-- Brand styling: PowerPoint template files (.pptx), logo files
-- Frontend builder: HTML/React boilerplate project directories
-- Typography: Font files (.ttf, .woff2)
-
-**Appropriate for:** Templates, boilerplate code, document templates, images, icons, fonts, or any files meant to be copied or used in the final output.
-
----
-
-**Any unneeded directories can be deleted.** Not every skill requires all three types of resources.
+**Note**: Conversations in pull requests are resolved by the user (e.g., the maintainer), not by the implementer. The implementer provides summaries of changes made in response to each conversation, but does not mark them as resolved.
