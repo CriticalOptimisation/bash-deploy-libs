@@ -6,6 +6,9 @@
 # Sentinel
 [[ -z ${__HANDLE_STATE_SH_INCLUDED:-} ]] && __HANDLE_STATE_SH_INCLUDED=1 || return 0
 
+# Source command guard for secure external command usage
+source "${BASH_SOURCE%/*}/command_guard.sh"
+
 # Library usage:
 #   In an initialization function, call hs_persist_state with the names of local variables
 #   that need to be preserved for later use in a cleanup function.
@@ -45,6 +48,7 @@
 #   Do not call directly; called automatically when this file is sourced.
 #   When done with the library, call `hs_cleanup_output` to terminate the background reader
 #   or else a 5 seconds idle timeout will occur.
+guard mktemp mkfifo rm
 hs_setup_output_to_stdout() {
     # Test if already set up
     if hs_get_pid_of_subshell >/dev/null 2>&1; then
