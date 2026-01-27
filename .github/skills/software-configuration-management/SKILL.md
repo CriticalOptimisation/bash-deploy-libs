@@ -123,13 +123,13 @@ When implementing an existing GitHub issue, follow these nine mandatory steps in
 - **Validation**: All review comments resolved and pull request approved
 
 ### Step 8: Final Integration
-- **Objective**: Merge approved changes
+- **Objective**: Ensure approved changes are integrated
 - **Activities**:
   - Ensure CI/CD checks pass
-  - Perform final merge (squash or merge commit)
-  - Close the related issue
+  - Confirm pull request is approved and meets branch protection requirements
+  - Allow GitHub to perform automatic merge when all conditions are met
   - Update any dependent issues
-- **Validation**: Changes successfully integrated
+- **Validation**: Changes successfully integrated via automatic merge
 
 ### Step 9: Post-Implementation Validation
 - **Objective**: Confirm successful deployment
