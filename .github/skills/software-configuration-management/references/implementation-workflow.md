@@ -39,6 +39,7 @@ This companion document captures the detailed nine-step workflow referenced from
 - **Activities**:
   - Update README, Sphinx docs, skill files, or other relevant documentation.
   - Include usage notes, caveats, and cross-references as needed.
+  - Commit the documentation changes.
 - **Validation**: Documentation builds successfully (use `sphinx-docs` when applicable).
 
 ## Step 5: Tests Development
@@ -49,6 +50,7 @@ This companion document captures the detailed nine-step workflow referenced from
   - Follow coding standards; use `xfail` tags for tests that are known to fail temporarily.
   - Include clear commit messages referencing the issue.
   - When necessary, re-use helper modules such as `bats-support` or `bats-assert` from the `devel` branch.
+  - Commit the extended test suite.
 - **Prohibitions**: Do not alter unrelated tests or scaffolding without explicit approval.
 - **Validation**: Tests compile/run locally and reflect the intended behavior. New tests must fail at this step (use xfail if needed); a passing new test does not discriminate between old and new behaviors.
 
@@ -56,12 +58,12 @@ This companion document captures the detailed nine-step workflow referenced from
 - **Objective**: Ensure the approved change works as intended.
 - **Activities**:
   - Apply the implementation changes following the approved design.
-  - Match the existing coding style in the codebase. Minimize the size of code patches by avoiding unnecessary white space changes (e.g., indentation changes that don't affect logic).
+  - Match the existing coding style in the codebase. Minimize the size of code patches measured after discarding white space only changes (large blocks that are unchanged except for indentation, can increase the size of a patch, but do not make a large divergence in the logic itself).
   - Run all relevant unit and integration tests **locally** after implementation (CI is a backup, not a substitute).
   - Perform manual verification steps if required by the issue.
-  - Record the test results for review.
+  - Commit the code before each validation attempt. It will be easier to manually repeat the tests, if needed, if the tested code matches a well-defined commit.
 - **Validation**: Tests pass locally and test results are documented. CI is expected to mirror the local run.
-- **Note**: Do not revisit the test design from Step 5 once Step 6 begins. Instead return to step 5 after human approval.
+- **Note**: Do not revisit the test design from Step 5 once Step 6 begins. Instead return to step 5 after human approval of an adequate justification if the core tests are wrong.
 
 ## Step 7: Code Review Request
 - **Objective**: Surface the work for maintainers' review.
@@ -77,7 +79,7 @@ This companion document captures the detailed nine-step workflow referenced from
 - **Activities**:
   - Ensure CI/CD checks are green.
   - Confirm the PR satisfies branch protection requirements.
-  - Allow GitHub to auto-merge once everything is ready (manual merging is not required).
+  - Allow GitHub to auto-merge once everything is ready (manual merging is not required). GitHub will squash all the commits in one.
   - Update dependent issues or TODOs if applicable.
   - After GitHub merges, synchronize the local repository.
   - If the PR addressed multiple issues, manually close any additional referenced issues after confirming tests pass (GitHub closes at most one issue per PR).
