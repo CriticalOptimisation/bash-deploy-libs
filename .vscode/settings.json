@@ -1,5 +1,14 @@
 {
     "chat.tools.terminal.autoApprove": {
-        "gh": true
-    }
+        "gh": true,
+        "git checkout": true,
+        "git push": true
+    },
+    "git.branchProtection": [
+        "main",
+        "master",
+        "release/*"
+    ],
+    "git.branchProtectionPrompt": "always",
+    "files.readonlyFromPermissions": true
 }
