@@ -5,13 +5,6 @@ description: Guide for software configuration management processes including iss
 
 # Software Configuration Management
 
----
-name: software-configuration-management
-description: Guide for software configuration management processes including issue tracking, branching strategies, testing workflows, and code review procedures. Use this skill when managing development processes, creating issues, branching for features, running tests, or conducting reviews. Triggers on requests like "create an issue", "start feature branch", "run tests", "review code", "implement feature", "update code" or any software development workflow task.
----
-
-# Software Configuration Management
-
 ## Overview
 
 This skill provides comprehensive guidance for managing software development processes using GitHub issues, branching strategies, automated testing, and code review workflows. It ensures consistent, traceable development practices that stabilize and professionalize software projects.
@@ -130,13 +123,13 @@ When implementing an existing GitHub issue, follow these nine mandatory steps in
 - **Validation**: All review comments resolved and pull request approved
 
 ### Step 8: Final Integration
-- **Objective**: Merge approved changes
+- **Objective**: Ensure approved changes are integrated
 - **Activities**:
   - Ensure CI/CD checks pass
-  - Perform final merge (squash or merge commit)
-  - Close the related issue
+  - Confirm pull request is approved and meets branch protection requirements
+  - Allow GitHub to perform automatic merge when all conditions are met
   - Update any dependent issues
-- **Validation**: Changes successfully integrated
+- **Validation**: Changes successfully integrated via automatic merge
 
 ### Step 9: Post-Implementation Validation
 - **Objective**: Confirm successful deployment
