@@ -17,6 +17,13 @@ This library provides two core capabilities for Bash libraries:
   provides the means to display messages to stdout from within initialization 
   functions using a logging FIFO and background reader process.
 
+Dependencies
+------------
+
+This library depends on the Command Guard Library (`config/command_guard.sh`)
+for secure execution of external commands. The dependency is automatically
+resolved when the library is sourced.
+
 Quick Start
 -----------
 
