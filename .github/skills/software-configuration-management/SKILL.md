@@ -5,13 +5,6 @@ description: Guide for software configuration management processes including iss
 
 # Software Configuration Management
 
----
-name: software-configuration-management
-description: Guide for software configuration management processes including issue tracking, branching strategies, testing workflows, and code review procedures. Use this skill when managing development processes, creating issues, branching for features, running tests, or conducting reviews. Triggers on requests like "create an issue", "start feature branch", "run tests", "review code", "implement feature", "update code" or any software development workflow task.
----
-
-# Software Configuration Management
-
 ## Overview
 
 This skill provides comprehensive guidance for managing software development processes using GitHub issues, branching strategies, automated testing, and code review workflows. It ensures consistent, traceable development practices that stabilize and professionalize software projects.
