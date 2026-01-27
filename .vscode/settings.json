@@ -1,8 +1,10 @@
 {
     "chat.tools.terminal.autoApprove": {
         "gh": true,
+        "git blame": true,
         "git checkout": true,
-        "git push": true
+        "git push": true,
+        "git commit": true
     },
     "git.branchProtection": [
         "main",
