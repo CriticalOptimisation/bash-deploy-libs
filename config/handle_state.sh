@@ -151,12 +151,18 @@ readonly HS_ERR_VAR_NAME_COLLISION=2
 hs_persist_state() {
     # Read optional -s <state> argument
     local __existing_state=""
+    local __output=""
+    local __is_var_name=false
     if [ "${1:-}" = "-s" ]; then
         shift
         __existing_state="$1"
         shift
-        # Emit existing state first
-        printf '%s\n' "$__existing_state"
+        if [[ "$__existing_state" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+            __is_var_name=true
+            __output="${!__existing_state}"
+        else
+            __output="$__existing_state"
+        fi
     fi
     local __var_name
     for __var_name in "$@"; do
@@ -169,7 +175,11 @@ hs_persist_state() {
         # attempt to restore it from "$__existing_state".
         (
             local "$__var_name"
-            eval "$__existing_state"
+            if [ "$__is_var_name" = true ]; then
+                eval "${!__existing_state}"
+            else
+                eval "$__existing_state"
+            fi
             # Check if the variable pointed to by __var_name has been initialized
             if ! [ -z "${!__var_name+x}" ]; then
                 echo "[ERROR] hs_persist_state: variable '$__var_name' is already defined in the state, with value '${!__var_name}'." >&2
@@ -187,7 +197,7 @@ hs_persist_state() {
             eval "var_value=\"\${$__var_name}\"" || eval "var_value=\"\$$__var_name\""
             # Emit a snippet that, when eval'd in the receiving scope, will
             # restore the existing, empty local variables from the saved state.
-            printf "
+            __snippet=$(printf "
 if local -p %s >/dev/null 2>&1; then
   if [ -n \"\${%s+x}\" ] && [ -n \"\${%1s}\" ]; then
     printf \"[ERROR] local %1s already defined; refusing to overwrite\\n\" >&2
@@ -196,9 +206,15 @@ if local -p %s >/dev/null 2>&1; then
     %s=%q
   fi
 fi
-" "$__var_name" "$__var_name" "$__var_name" "$__var_name" "$__var_name" "$var_value"
+" "$__var_name" "$__var_name" "$__var_name" "$__var_name" "$__var_name" "$var_value")
+            __output="${__output}${__snippet}"
         fi
     done
+    if [ "$__is_var_name" = true ]; then
+        eval "$__existing_state=\"\$__output\""
+    else
+        printf '%s\n' "$__output"
+    fi
 }
 
 # --- hs_read_persisted_state --------------------------------------------------------
