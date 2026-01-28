@@ -35,7 +35,7 @@ capturing stdout.
        # Define some opaque library resources
        local temp_file="/tmp/some_temp_file"
        local resource_id="resource_123"
-       hs_persist_state -s state temp_file resource_id
+       hs_persist_state -S state temp_file resource_id
    }
 
    cleanup() {
@@ -102,16 +102,18 @@ Emits Bash code that restores specified local variables in a receiving scope.
 The emitted snippet only assigns values if the target variable is declared
 `local` in the receiving scope and is still empty.
 
-The function accepts an optional `-s` argument followed by either:
+The function accepts optional `-s` or `-S` arguments:
 
-- A valid Bash identifier (variable name): the state is assigned (appended if the variable already contains code) to that variable instead of being printed to stdout.
-- Any other string: treated as an existing state snippet to append to, and the result is printed to stdout.
+- `-s <state>`: Treats `<state>` as an existing state snippet to append to, and prints the result to stdout.
+- `-S <var>`: Assigns the state (appended to any existing content in `<var>`) to the variable named `<var>` instead of printing to stdout.
+
+These options are mutually exclusive; using both will combine the state into `<var>` only if `<var>` is empty or uninitialized.
 
 This allows avoiding stdout output for opaque data when assigning to a variable,
 while maintaining backward compatibility for appending to state strings.
 
 .. warning::
-   When using `-s` with a variable name, the function will `eval` the current contents of that variable during collision checking. Callers must ensure the variable contains only safe, trusted Bash code or is empty/unset to avoid execution of harmful code.
+   When using `-S` with a variable name, the function will `eval` the current contents of that variable during collision checking. Callers must ensure the variable contains only safe, trusted Bash code or is empty/unset to avoid execution of harmful code.
 
 Libraries are encouraged to provide the same option to their initialization
 functions to allow callers to chain state snippets together.
@@ -121,7 +123,7 @@ and refuses to overwrite existing variables. Some library combinations can be
 incompatible with the chaining approach because they use overlapping variable names.
 The alternate solution is to keep and eval separate state snippets for each library.
 
-- Usage: `hs_persist_state [-s "$state" | var_name] var1 var2 ...`
+- Usage: `hs_persist_state [-s <state> | -S <var>] var1 var2 ...`
 - Output: a string of Bash code intended to be `eval`'d by the caller (when not assigning to variable).
 - Errors:
   - Refuses to persist reserved names `__var_name` and `__existing_state`.

@@ -149,25 +149,33 @@ readonly HS_ERR_VAR_NAME_COLLISION=2
 #       # vars are available here
 #   }
 hs_persist_state() {
-    # Read optional -s <state> argument
     local __existing_state=""
+    local __output_state_var=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -s)
+                shift
+                __existing_state="$1"
+                shift
+                ;;
+            -S)
+                shift
+                __output_state_var="$1"
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
     local __output=""
-    local __is_var_name=false
-    if [ "${1:-}" = "-s" ]; then
-        shift
-        __existing_state="$1"
-        shift
-        if [[ "$__existing_state" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-            __is_var_name=true
-            __output="${!__existing_state}"
-        else
-            __output="$__existing_state"
-        fi
+    if [ -n "$__existing_state" ]; then
+        __output="$__existing_state"
     fi
     local __var_name
     for __var_name in "$@"; do
         # Check that the value of __var_name is neither "__var_name" nor "__existing_state"
-        if [ "$__var_name" = "__var_name" ] || [ "$__var_name" = "__existing_state" ]; then
+        if [ "$__var_name" = "__var_name" ] || [ "$__var_name" = "__existing_state" ] || [ "$__var_name" = "__output_state_var" ]; then
             echo "[ERROR] hs_persist_state: refusing to persist reserved variable name '$__var_name'." >&2  
             return "$HS_ERR_RESERVED_VAR_NAME"
         fi
@@ -175,9 +183,7 @@ hs_persist_state() {
         # attempt to restore it from "$__existing_state".
         (
             local "$__var_name"
-            if [ "$__is_var_name" = true ]; then
-                eval "${!__existing_state}"
-            else
+            if [ -n "$__existing_state" ]; then
                 eval "$__existing_state"
             fi
             # Check if the variable pointed to by __var_name has been initialized
@@ -210,8 +216,8 @@ fi
             __output="${__output}${__snippet}"
         fi
     done
-    if [ "$__is_var_name" = true ]; then
-        eval "$__existing_state=\"\$__output\""
+    if [ -n "$__output_state_var" ]; then
+        eval "$__output_state_var=\"\$__output\""
     else
         printf '%s\n' "$__output"
     fi

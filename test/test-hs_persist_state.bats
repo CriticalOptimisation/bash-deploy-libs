@@ -338,12 +338,12 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
 }
 
 # bats test_tags=hs_persist_state
-@test "hs_persist_state with -s var_name assigns to variable" {
+@test "hs_persist_state with -S var_name assigns to variable" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     init() {
       local bar=two
-      hs_persist_state -s state bar
+      hs_persist_state -S state bar
     }
     cleanup(){ 
       local bar 
