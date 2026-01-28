@@ -21,7 +21,8 @@ Quick Start
 -----------
 
 Source the file once, then use `hs_persist_state` in the init function and
-`eval` the state in cleanup.
+`eval` the state in cleanup. For cleaner code, assign to a variable instead of
+capturing stdout.
 
 .. code-block:: bash
 
@@ -34,19 +35,27 @@ Source the file once, then use `hs_persist_state` in the init function and
        # Define some opaque library resources
        local temp_file="/tmp/some_temp_file"
        local resource_id="resource_123"
-       hs_persist_state temp_file resource_id
+       hs_persist_state -s state temp_file resource_id
    }
 
    cleanup() {
        local temp_file resource_id
-       eval "$1"
+       eval "$state"
        rm -f "$temp_file"
        echo "Cleaned up resource: $resource_id"
    }
 
+   # State is assigned to the variable, no stdout capture needed
+   init_function  
+   # Your main script logic here
+   cleanup
+
+For backward compatibility, the old stdout capture method still works:
+
+.. code-block:: bash
+
    # Capture the opaque state snippet emitted on stdout
    state=$(init_function)  
-   # Your main script logic here
    cleanup "$state"
 
 Public API
@@ -93,17 +102,24 @@ Emits Bash code that restores specified local variables in a receiving scope.
 The emitted snippet only assigns values if the target variable is declared
 `local` in the receiving scope and is still empty.
 
-The function accepts an optional `-s "$state"` argument to provide an existing
-state snippet. Libraries are encouraged to provide the same option to their
-initialization functions to allow callers to chain state snippets together.
+The function accepts an optional `-s "$state"` argument. If the argument after `-s`
+is a valid Bash identifier (variable name), the state is assigned to that variable
+instead of being printed to stdout. If it is not a valid identifier, it is treated
+as an existing state snippet to append to.
+
+This allows avoiding stdout output for opaque data when assigning to a variable,
+while maintaining backward compatibility for appending to state strings.
+
+Libraries are encouraged to provide the same option to their initialization
+functions to allow callers to chain state snippets together.
 
 When appending to an existing state snippet, the function checks for name collisions
 and refuses to overwrite existing variables. Some library combinations can be 
 incompatible with the chaining approach because they use overlapping variable names.
 The alternate solution is to keep and eval separate state snippets for each library.
 
-- Usage: `hs_persist_state [-s "$state"] var1 var2 ...`
-- Output: a string of Bash code intended to be `eval`'d by the caller.
+- Usage: `hs_persist_state [-s "$state" | var_name] var1 var2 ...`
+- Output: a string of Bash code intended to be `eval`'d by the caller (when not assigning to variable).
 - Errors:
   - Refuses to persist reserved names `__var_name` and `__existing_state`.
   - Rejects collisions when a variable already exists in the provided state.

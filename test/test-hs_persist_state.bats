@@ -338,16 +338,20 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
 }
 
 # bats test_tags=hs_persist_state
-@test "hs_persist_state fails on reserved variable name __existing_state" {
+@test "hs_persist_state with -s var_name assigns to variable" {
   # shellcheck disable=SC2016
-  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -lc '
-    source "$LIB"
+  run -0 bash --noprofile -lc '
     init() {
-      local __existing_state=bad
-      hs_persist_state __existing_state
+      local bar=two
+      hs_persist_state -s state bar
+    }
+    cleanup(){ 
+      local bar 
+      eval "$state"
+      printf "%s" "$bar" 
     }
     init
+    cleanup
   '
-  [[ "$stderr" == *"refusing to persist reserved variable name '__existing_state'"* ]]
-  [ -z "$output" ]
+  [ "$output" = "two" ]
 }
