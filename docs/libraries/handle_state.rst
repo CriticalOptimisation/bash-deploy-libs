@@ -102,13 +102,16 @@ Emits Bash code that restores specified local variables in a receiving scope.
 The emitted snippet only assigns values if the target variable is declared
 `local` in the receiving scope and is still empty.
 
-The function accepts an optional `-s "$state"` argument. If the argument after `-s`
-is a valid Bash identifier (variable name), the state is assigned to that variable
-instead of being printed to stdout. If it is not a valid identifier, it is treated
-as an existing state snippet to append to.
+The function accepts an optional `-s` argument followed by either:
+
+- A valid Bash identifier (variable name): the state is assigned (appended if the variable already contains code) to that variable instead of being printed to stdout.
+- Any other string: treated as an existing state snippet to append to, and the result is printed to stdout.
 
 This allows avoiding stdout output for opaque data when assigning to a variable,
 while maintaining backward compatibility for appending to state strings.
+
+.. warning::
+   When using `-s` with a variable name, the function will `eval` the current contents of that variable during collision checking. Callers must ensure the variable contains only safe, trusted Bash code or is empty/unset to avoid execution of harmful code.
 
 Libraries are encouraged to provide the same option to their initialization
 functions to allow callers to chain state snippets together.
