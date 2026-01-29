@@ -193,10 +193,7 @@ hs_persist_state() {
         (
             local "$__var_name"
             if [ -n "$__existing_state" ]; then
-                if ! timeout 5 eval "$__existing_state" >/dev/null 2>&1; then
-                    echo "[ERROR] hs_persist_state: prior state is corrupted." >&2
-                    return 1
-                fi
+                eval "$__existing_state" >/dev/null 2>&1
             fi
             # Check if the variable pointed to by __var_name has been initialized
             if ! [ -z "${!__var_name+x}" ]; then
