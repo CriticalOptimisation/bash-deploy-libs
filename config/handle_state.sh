@@ -175,7 +175,7 @@ hs_persist_state() {
     local __var_name
     for __var_name in "$@"; do
         # Check that the value of __var_name is neither "__var_name" nor "__existing_state"
-        if [ "$__var_name" = "__var_name" ] || [ "$__var_name" = "__existing_state" ] || [ "$__var_name" = "__output_state_var" ]; then
+        if [ "$__var_name" = "__var_name" ] || [ "$__var_name" = "__existing_state" ] || [ "$__var_name" = "__output_state_var" ] || [ "$__var_name" = "__output" ]; then
             echo "[ERROR] hs_persist_state: refusing to persist reserved variable name '$__var_name'." >&2  
             return "$HS_ERR_RESERVED_VAR_NAME"
         fi
