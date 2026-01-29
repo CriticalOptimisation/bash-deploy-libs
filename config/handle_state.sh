@@ -125,6 +125,7 @@ hs_setup_output_to_stdout() {
 # --- Public error codes --------------------------------------------------------
 readonly HS_ERR_RESERVED_VAR_NAME=1
 readonly HS_ERR_VAR_NAME_COLLISION=2
+readonly HS_ERR_MULTIPLE_STATE_INPUTS=3
 
 # --- hs_persist_state ----------------------------------------------------------
 # Function:
@@ -168,6 +169,14 @@ hs_persist_state() {
                 ;;
         esac
     done
+    # If __output_stat_var is set, we have to check if __existing_state is set too,
+    # and enforce that ${!__output_state_var} is uninitialized or empty to ensure
+    # that we are not dealing with multiple prior state strings.
+    if [ -n "$__output_state_var" ] && [ -n "$__existing_state" ]; then
+        echo "[ERROR] hs_persist_state: cannot pass prior state using both -s and -S options simultaneously." >&2
+        return "$HS_ERR_MULTIPLE_STATE_INPUTS"
+    fi
+    # Initialize output state string
     local __output=""
     if [ -n "$__existing_state" ]; then
         __output="$__existing_state"
@@ -184,7 +193,7 @@ hs_persist_state() {
         (
             local "$__var_name"
             if [ -n "$__existing_state" ]; then
-                eval "$__existing_state"
+                eval "$__existing_state" >/dev/null 2>&1
             fi
             # Check if the variable pointed to by __var_name has been initialized
             if ! [ -z "${!__var_name+x}" ]; then
