@@ -1,0 +1,9 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "gh": true,
+        "git add": true,
+        "git commit": true,
+        "git push": true,
+        "/usr/bin/bats": true
+    }
+}

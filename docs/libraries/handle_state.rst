@@ -35,10 +35,11 @@ capturing stdout.
        # Define some opaque library resources
        local temp_file="/tmp/some_temp_file"
        local resource_id="resource_123"
-       hs_persist_state -S state temp_file resource_id
+       hs_persist_state "$@" temp_file resource_id
    }
 
    cleanup() {
+       local state="$1"
        local temp_file resource_id
        eval "$state"
        rm -f "$temp_file"
@@ -46,9 +47,10 @@ capturing stdout.
    }
 
    # State is assigned to the variable, no stdout capture needed
-   init_function  
+   local my_state
+   init_function -S my_state
    # Your main script logic here
-   cleanup
+   cleanup "$my_state"
 
 For backward compatibility, the old stdout capture method still works:
 
@@ -104,18 +106,24 @@ The emitted snippet only assigns values if the target variable is declared
 
 The function accepts optional `-s` or `-S` arguments:
 
-- `-s <state>`: Treats `<state>` as an existing state snippet to append to, and prints the result to stdout.
+- `-s <state>`: Treats `<state>` as an existing state snippet to append to.
 - `-S <var>`: Assigns the state (appended to any existing content in `<var>`) to the variable named `<var>` instead of printing to stdout.
 
-These options are mutually exclusive; using both will combine the state into `<var>` only if `<var>` is empty or uninitialized.
+These options can be used together; when both are provided, `<var>` is used for output and must be empty or uninitialized.
 
 This allows avoiding stdout output for opaque data when assigning to a variable,
-while maintaining backward compatibility for appending to state strings.
+while maintaining backward compatibility for appending to state strings or state vars.
 
 .. warning::
    When using `-S` with a variable name, the function will `eval` the current contents of that variable during collision checking. Callers must ensure the variable contains only safe, trusted Bash code or is empty/unset to avoid execution of harmful code.
+   
 
-Libraries are encouraged to provide the same option to their initialization
+Code protections ensure that prior state is only evaluated when necessary for collision 
+checking, and only if the variable is not empty. Corrupted state code is detected when
+it calls undefined commands during this evaluation, and when the evaluation takes more
+than one second (to prevent hangs).
+
+Libraries are encouraged to provide the same ``-s`` and ``-S`` options to their initialization
 functions to allow callers to chain state snippets together.
 
 When appending to an existing state snippet, the function checks for name collisions
@@ -126,11 +134,16 @@ The alternate solution is to keep and eval separate state snippets for each libr
 - Usage: `hs_persist_state [-s <state> | -S <var>] var1 var2 ...`
 - Output: a string of Bash code intended to be `eval`'d by the caller (when not assigning to variable).
 - Errors:
-  - Refuses to persist reserved names `__var_name` and `__existing_state`.
-  - Rejects collisions when a variable already exists in the provided state.
+  - Refuses to take into account more than one prior state.
+  - Detects an invalid variable name passed to option `-S`.
+  - Refuses to persist reserved names `__var_name`, `__existing_state`, `__output_state_var` and `__output`.
+  - Rejects collisions when a variable already exists in the provided prior state.
+  - Detects some the most severe forms of corrupted prior state code (hangs or undefined commands).
+- Guarantees:
+  - Errors out or succeeds in an atomic manner; no partial state is emitted on error.
 
 .. warning::
-  The function cannot properly capture arrays, namerefs, associative arrays nor
+  The function cannot currently properly capture arrays, namerefs, associative arrays nor
   functions. Only scalar string variables are supported.
 hs_read_persisted_state
 ~~~~~~~~~~~~~~~~~~~~~~~

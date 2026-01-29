@@ -17,3 +17,8 @@
 
 # Don't commit tokens and secrets
 /.github/github-token.*
+.env
+
+# Ignore patch files
+*.patch
+*.diff
