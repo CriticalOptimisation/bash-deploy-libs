@@ -338,6 +338,51 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
 }
 
 # bats test_tags=hs_persist_state
+@test "hs_persist_state fails on reserved variable name __existing_state" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -lc '
+    source "$LIB"
+    init() {
+      local __existing_state=bad
+      hs_persist_state __existing_state
+    }
+    init
+  '
+  [[ "$stderr" == *"refusing to persist reserved variable name '__existing_state'"* ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state fails on reserved variable name __output_state_var" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -lc '
+    source "$LIB"
+    init() {
+      local __output_state_var=bad
+      hs_persist_state __output_state_var
+    }
+    init
+  '
+  [[ "$stderr" == *"refusing to persist reserved variable name '__output_state_var'"* ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state fails on reserved variable name __output" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -lc '
+    source "$LIB"
+    init() {
+      local __output=bad
+      hs_persist_state __output
+    }
+    init
+  '
+  [[ "$stderr" == *"refusing to persist reserved variable name '__output'"* ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_persist_state
 @test "hs_persist_state with -S var_name assigns to variable" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
