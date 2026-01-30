@@ -14,9 +14,9 @@ API, warnings, and limitations.
 
 - Source `config/handle_state.sh` once in the main script or library entrypoint.
 - In init/setup or wherever the state information is created, define local scalar 
-  variables holding the state, then call `hs_persist_state <var_name> ...`.
-- Capture the emitted state string from stdout (e.g., `state=$(init)`), and pass
-  it to cleanup or any API function which needs state information.
+  variables holding the state, then call `hs_persist_state -S <var_name> <var_name> ...`.
+- The state snippet is assigned directly to the specified variable, avoiding stdout usage.
+- Pass the state variable to cleanup or any API function which needs state information.
 - In cleanup, declare locals with the same names, then `eval "$state"`.
 - Call `hs_cleanup_output` when done to stop the logging reader.
 
@@ -27,10 +27,8 @@ API, warnings, and limitations.
    source "$(dirname "$0")/config/handle_state.sh"
 
    state_producer() {
-     hs_echo "Starting init"
-     local temp_file="/tmp/resource"
-     local resource_id="abc123"
-     hs_persist_state temp_file resource_id
+     # Defer option processing to hs_persist_state for full API flexibility
+     hs_persist_state "$@"
    }
 
    state_consumer() {
@@ -40,8 +38,11 @@ API, warnings, and limitations.
      echo "Cleaned $resource_id"
    }
 
-   state=$(init)
+   local state
+   state_producer -S state temp_file resource_id
    cleanup "$state"
+
+**API Documentation Note**: The `state_producer` function defers all option processing to `hs_persist_state`, providing the same flexibility and future enhancements to library users.
 
 The same function can begin by consuming some state and terminate producing some other state. 
 If it uses the ``-s <$state>`` option to ``hs_persist_state``, that function can append to the
