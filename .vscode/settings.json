@@ -6,7 +6,8 @@
         "git push": true,
         "git blame": true,
         "git checkout": true,
-        "/usr/bin/bats": true
+        "/usr/bin/bats": true,
+        "git fetch": true
     },
     "git.branchProtection": [
         "main",
