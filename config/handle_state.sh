@@ -52,6 +52,7 @@ guard mktemp mkfifo rm timeout
 #   Do not call directly; called automatically when this file is sourced.
 #   When done with the library, call `hs_cleanup_output` to terminate the background reader
 #   or else a 5 seconds idle timeout will occur.
+guard mktemp mkfifo rm
 hs_setup_output_to_stdout() {
     # Test if already set up
     if hs_get_pid_of_subshell >/dev/null 2>&1; then

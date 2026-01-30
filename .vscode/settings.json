@@ -4,6 +4,15 @@
         "git add": true,
         "git commit": true,
         "git push": true,
+        "git blame": true,
+        "git checkout": true,
         "/usr/bin/bats": true
-    }
+    },
+    "git.branchProtection": [
+        "main",
+        "master",
+        "release/*"
+    ],
+    "git.branchProtectionPrompt": "always",
+    "files.readonlyFromPermissions": true
 }
