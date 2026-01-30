@@ -11,3 +11,14 @@
 
 # Sphinx build output
 /docs/_build/
+
+# Local auth artifacts
+/.github/github-token.txt
+
+# Don't commit tokens and secrets
+/.github/github-token.*
+.env
+
+# Ignore patch files
+*.patch
+*.diff

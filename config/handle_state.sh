@@ -7,6 +7,8 @@
 [[ -z ${__HANDLE_STATE_SH_INCLUDED:-} ]] && __HANDLE_STATE_SH_INCLUDED=1 || return 0
 
 # Source command guard for secure external command usage
+# shellcheck source=config/command_guard.sh
+# shellcheck disable=SC1091
 source "${BASH_SOURCE%/*}/command_guard.sh"
 
 # Library usage:
@@ -31,6 +33,8 @@ source "${BASH_SOURCE%/*}/command_guard.sh"
 # Upper level usage: state=$(init_function)
 #                    cleanup "$state"
 
+guard mkfifo rm timeout
+
 # --- logging from $(command) using a FIFO ---------------------------------------
 # This section sets up a FIFO and a background reader process to allow functions
 # to log messages to the main script's stdout/stderr even when they are called
@@ -48,7 +52,6 @@ source "${BASH_SOURCE%/*}/command_guard.sh"
 #   Do not call directly; called automatically when this file is sourced.
 #   When done with the library, call `hs_cleanup_output` to terminate the background reader
 #   or else a 5 seconds idle timeout will occur.
-guard mktemp mkfifo rm
 hs_setup_output_to_stdout() {
     # Test if already set up
     if hs_get_pid_of_subshell >/dev/null 2>&1; then
@@ -129,6 +132,9 @@ hs_setup_output_to_stdout() {
 # --- Public error codes --------------------------------------------------------
 readonly HS_ERR_RESERVED_VAR_NAME=1
 readonly HS_ERR_VAR_NAME_COLLISION=2
+readonly HS_ERR_MULTIPLE_STATE_INPUTS=3
+readonly HS_ERR_CORRUPT_STATE=4
+readonly HS_ERR_INVALID_VAR_NAME=5
 
 # --- hs_persist_state ----------------------------------------------------------
 # Function:
@@ -153,33 +159,84 @@ readonly HS_ERR_VAR_NAME_COLLISION=2
 #       # vars are available here
 #   }
 hs_persist_state() {
-    # Read optional -s <state> argument
     local __existing_state=""
-    if [ "${1:-}" = "-s" ]; then
-        shift
-        __existing_state="$1"
-        shift
-        # Emit existing state first
-        printf '%s\n' "$__existing_state"
+    local __output_state_var=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -s)
+                shift
+                __existing_state="$1"
+                shift
+                ;;
+            -S)
+                shift
+                __output_state_var="$1"
+                # Check that __output_state_var is a valid variable name
+                if ! [[ "$__output_state_var" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+                    echo "[ERROR] hs_persist_state: invalid variable name '$__output_state_var' for -S option." >&2
+                    return "$HS_ERR_INVALID_VAR_NAME"
+                fi
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+    # If __output_stat_var is set, we have to check if __existing_state is set too,
+    # and enforce that ${!__output_state_var} is uninitialized or empty to ensure
+    # that we are not dealing with multiple prior state strings.
+    if [ -n "$__output_state_var" ] && [ -n "$__existing_state" ]; then
+        echo "[ERROR] hs_persist_state: cannot pass prior state using both -s and -S options simultaneously." >&2
+        return "$HS_ERR_MULTIPLE_STATE_INPUTS"
+    fi
+    # If __output_state_var is set, retrieve prior state from it
+    if [ -n "${__output_state_var}" ]; then
+        __existing_state="${!__output_state_var}"
+    fi
+    # Initialize output state string
+    local __output=""
+    if [ -n "$__existing_state" ]; then
+        __output="$__existing_state"
     fi
     local __var_name
     for __var_name in "$@"; do
         # Check that the value of __var_name is neither "__var_name" nor "__existing_state"
-        if [ "$__var_name" = "__var_name" ] || [ "$__var_name" = "__existing_state" ]; then
+        if [ "$__var_name" = "__var_name" ] || [ "$__var_name" = "__existing_state" ] || [ "$__var_name" = "__output_state_var" ] || [ "$__var_name" = "__output" ]; then
             echo "[ERROR] hs_persist_state: refusing to persist reserved variable name '$__var_name'." >&2  
             return "$HS_ERR_RESERVED_VAR_NAME"
         fi
-        # In a subshell, declare "$__var_name" as local to capture its value and
-        # attempt to restore it from "$__existing_state".
-        (
-            local "$__var_name"
-            eval "$__existing_state"
-            # Check if the variable pointed to by __var_name has been initialized
-            if ! [ -z "${!__var_name+x}" ]; then
-                echo "[ERROR] hs_persist_state: variable '$__var_name' is already defined in the state, with value '${!__var_name}'." >&2
-                return 1
+        # Detect name collisions if __existing_state is provided
+        if [ -n "$__existing_state" ]; then
+            # In a time-constrained subshell, declare "$__var_name" as local to capture its value
+            # and attempt to restore it from "$__existing_state".
+            timeout --preserve-status -k 2 1 "$0" --noprofile -elc "
+                command_not_found_handle() {
+                    echo \"[ERROR] hs_persist_state: command '\$1' not found.\" >&2
+                    exit 127
+                }
+                test_collision() {
+                    local \"$__var_name\"
+                    eval \"$__existing_state\" >/dev/null
+                    # Check if the variable pointed to by __var_name has been initialized
+                    if ! [ -z \"\${${__var_name}+x}\" ]; then
+                        echo \"[ERROR] hs_persist_state: variable '$__var_name' is already defined in the state, with value '\${${__var_name}}'.\" >&2
+                        exit 1
+                    fi
+                }
+                test_collision
+            " 
+            local status=$?
+            if [ $status -eq 124 ] || [ $status -eq 127 ] || [ $status -eq 137 ] || [ $status -eq 143 ]; then
+                # Status code snippet timed out: 124 (timeout), 137 (killed), 127 (command not found), 143 (sigterm)
+                echo "[ERROR] hs_persist_state: prior state is corrupted." >&2
+                return $((HS_ERR_CORRUPT_STATE))
+            elif [ $status -eq 1 ]; then
+                return $((HS_ERR_VAR_NAME_COLLISION))
+            elif [ $status -ne 0 ]; then
+                echo "[ERROR] hs_persist_state: internal error while checking for variable name collision for '$__var_name'." >&2
+                return $((HS_ERR_CORRUPT_STATE))
             fi
-        ) || return "$HS_ERR_VAR_NAME_COLLISION"
+        fi
         # Check if the variable exists in the caller (local or global). We avoid
         # using `local -p` here because that only inspects locals of this
         # function, not the caller's scope. If the variable exists, capture its
@@ -188,10 +245,10 @@ hs_persist_state() {
         if [ "${!__var_name+x}" ]; then
             # Get the value of the variable
             local var_value
-            eval "var_value=\"\${$__var_name}\"" || eval "var_value=\"\$$__var_name\""
+            var_value="${!__var_name}" || eval "var_value=\"\${$__var_name}\"" || eval "var_value=\"\$$__var_name\""
             # Emit a snippet that, when eval'd in the receiving scope, will
             # restore the existing, empty local variables from the saved state.
-            printf "
+            __snippet=$(printf "
 if local -p %s >/dev/null 2>&1; then
   if [ -n \"\${%s+x}\" ] && [ -n \"\${%1s}\" ]; then
     printf \"[ERROR] local %1s already defined; refusing to overwrite\\n\" >&2
@@ -200,9 +257,15 @@ if local -p %s >/dev/null 2>&1; then
     %s=%q
   fi
 fi
-" "$__var_name" "$__var_name" "$__var_name" "$__var_name" "$__var_name" "$var_value"
+" "$__var_name" "$__var_name" "$__var_name" "$__var_name" "$__var_name" "$var_value")
+            __output="${__output}${__snippet}"
         fi
     done
+    if [ -n "$__output_state_var" ]; then
+        eval "$__output_state_var=\"\$__output\""
+    else
+        printf '%s\n' "$__output"
+    fi
 }
 
 # --- hs_read_persisted_state --------------------------------------------------------

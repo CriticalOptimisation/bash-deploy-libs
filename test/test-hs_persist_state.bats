@@ -12,12 +12,14 @@ setup_file() {
     return 1
   fi
   export BATS_TEST_TMPDIR
-  # shellcheck source=../config/handle_state.sh
+  # shellcheck source=config/handle_state.sh
+  # shellcheck disable=SC1091
   source "$LIB"  # run hs_setup_output_to_stdout
   hs_cleanup_output  # ensure clean state at start
   export -f hs_setup_output_to_stdout hs_cleanup_output hs_get_pid_of_subshell\
             hs_persist_state hs_read_persisted_state hs_echo
-  export HS_ERR_RESERVED_VAR_NAME HS_ERR_VAR_NAME_COLLISION
+  export HS_ERR_RESERVED_VAR_NAME HS_ERR_VAR_NAME_COLLISION 
+  export HS_ERR_MULTIPLE_STATE_INPUTS HS_ERR_CORRUPT_STATE HS_ERR_INVALID_VAR_NAME
   # Accelerate test failure
   export BATS_TEST_TIMEOUT=2
 }
@@ -44,13 +46,35 @@ make_state() {
     printf 'local %s=%q\n' "$var_name" "$var_value"
   done
 }
-export -f make_state  # makes it available in bash --noprofile -lc calls
+# Define a helper to create corrupted persisted state
+corrupt_state() {
+  if [ "$#" -ne 1 ]; then
+    echo "Usage: corrupt_state <slow|error>" >&2
+    return 1
+  fi
+  local mode="$1"
+  case "$mode" in
+    slow)
+      # Create a state that sleeps for 10 seconds when evaluated
+      printf 'sleep %i\n' "$((BATS_TEST_TIMEOUT + 1))"
+      ;;
+    error)
+      # Create a state that produces an error when evaluated
+      printf 'invalid_command_that_fails\n'
+      ;;
+    *)
+      echo "Unknown mode '$mode'" >&2
+      return 1
+      ;;
+  esac
+}
+export -f make_state corrupt_state # makes it available in bash --noprofile -lc calls
 
 # bats test_tags=hs_setup_output_to_stdout, hs_echo
 @test "hs_setup_output_to_stdout sets up output redirection [no-setup]" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
-  hs_setup_output_to_stdout;  # in 'run' ensure bats captures output
+  hs_setup_output_to_stdout;  # in "run" ensure bats captures output
   init(){ hs_echo "bypasses stdout capture"; };
   state=$(init);
   hs_cleanup_output;
@@ -81,6 +105,7 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
 @test "hs_setup_output_to_stdout idempotent warning does not leak to stdout" {
   export out_file="$BATS_TEST_TMPDIR/stdout"
   : >"$out_file"
+  # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     hs_setup_output_to_stdout >>"$out_file"
   '
@@ -114,7 +139,7 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
   [ -z "${bar+set}" ] && [ "${baz}" = "old" ]'
 }
 
-# bats test_tags=hs_persist_state,focus
+# bats test_tags=hs_persist_state
 @test "cleanup declares local and eval restores values onto new locals" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
@@ -126,13 +151,14 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
   [ "$output" = "secret:v2:new" ]
 }
 
-# bats test_tags=hs_read_persisted_state,focus
+# bats test_tags=hs_read_persisted_state
 @test "eval \$(hs_read_persisted_state ...) in caller scope restores values" {
   # shellcheck disable=SC2016
-  run -0 bash --noprofile -lc ' 
+  run -0 --separate-stderr bash --noprofile -lc ' 
   init(){ local foo=secret; local bar=v2; local baz=new; hs_persist_state foo bar baz; }; 
   cleanup(){ local foo bar baz; eval "$(hs_read_persisted_state "$1")"; printf "%s:%s:%s" "$foo" "$bar" "$baz"; }; 
-  state=$(init); 
+  set -x
+  state=$(init) 
   cleanup "$state"'
   [ "$output" = "secret:v2:new" ]
 }
@@ -274,6 +300,7 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
 # This test uses kill -0 to check if a PID exists
 # bats test_tags=hs_get_pid_of_subshell
 @test "hs_get_pid_of_subshell returns a valid PID" {
+  # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     pid=$(hs_get_pid_of_subshell)
     if ! kill -0 "$pid" 2>/dev/null; then
@@ -318,15 +345,25 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
     state1=$(make_state foo one)
     init "$state1" >/dev/null  # Invalid output must be ignored
   '
+  # echo "stderr=$stderr" >&3
   [[ "$stderr" == *"variable 'foo' is already defined in the state, with value 'one'"* ]]
   [ -z "$output" ]
 }
 
 # bats test_tags=hs_persist_state
+@test "hs_persist_state with -S detects an invalid variable name" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr bash --noprofile -xlc '
+    hs_persist_state -S "1invalid-var-name"
+  '
+  [[ "$stderr" == *"invalid variable name '1invalid-var-name' for -S option"* ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_persist_state,focus
 @test "hs_persist_state fails on reserved variable name __var_name" {
   # shellcheck disable=SC2016
-  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -lc '
-    source "$LIB"
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -xlc '
     init() {
       local __var_name=bad
       hs_persist_state __var_name
@@ -341,7 +378,6 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
 @test "hs_persist_state fails on reserved variable name __existing_state" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -lc '
-    source "$LIB"
     init() {
       local __existing_state=bad
       hs_persist_state __existing_state
@@ -349,5 +385,96 @@ export -f make_state  # makes it available in bash --noprofile -lc calls
     init
   '
   [[ "$stderr" == *"refusing to persist reserved variable name '__existing_state'"* ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state fails on reserved variable name __output_state_var" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -lc '
+    init() {
+      local __output_state_var=bad
+      hs_persist_state __output_state_var
+    }
+    init
+  '
+  [[ "$stderr" == *"refusing to persist reserved variable name '__output_state_var'"* ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state fails on reserved variable name __output" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -lc '
+    init() {
+      local __output=bad
+      hs_persist_state __output
+    }
+    init
+  '
+  [[ "$stderr" == *"refusing to persist reserved variable name '__output'"* ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state with -S var_name assigns to variable" {
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile -lc '
+    init() {
+      local bar=two
+      hs_persist_state -S state bar
+    }
+    cleanup(){ 
+      local bar 
+      eval "$state"
+      printf "%s" "$bar" 
+    }
+    init
+    cleanup
+  '
+  [ "$output" = "two" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state detects corrupt state: infinite loop" {
+  # The infinite loop is simulated by a 3 seconds sleep.
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_CORRUPT_STATE" --separate-stderr bash --noprofile -lc '
+    init() {
+      local foo=two
+      hs_persist_state -s "$(corrupt_state slow)" foo
+    }
+    init
+  '
+  [[ "$stderr" =~ "prior state is corrupted" ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state detects corrupt state: error on eval" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_CORRUPT_STATE" --separate-stderr bash --noprofile -lc '
+    init() {
+      local foo=two
+      hs_persist_state -s "$(corrupt_state error)" foo
+    }
+    init
+  '
+  [[ "$stderr" =~ "prior state is corrupted" ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state detects corrupt state var: error on eval" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_CORRUPT_STATE" --separate-stderr bash --noprofile -lc '
+    init() {
+      local foo=two
+      hs_persist_state "$@" foo
+    }
+    state_var="$(corrupt_state error)"
+    init -S state_var
+  '
+  [[ "$stderr" =~ "prior state is corrupted" ]]
   [ -z "$output" ]
 }
