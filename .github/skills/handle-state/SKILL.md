@@ -28,6 +28,7 @@ API, warnings, and limitations.
 
    state_producer() {
      # Defer option processing to hs_persist_state for full API flexibility
+     hs_echo "Starting init"
      local temp_file="/tmp/resource"
      local resource_id="abc123"
      hs_persist_state "$@" temp_file resource_id
