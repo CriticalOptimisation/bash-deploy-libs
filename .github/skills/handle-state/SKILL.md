@@ -28,7 +28,9 @@ API, warnings, and limitations.
 
    state_producer() {
      # Defer option processing to hs_persist_state for full API flexibility
-     hs_persist_state "$@"
+     local temp_file="/tmp/resource"
+     local resource_id="abc123"
+     hs_persist_state "$@" temp_file resource_id
    }
 
    state_consumer() {
@@ -39,7 +41,7 @@ API, warnings, and limitations.
    }
 
    local state
-   state_producer -S state temp_file resource_id
+   state_producer -S state
    cleanup "$state"
 
 **API Documentation Note**: The `state_producer` function defers all option processing to `hs_persist_state`, providing the same flexibility and future enhancements to library users.
