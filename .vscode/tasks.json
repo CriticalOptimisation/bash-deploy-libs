@@ -1,0 +1,10 @@
+{
+    "version": "2.0.0",
+    "inputs": [
+        {
+            "id": "token",
+            "type": "promptString",
+            "description": "Enter your GitHub token"
+        }
+    ]
+}
