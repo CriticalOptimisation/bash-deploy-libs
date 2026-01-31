@@ -8,6 +8,8 @@ description: Guide for software configuration management processes including iss
 ## Overview
 This skill keeps the surface area small: it helps you decide whether you are managing a GitHub issue (creating, updating, triaging, or tagging) or actually implementing an approved change. The detailed nine-step implementation workflow lives in the companion reference file so the top-level document can stay focused on task selection and guardrails.
 
+**Critical Rule: Never commit directly to the main branch.** All changes to git-tracked files, including .vscode configurations, must be developed on feature branches and merged via pull requests. Direct commits to main will fail on protected branches and violate the SCM process.
+
 ## Task Selection
 1. **Meta-task path** – Use this skill (and the `github-issues` skill) for issue creation, triage, labeling, or other housekeeping that does _not_ touch git-managed configuration items. Keep the local clone synchronized with `origin/main`, maintain a read-only copy of `main` for reference, and avoid committing until an Issue Assessment is approved.
 2. **Implementation path** – When a GitHub issue requires editing configuration files, trigger the full nine-step workflow in [references/implementation-workflow.md](references/implementation-workflow.md). Step 1 (Issue Assessment & Approval) must be approved before editing files, Step 5 enforces running the planned local tests, and Step 7 requires assigning @CriticalOptimisation/maintainers and obtaining a maintainer review approval before merging.

@@ -39,7 +39,7 @@ intended for humans. These skills can be found in `.github/skills/`.
 ---
 
 ## Things an agent should avoid or double-check ⚠️
-- **Never** make change to any git-tracked file without going through the established SCM process (exception: .vscode folder for local settings).
+- **Never** make change to any git-tracked file without going through the established SCM process. All changes must be on feature branches and merged via pull requests — never commit directly to main.
 - Do **not** assume functions abort on failure — always check return values explicitly.
 - Do **not** use `docker-compose` (v1) command variants; the scripts call `docker compose` (v2).
 - Double-check that a detailed assessment of the work is available in the GitHub issue's discussion **before** makeing any change to a git-tracked item.
