@@ -12,7 +12,13 @@ This skill keeps the surface area small: it helps you decide whether you are man
 
 ## Task Selection
 1. **Meta-task path** – Use this skill (and the `github-issues` skill) for issue creation, triage, labeling, or other housekeeping that does _not_ touch git-managed configuration items. Keep the local clone synchronized with `origin/main`, maintain a read-only copy of `main` for reference, and avoid committing until an Issue Assessment is approved.
-2. **Implementation path** – When a GitHub issue requires editing configuration files, trigger the full nine-step workflow in [references/implementation-workflow.md](references/implementation-workflow.md). Step 1 (Issue Assessment & Approval) must be approved before editing files, Step 5 enforces running the planned local tests, and Step 7 requires assigning @CriticalOptimisation/maintainers and obtaining a maintainer review approval before merging.
+2. **Implementation path** – When a GitHub issue requires editing configuration files, trigger the full nine-step workflow in [references/implementation-workflow.md](references/implementation-workflow.md), divided into segments with mandatory supervision approvals:
+
+   - **Shared Issue Understanding** (Step 1): Issue Assessment & Approval – Identify blockers and obtain explicit reviewer approval before proceeding to implementation.
+
+   - **Implementation** (Steps 2-7): Branch Creation, Planning, Documentation Updates, Tests Development, Functionality Implementation, and Code Review Request – Develop, test, and prepare changes for review.
+
+   - **Integration** (Steps 8-9): Final Integration and Post-Implementation Validation – Merge and validate after all approvals and checks.
 
 ## Meta-task Guidance
 - Confirm you are operating on a clean baseline (`git fetch origin && git status`) before performing any meta-task so you do not misalign with remote `main`.
