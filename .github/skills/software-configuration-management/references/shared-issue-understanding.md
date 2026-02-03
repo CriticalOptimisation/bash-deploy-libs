@@ -1,5 +1,7 @@
 # Shared Issue Understanding
 
+**Precondition**: Issue exists and is assigned. This is the first task in the implementation workflow.
+
 This segment covers the initial assessment and approval phase of the implementation workflow.
 
 ## Step 1: Issue Assessment & Approval

@@ -12,15 +12,10 @@ This skill keeps the surface area small: it helps you decide whether you are man
 
 ## Task Selection
 1. **Meta-task path** – Use this skill (and the `github-issues` skill) for issue creation, triage, labeling, or other housekeeping that does _not_ touch git-managed configuration items. Keep the local clone synchronized with `origin/main`, maintain a read-only copy of `main` for reference, and avoid committing until an Issue Assessment is approved.
-2. **Implementation path** – When a GitHub issue requires editing configuration files, trigger the segmented workflow. Mandatory supervision approvals are required between segments:
-
-   - **Shared Issue Understanding** (Step 1): Issue Assessment & Approval – Identify blockers and obtain explicit reviewer approval before proceeding.
-
-   - **Implementation Planning** (Steps 2-3): Branch Creation and Planning – Create branch and finalize plan, then validate before execution.
-
-   - **Implementation Execution** (Steps 4-7): Documentation Updates, Tests Development, Functionality Implementation, and Code Review Request – Develop and prepare for review.
-
-   - **Integration** (Steps 8-9): Final Integration and Post-Implementation Validation – Merge and validate.
+2. **Shared Issue Understanding** – Trigger this task when a GitHub issue is identified for implementation. Precondition: Issue exists and is assigned. Perform Step 1 (Issue Assessment & Approval) to identify blockers and obtain explicit reviewer approval. Do not proceed to other tasks without approval.
+3. **Implementation Planning** – Trigger this task after approval in Task 2. Precondition: Task 2 completed with approval. Perform Steps 2-3 (Branch Creation and Planning) to set up workspace and finalize plan. Validate the plan before proceeding.
+4. **Implementation Execution** – Trigger this task after plan validation in Task 3. Precondition: Task 3 completed with validated plan. Perform Steps 4-7 (Documentation, Testing, Implementation, and Review) to develop and prepare changes for review.
+5. **Integration** – Trigger this task after review approval in Task 4. Precondition: Task 4 completed with maintainer review approval. Perform Steps 8-9 (Final Integration and Validation) to merge and confirm stability.
 
 ## Meta-task Guidance
 - Confirm you are operating on a clean baseline (`git fetch origin && git status`) before performing any meta-task so you do not misalign with remote `main`.
@@ -44,14 +39,14 @@ When handling issues (creation, updates, triage, labeling, or milestones), use t
 
 For repo synchronization, worktree management, and distinguishing meta-tasks from implementation work, refer to the meta-task guidance above. This ensures issues are managed without risking unapproved changes to git-managed items.
 ## Implementation Workflow Summary
-Use the companion reference files for the full details, but keep this summary in mind whenever a GitHub issue transitions into actual configuration work. The workflow is divided into four segments with mandatory approvals between them.
+Use the companion reference files for the full details, but keep this summary in mind whenever a GitHub issue transitions into actual configuration work. The workflow is divided into four tasks with mandatory preconditions.
 
-- **Shared Issue Understanding** (Step 1): Issue Assessment & Approval – Identify blockers and obtain approval.
-- **Implementation Planning** (Steps 2-3): Branch Creation and Planning – Set up workspace and finalize plan.
-- **Implementation Execution** (Steps 4-7): Documentation, Testing, Implementation, and Review – Develop and review changes.
-- **Integration** (Steps 8-9): Final Integration and Validation – Merge and confirm stability.
+- **Task 2: Shared Issue Understanding** (Step 1): Issue Assessment & Approval – Identify blockers and obtain approval.
+- **Task 3: Implementation Planning** (Steps 2-3): Branch Creation and Planning – Set up workspace and finalize plan.
+- **Task 4: Implementation Execution** (Steps 4-7): Documentation, Testing, Implementation, and Review – Develop and review changes.
+- **Task 5: Integration** (Steps 8-9): Final Integration and Validation – Merge and confirm stability.
 
-Each segment's details are in the respective reference files under [references/](references/).
+Each task's details are in the respective reference files under [references/](references/), with preconditions clearly stated.
 
 Every implementation status update should cite the relevant assessment in the issue comments so reviewers understand that the change followed this documented process.
 
