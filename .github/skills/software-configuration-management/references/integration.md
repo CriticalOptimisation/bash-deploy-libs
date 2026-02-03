@@ -1,6 +1,6 @@
 # Integration
 
-**Precondition**: Task 4 (Implementation Execution) completed with maintainer review approval. Do not proceed without review approval.
+**Precondition**: Task 5 (Implementation) completed with maintainer review approval. Do not proceed without review approval.
 
 This segment covers final integration and post-implementation validation.
 
