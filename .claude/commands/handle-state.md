@@ -1,0 +1,90 @@
+---
+description: Expert guidance for implementing and using the handle_state.sh Bash library to persist initialization state to cleanup functions, including hs_persist_state usage, logging FIFO setup, and limitations/workarounds for unsupported variable types. Triggers on requests like "pass information", "write initialization function" or "write cleanup function" while developing a library or code module.
+---
+
+# Handle State Library Skill
+
+## Core Reference
+
+Use `docs/libraries/handle_state.rst` as the canonical local reference for the
+API, warnings, and limitations.
+
+## Quick Workflow
+
+- Source `config/handle_state.sh` once in the main script or library entrypoint.
+- In init/setup or wherever the state information is created, define local scalar
+  variables holding the state, then call `hs_persist_state -S <var_name> <var_name> ...`.
+- The state snippet is assigned directly to the specified variable, avoiding stdout usage.
+- Pass the state variable to cleanup or any API function which needs state information.
+- In cleanup, declare locals with the same names, then `eval "$state"`.
+- Call `hs_cleanup_output` when done to stop the logging reader.
+
+## Standard Pattern
+
+```bash
+source "$(dirname "$0")/config/handle_state.sh"
+
+state_producer() {
+  # Defer option processing to hs_persist_state for full API flexibility
+  hs_echo "Starting init"
+  local temp_file="/tmp/resource"
+  local resource_id="abc123"
+  hs_persist_state "$@" temp_file resource_id
+}
+
+state_consumer() {
+  local temp_file resource_id
+  eval "$1"
+  rm -f "$temp_file"
+  echo "Cleaned $resource_id"
+}
+
+local state
+state_producer -S state
+cleanup "$state"
+```
+
+**API Documentation Note**: The `state_producer` function defers all option processing to `hs_persist_state`, providing the same flexibility and future enhancements to library users.
+
+The same function can begin by consuming some state and terminate producing some other state.
+If it uses the `-s <$state>` option to `hs_persist_state`, that function can append to the
+supplied state vector rather than producing a new one.
+
+## Logging FIFO Guidance
+
+- `hs_setup_output_to_stdout` runs on source; it redirects `hs_echo` output to
+  the main stdout even when init runs inside `$(...)`.
+- Use `hs_echo` inside init functions when stdout is reserved for the state snippet.
+- Do not write to stdout directly in init; it will corrupt the state string.
+
+## Supported Variables
+
+- Only local scalar variables (strings or numbers) are reliably preserved.
+- Encode any other state variable as a string. See encoding templates in
+  `.github/skills/handle-state/references/templates.md`.
+- Always re-declare the same locals in cleanup before `eval`.
+
+## Known Limitations (Tracked)
+
+The following behaviors are tracked in GitHub; avoid them or apply workarounds.
+
+- Unknown variable names are silently ignored (Issue #1).
+- Function names are silently ignored (Issue #2).
+- Indexed arrays only preserve the first element — major (Issue #3).
+- Associative arrays are silently ignored (Issue #4).
+- Namerefs are persisted as scalars, indirection is lost (Issue #5).
+
+## Workarounds
+
+- Represent associative arrays as two indexed arrays (keys and values).
+- Represent indexed arrays as a single scalar string (encode/decode) or as an
+  associative array if appropriate.
+- Convert other complex constructs into strings and rebuild them in cleanup.
+- See `.github/skills/handle-state/references/templates.md` for encoding examples.
+
+## Safety Notes
+
+- `hs_persist_state` and `hs_read_persisted_state` rely on `eval`; treat state
+  strings as trusted input only.
+- Avoid name collisions when chaining state snippets; prefer separate state
+  strings if libraries overlap variable names.
