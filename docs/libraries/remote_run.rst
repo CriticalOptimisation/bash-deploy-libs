@@ -108,7 +108,7 @@ remote_run
 
 .. code-block:: text
 
-   remote_run [--allow <path>] [--] <user@host> <script.sh> [args...]
+   remote_run [--allow <path>] [--ssh-opt <opt>] [--] <user@host> <script.sh> [args...]
 
 Executes ``<script.sh>`` on ``<user@host>`` via SSH.  All ``source`` calls
 inside the script resolve against the local filesystem.
@@ -119,6 +119,18 @@ inside the script resolve against the local filesystem.
     Permit access to ``<path>`` (file or directory) in addition to the default
     whitelist.  May be repeated.  Relative paths are resolved against the local
     working directory at invocation time.
+
+``--ssh-opt <opt>``
+    Pass an extra option to every ``ssh`` invocation (connection and port-
+    forward setup).  May be repeated.  Useful for specifying a non-default
+    identity file, port, or ``-o`` knobs:
+
+    .. code-block:: bash
+
+       remote_run --ssh-opt "-p 2222" \
+                  --ssh-opt "-i ~/.ssh/deploy_key" \
+                  --ssh-opt "-o StrictHostKeyChecking=no" \
+                  user@host deploy.sh
 
 ``<user@host>``
     SSH target.  Any format accepted by ``ssh`` is valid (e.g. ``host``,
