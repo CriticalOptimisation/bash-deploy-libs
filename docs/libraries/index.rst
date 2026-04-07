@@ -10,3 +10,4 @@ pieces they ship.
    handle_state
    library_template
    command_guard
+   remote_run
