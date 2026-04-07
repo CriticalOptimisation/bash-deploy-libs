@@ -9,6 +9,7 @@ pieces they ship.
 
    handle_state
    command_guard
+   remote_run
 
 ..
 
