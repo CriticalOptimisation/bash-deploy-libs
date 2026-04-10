@@ -203,8 +203,6 @@ _rr_serve_loop() {
                 ;;
             RESOLVE\ *)
                 # TODO (issue #58): implement RESOLVE protocol for relay support.
-                # A must allocate a new port, start a dedicated nc, open a second
-                # SSH -R tunnel to B, then send RESOLVE_OK <port>.
                 printf 'ERR RESOLVE not yet implemented\n' >&"$_wfd"
                 ;;
             "")
@@ -212,6 +210,42 @@ _rr_serve_loop() {
                 ;;
         esac
     done
+}
+
+# _rr_serve_loop_fifo <read_fifo> <write_fifo> <whitelist_str>
+# Same as _rr_serve_loop but takes FIFO paths instead of fd numbers.
+# Used by rr_run to avoid coproc fd-inheritance races.
+_rr_serve_loop_fifo() {
+    local _rfifo=$1 _wfifo=$2 _wl=$3
+    local _req _path _norm _b64
+
+    # Open both ends of both FIFOs before entering the loop so that neither
+    # open(2) blocks indefinitely waiting for the other side.
+    exec {_rr_sl_rfd}<"$_rfifo" {_rr_sl_wfd}>"$_wfifo"
+
+    while IFS= read -r _req <&"$_rr_sl_rfd"; do
+        case "$_req" in
+            GET\ *)
+                _path="${_req#GET }"
+                _norm=$(realpath -m "$_path" 2>/dev/null) || _norm=""
+                if [[ -z "$_norm" ]] || ! _rr_path_allowed "$_norm" "$_wl"; then
+                    printf 'ERR path not in whitelist: %s\n' "$_path" >&"$_rr_sl_wfd"
+                elif [[ ! -r "$_norm" ]]; then
+                    printf 'ERR file not readable: %s\n' "$_norm" >&"$_rr_sl_wfd"
+                else
+                    _b64=$(base64 -w0 < "$_norm")
+                    printf 'OK %s\n' "$_b64" >&"$_rr_sl_wfd"
+                fi
+                ;;
+            RESOLVE\ *)
+                printf 'ERR RESOLVE not yet implemented\n' >&"$_rr_sl_wfd"
+                ;;
+            "")
+                break
+                ;;
+        esac
+    done
+    exec {_rr_sl_rfd}>&- {_rr_sl_wfd}>&-
 }
 
 # ---------------------------------------------------------------------------
@@ -316,7 +350,7 @@ _rr_bootstrap_fragment() {
 exec {_rr_proto_fd}<>/dev/tcp/localhost/$_port || { echo '[rr] ERROR: cannot connect to protocol channel' >&2; exit 1; }
 eval "\$(printf 'source() { _rr_outer_wrapper %d "\$@"; }' "\$_rr_proto_fd")"
 eval "\$(printf 'rr_resolve() { _rr_do_resolve %d "\$@"; }' "\$_rr_proto_fd")"
-[[ -e /dev/tty ]] && exec 0</dev/tty 1>/dev/tty 2>/dev/tty
+{ exec 0</dev/tty 1>/dev/tty 2>/dev/tty; } 2>/dev/null || true
 ${_set_cmds}PS4='[rr:\${BASH_SOURCE[0]:-?}:\$LINENO]+ '
 $_outer_def
 $_inner_def
@@ -465,31 +499,51 @@ rr_run() {
         _ssh_opts+=("${_words[@]}")
     done <<< "$_rr_ssh_opts_str"
 
-    # Start nc coprocess as the local end of the protocol channel
-    # shellcheck disable=SC2034
-    coproc _RR_NC { nc -l -p "$_port" 2>/dev/null; }
+    # Start the protocol server: nc listens on $_port; the serve loop reads
+    # from nc's stdout and writes to nc's stdin via two FIFOs.  Using FIFOs
+    # avoids coproc fd-inheritance races and works reliably across Bash versions.
+    #
+    # SSH -R forwards remote:$_port → local:$_port (127.0.0.1 not localhost, to
+    # avoid resolution issues in some sshd configurations).
+    local _fifo_in _fifo_out
+    _fifo_in=$(mktemp -u) && mkfifo "$_fifo_in"
+    _fifo_out=$(mktemp -u) && mkfifo "$_fifo_out"
 
-    # Start protocol server in the background; close coprocess fds in parent
-    _rr_serve_loop "${_RR_NC[0]}" "${_RR_NC[1]}" "$_rr_whitelist_str" &
+    # Open both FIFOs in read-write mode to avoid open(2) blocking on the
+    # named pipe until the other end is connected.
+    local _fd_in _fd_out
+    exec {_fd_in}<>"$_fifo_in" {_fd_out}<>"$_fifo_out"
+
+    # nc reads from _fifo_in (responses we write) and writes to _fifo_out.
+    # OpenBSD nc: nc -l <port>  (no -p flag for listen port)
+    nc -l "$_port" <&"$_fd_in" >&"$_fd_out" &
+    local _nc_pid=$!
+
+    # Protocol server reads from _fifo_out (remote requests) and writes
+    # responses to _fifo_in; runs in background, exits when nc exits.
+    _rr_serve_loop "$_fd_out" "$_fd_in" "$_rr_whitelist_str" &
     local _srv_pid=$!
-    local _nc_rfd=${_RR_NC[0]} _nc_wfd=${_RR_NC[1]}
-    exec {_nc_rfd}>&- {_nc_wfd}>&-
+
+    # Close the fds in the parent; only nc and _rr_serve_loop need them.
+    exec {_fd_in}>&- {_fd_out}>&-
 
     # Generate bootstrap and base64-encode it for safe injection as SSH command
     local _b64
     _b64=$(_rr_bootstrap_fragment "$_port" "$_flags" "$_pipefail" \
            "$_script" "${_args[@]}" | base64 -w0)
 
-    # Execute on remote; bootstrap is decoded and evaluated by the remote shell
+    # Execute on remote; bootstrap is decoded and evaluated by the remote shell.
+    # Use 127.0.0.1 in -R to avoid 'localhost' ambiguity in sshd GatewayPorts.
     local _rc
-    ssh "$_tty_opt" -R "${_port}:localhost:${_port}" \
+    ssh "$_tty_opt" -R "127.0.0.1:${_port}:127.0.0.1:${_port}" \
         "${_ssh_opts[@]}" "$_host" \
         "printf '%s' '$_b64' | base64 -d | bash --norc --noprofile"
     _rc=$?
 
     # Cleanup
-    kill "$_srv_pid" 2>/dev/null
-    wait "$_srv_pid" 2>/dev/null
+    kill "$_nc_pid" "$_srv_pid" 2>/dev/null
+    wait "$_nc_pid" "$_srv_pid" 2>/dev/null
+    rm -f "$_fifo_in" "$_fifo_out"
     if [[ -n "$_saved_stty" ]]; then
         stty "$_saved_stty" 2>/dev/null
         trap - INT TERM HUP EXIT

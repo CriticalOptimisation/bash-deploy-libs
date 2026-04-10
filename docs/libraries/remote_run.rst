@@ -29,7 +29,8 @@ Dependencies
 +------------------+----------+-------------------------------------------+
 | OpenSSH client   | Local    | ``ssh``, ``-tt``/``-T``, ``-R`` required  |
 +------------------+----------+-------------------------------------------+
-| ``nc``           | Local    | Any variant supporting ``-l -p PORT``     |
+| ``nc``           | Local    | OpenBSD nc (``-l PORT``); other variants  |
+|                  |          | using ``-l -p PORT`` are not supported    |
 +------------------+----------+-------------------------------------------+
 | ``base64``       | Remote   | Standard on all major Linux distributions |
 +------------------+----------+-------------------------------------------+
@@ -40,7 +41,9 @@ installation hint and returns 1.
 Architecture Overview
 ---------------------
 
-Two independent channels are used:
+Two channels are established per ``rr_run`` call.  Each concurrent
+``rr_resolve`` call adds a third channel for the duration of its file
+transfer, then closes it at EOF:
 
 **Protocol channel (TCP via SSH** ``-R``\ **)** — carries the program feed and
 the file-serving protocol.  Each ``rr_run`` call starts a ``nc`` listener on
