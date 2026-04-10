@@ -510,7 +510,8 @@ EOF
 @test "rr_run: missing nc causes early exit with an error message" {
     run bash --noprofile --norc -c "
         source '$LIB'
-        PATH=/dev/null rr_run user@host /dev/null
+        unset -f nc
+        PATH=/dev/null rr_run user@host /tmp/nonexistent_rr_test_$$.sh
     "
     [[ "$status" -ne 0 ]]
     [[ "$output" == *"nc"* ]]
