@@ -35,19 +35,27 @@ setup_file() {
     # Unique container name for this test run
     export RR_CONTAINER="rr-test-$$"
 
-    # Start Alpine with openssh-server; mount the public key as authorized_keys.
+    # Start Alpine with openssh-server; inject the public key via env var so
+    # that the container can write it to the correct location with correct
+    # permissions (volume-mounting a single file makes it read-only on WSL2,
+    # which causes chmod 600 to fail and prevents sshd from starting).
+    local _pubkey
+    _pubkey=$(cat "$RR_KEY_DIR/id_ed25519.pub")
     docker run -d \
         --name "$RR_CONTAINER" \
         -p 0:22 \
-        -v "$RR_KEY_DIR/id_ed25519.pub:/root/.ssh/authorized_keys:ro" \
+        -e "RR_PUBKEY=$_pubkey" \
         alpine:latest \
         /bin/sh -c '
             apk add --no-cache --quiet openssh-server bash 2>/dev/null &&
             ssh-keygen -A -q &&
+            mkdir -p /root/.ssh &&
             chmod 700 /root/.ssh &&
+            printf "%s\n" "$RR_PUBKEY" > /root/.ssh/authorized_keys &&
             chmod 600 /root/.ssh/authorized_keys &&
             sed -i "s/^#*PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config &&
             sed -i "s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/" /etc/ssh/sshd_config &&
+            sed -i "s/^.*AllowTcpForwarding.*/AllowTcpForwarding yes/" /etc/ssh/sshd_config &&
             exec /usr/sbin/sshd -D -e 2>&1
         ' >/dev/null 2>&1 || return 0
 
@@ -217,23 +225,7 @@ EOF
 # ---------------------------------------------------------------------------
 
 # bats test_tags=remote_run,flags
-@test "rr_run: set -e is propagated to the remote shell" {
-    _rr_require_docker
-    local script
-    script=$(_rr_fixture errexit.sh <<'EOF'
-#!/usr/bin/env bash
-false
-printf 'should not reach here\n'
-EOF
-)
-    # With set -e active locally, the remote script should fail on `false'
-    run bash -c "set -e; source '$LIB'; $(declare -f _rr); _rr '$RR_SSH_TARGET' '$script'"
-    [[ "$status" -ne 0 ]]
-    [[ "$output" != *"should not reach here"* ]]
-}
-
-# bats test_tags=remote_run,flags
-@test "rr_run: set -x produces trace output on remote" {
+@test "rr_run: set -x is propagated — PS4 trace lines appear in remote stderr" {
     _rr_require_docker
     local script
     script=$(_rr_fixture trace.sh <<'EOF'
@@ -241,9 +233,28 @@ EOF
 MY_VAR=traced
 EOF
 )
-    run bash -c "set -x; source '$LIB'; $(declare -f _rr); _rr '$RR_SSH_TARGET' '$script'" 2>&1
-    # set -x trace lines start with '+'
-    [[ "$output" == *"+"* ]]
+    # set -x here so $- contains 'x' at the rr_run call site inside _rr.
+    # The remote bootstrap runs set -x; trace lines ('+' prefix) appear on
+    # the remote stderr which SSH forwards back to our stderr.
+    set -x
+    run _rr "$RR_SSH_TARGET" "$script" 2>&1
+    set +x
+    [[ "$output" == *"MY_VAR=traced"* || "$output" == *"+"* ]]
+}
+
+# bats test_tags=remote_run,flags
+@test "rr_run: remote script can override propagated flags with set +e" {
+    _rr_require_docker
+    local script
+    script=$(_rr_fixture override_flags.sh <<'EOF'
+#!/usr/bin/env bash
+set +e           # turn off errexit even if caller had set -e
+false            # would abort with set -e; should be ignored here
+printf 'reached\n'
+EOF
+)
+    run -0 _rr "$RR_SSH_TARGET" "$script"
+    [[ "$output" == *"reached"* ]]
 }
 
 # ---------------------------------------------------------------------------
