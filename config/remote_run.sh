@@ -410,14 +410,7 @@ rr_init() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -s) shift
-                _in_state=$1
-                # Merge the incoming state into our already-local variables.
-                # No extra `local` here: these vars are already declared at
-                # function top; adding a bare `local` again could reset them to
-                # unset in some bash versions before eval can set them.
-                eval "$_in_state"
-                shift ;;
+            -s) shift; _in_state=$1; shift ;;
             -S) shift; _out_var=$1; shift ;;
             --ssh-opt) shift
                 _rr_ssh_opts_str+="${_rr_ssh_opts_str:+$'\n'}$1"
@@ -432,19 +425,13 @@ rr_init() {
         esac
     done
 
-    # When -S is given without -s, read the current value of the -S variable as
-    # the input state and eval it into our local vars (read-modify-write semantics,
-    # symmetric with rr_cleanup).
-    if [[ -n "$_out_var" && -z "$_in_state" ]]; then
-        _in_state="${!_out_var}"
-        [[ -n "$_in_state" ]] && eval "$_in_state"
-    fi
-
+    # hs_persist_state -S <var> already reads the current value of <var> as the
+    # existing state for collision detection, appends our vars, and writes back —
+    # that is the correct read-modify-write path.  We never eval state here:
+    # either the state is empty (no-op) or it already contains our vars
+    # (collision → intentional double-init error from hs_persist_state).
     if [[ -n "$_out_var" ]]; then
-        local _rr_state
-        _rr_state=$(hs_persist_state -s "$_in_state" \
-            _rr_ssh_opts_str _rr_whitelist_str) || return $?
-        printf -v "$_out_var" '%s' "$_rr_state"
+        hs_persist_state -S "$_out_var" _rr_ssh_opts_str _rr_whitelist_str || return $?
     else
         hs_persist_state -s "$_in_state" _rr_ssh_opts_str _rr_whitelist_str
     fi
