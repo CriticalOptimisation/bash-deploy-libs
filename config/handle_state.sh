@@ -209,7 +209,7 @@ hs_persist_state() {
         if [ -n "$__existing_state" ]; then
             # In a time-constrained subshell, declare "$__var_name" as local to capture its value
             # and attempt to restore it from "$__existing_state".
-            timeout --preserve-status -k 2 1 "$0" --noprofile -elc "
+            timeout --preserve-status -k 2 1 "${BASH:-bash}" --noprofile -elc "
                 command_not_found_handle() {
                     echo \"[ERROR] hs_persist_state: command '\$1' not found.\" >&2
                     exit 127
