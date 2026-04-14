@@ -16,54 +16,79 @@ source "${BASH_SOURCE%/*}/command_guard.sh"
 # shellcheck source=config/handle_state.sh
 # shellcheck disable=SC1091
 source "${BASH_SOURCE%/*}/handle_state.sh"
+# handle_state.sh auto-starts the FIFO reader on source; terminate it
+# immediately so rr_init owns the start/stop lifecycle cleanly.
+hs_cleanup_output
 
-guard nc ssh base64 realpath
+guard nc ssh base64 realpath mktemp dirname cat sleep
 
 # ---------------------------------------------------------------------------
-# DESIGN OVERVIEW
+# DESIGN OVERVIEW — per rr_run invocation
 # ---------------------------------------------------------------------------
 #
-# Two SSH channels are established per rr_run call, plus one additional
-# channel per concurrent rr_resolve call (closed at EOF of its transfer):
+# Step 1 — ControlMaster connection
+#   ssh -MNf -S _ctl_sock -o ControlPersist=yes [user-opts] host
+#   Establishes one TCP connection.  ssh -f backgrounds after authentication,
+#   so _ctl_sock is immediately usable when the command returns.  All further
+#   SSH traffic for this rr_run call is multiplexed over this single connection.
 #
-#   Protocol channel (TCP via SSH -R)
-#     A nc listener starts on an ephemeral local port.  SSH forwards that
-#     port on the remote to the local listener.  The remote shell opens the
-#     forwarded port as a bidirectional fd allocated dynamically by Bash
-#     (exec {fd}<>).  All file requests (GET, RESOLVE) and their responses
-#     flow through this fd.
+# Step 2 — Remote port allocation (synchronous, clean stdout)
+#   _port=$(ssh -S _ctl_sock -O forward -R 127.0.0.1:0:_local_sock host)
+#   sshd binds a free TCP port on the remote 127.0.0.1 and forwards connections
+#   to _local_sock (a local Unix-domain socket where nc listens).  The port
+#   number is returned as stdout by ssh -O forward — no stderr grep required.
 #
-#   Interactive channel (PTY via SSH -tt / -T)
-#     Standard SSH pseudo-terminal when the caller has a controlling terminal.
-#     Falls back to -T (no PTY) in CI / cron contexts.
+# Step 3 — Bootstrap delivery and execution
+#   The bootstrap (shell fragment with _port baked in) is written to a local
+#   FIFO; the FIFO kernel buffer holds it until the remote bash drains it.
+#   ssh -T -S _ctl_sock host "bash --norc --noprofile" < _boot_fifo
+#   The remote bash opens /dev/tcp/127.0.0.1/_port as a bidirectional fd,
+#   installs source() and rr_resolve() overrides with the fd number baked in,
+#   and runs the user script.  No file is written to the remote filesystem.
+#
+# Step 4 — Teardown
+#   ssh -S _ctl_sock -O exit host
+#   Closes the ControlMaster (and with it all port forwards and sessions).
+#
+# ---------------------------------------------------------------------------
+# rr_resolve — using the ControlMaster for additional port forwards
+# ---------------------------------------------------------------------------
+#
+# When a relay machine B needs to resolve a file back to A, the serve loop
+# on A receives a RESOLVE request.  A then:
+#   new_sock=$(mktemp -u) && nc -lU new_sock &
+#   new_port=$(ssh -S _ctl_sock -O forward -R 127.0.0.1:0:new_sock host_B)
+#   send RESOLVE_OK new_port on the protocol fd
+# B opens exec {fd}<>/dev/tcp/127.0.0.1/new_port and returns /dev/fd/$fd.
+# Each RESOLVE reuses the existing ControlMaster — no new TCP handshake.
 #
 # ---------------------------------------------------------------------------
 # REMOTE BOOTSTRAP SEQUENCE
 # ---------------------------------------------------------------------------
 #
-# The bootstrap is a shell fragment injected as the SSH remote command (passed
-# as a base64-encoded string to avoid stdin conflicts with the PTY).  It:
+# The bootstrap is a shell fragment written to a local FIFO connected to the
+# remote bash's stdin.  The port is known before the bash session starts, so
+# the FIFO is written and closed before ssh runs the bash command.  The
+# bootstrap:
 #
-#   1. Allocates the protocol fd dynamically:
-#        exec {_rr_proto_fd}<>/dev/tcp/localhost/<forwarded_port>
+#   1. Opens the protocol channel via a single bidirectional fd:
+#        exec {_rr_proto_fd}<>/dev/tcp/127.0.0.1/<N>
+#      where N is the remote TCP port returned by ssh -O forward.
 #
-#   2. Generates and evals the `source' override and `rr_resolve' with the fd
-#      value inscribed literally via printf, so both are immune to later
-#      changes to shell variables:
+#   2. Generates and evals the `source' override and `rr_resolve' with the
+#      fd value inscribed literally, so both are immune to later changes:
 #        eval "$(printf 'source() { _rr_outer_wrapper %d "$@"; }' "$_rr_proto_fd")"
 #        eval "$(printf 'rr_resolve() { _rr_do_resolve %d "$@"; }' "$_rr_proto_fd")"
 #
-#   3. Redirects stdio to /dev/tty when a PTY is present (exec 0</dev/tty …).
-#
-#   4. Propagates shell flags from the rr_run call site:
+#   3. Propagates shell flags from the rr_run call site:
 #        set -<flags_from_caller>
 #      PS4 is set to display source paths when tracing is active.
 #      The remote script may change flags at any time thereafter.
 #
-#   5. Defines _rr_outer_wrapper, _rr_inner_wrapper, _rr_do_resolve
+#   4. Defines _rr_outer_wrapper, _rr_inner_wrapper, _rr_do_resolve
 #      (serialised from this file via declare -f).
 #
-#   6. Calls _rr_outer_wrapper <fd> <script> [args...] to run the user script.
+#   5. Calls _rr_outer_wrapper <fd> <script> [args...] to run the user script.
 #
 # ---------------------------------------------------------------------------
 # DOUBLE WRAPPER
@@ -129,14 +154,23 @@ guard nc ssh base64 realpath
 # On the originating machine (A):
 #   rr_resolve is a no-op; it returns the file path unchanged.
 #
+# NOTE — nested source() does NOT use rr_resolve:
+#   _rr_outer_wrapper fetches each sourced file in a single round-trip on the
+#   already-open protocol fd (GET request → base64 response).  No additional
+#   connection is needed for nested source calls, regardless of depth.
+#   rr_resolve is ONLY needed for the relay scenario (A → B → C).
+#
 # On a relay machine (B, executing a script fetched from A):
 #   rr_resolve sends RESOLVE <path> on the protocol fd back to A.
-#   A allocates a new ephemeral port, starts a dedicated nc listener, and
-#   opens a second SSH -R tunnel to B for that port.  A signals readiness
-#   with RESOLVE_OK <port> only after the tunnel is active (synchronised via
-#   ControlMaster -O forward, which is synchronous).  B allocates a new fd
-#   dynamically (exec {fd}<>) pointing at the new port, and returns /dev/fd/$fd.
-#   The dedicated nc exits naturally at EOF; no file is written to B.
+#   A allocates a new ephemeral local socket, starts a dedicated nc listener,
+#   and adds a new -R tunnel from B to that socket.  Because opening a fresh
+#   SSH connection for every resolved file is prohibitively slow, this tunnel
+#   MUST be opened over an existing ControlMaster connection that rr_run
+#   established when it first SSH'd into B (ssh -o ControlMaster=yes
+#   -o ControlPath=<socket>).  The forward is added with `ssh -O forward',
+#   which is synchronous: A signals RESOLVE_OK <port> only after sshd on B
+#   has bound the port.  B opens exec {fd}<>/dev/tcp/localhost/<port> and
+#   returns /dev/fd/$fd.  The dedicated nc exits at EOF; no file is written.
 #
 # Recursive relay (A → B → C):
 #   B's rr_resolve triggers RESOLVE toward A; A opens a tunnel through B to C.
@@ -145,24 +179,6 @@ guard nc ssh base64 realpath
 # ---------------------------------------------------------------------------
 # INTERNAL HELPERS
 # ---------------------------------------------------------------------------
-
-# _rr_free_port
-# Prints an unused local TCP port number.  Tries python3, ruby, then probing.
-_rr_free_port() {
-    local _p
-    _p=$(python3 -c \
-        'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); \
-         print(s.getsockname()[1]); s.close()' 2>/dev/null) \
-        && printf '%s' "$_p" && return 0
-    _p=$(ruby -rsocket \
-        -e 's=TCPServer.new("127.0.0.1",0);puts s.addr[1];s.close' 2>/dev/null) \
-        && printf '%s' "$_p" && return 0
-    # Fallback: probe random high ports
-    while IFS= read -r _p; do
-        ! (: >/dev/tcp/127.0.0.1/"$_p") 2>/dev/null && { printf '%s' "$_p"; return 0; }
-    done < <(awk 'BEGIN{srand();for(i=0;i<50;i++) printf "%d\n",int(rand()*16000)+49152}')
-    return 1
-}
 
 # _rr_path_allowed <path> <whitelist_str>
 # Returns 0 if <path> falls within any entry in the newline-delimited
@@ -255,8 +271,8 @@ _rr_serve_loop_fifo() {
 # ---------------------------------------------------------------------------
 
 # _rr_outer_wrapper <fd> <path> [args...]
-# Fetches <path> over <fd> via GET, then calls _rr_inner_wrapper with the
-# decoded content and any extra args.
+# Fetches <path> over the bidirectional <fd> via GET, then calls
+# _rr_inner_wrapper with the decoded content and any extra args.
 _rr_outer_wrapper() {
     local _rr_ow_fd=$1 _rr_ow_path=$2
     shift 2
@@ -295,9 +311,10 @@ _rr_inner_wrapper() {
 
 # _rr_do_resolve <fd> <file>
 # Remote-side implementation of rr_resolve.  Sends a RESOLVE request on <fd>
-# and returns /dev/fd/N for the dedicated transfer channel.
-# On the originating machine this function is never called (rr_resolve is a
-# no-op there); it is only injected into the bootstrap for relay machines.
+# and reads the response from <fd>, returning /dev/fd/N for the dedicated
+# transfer channel.  On the originating machine this function is never called
+# (rr_resolve is a no-op there); it is only injected into the bootstrap for
+# relay machines.
 _rr_do_resolve() {
     local _rr_dr_fd=$1 _rr_dr_file=$2
 
@@ -314,7 +331,7 @@ _rr_do_resolve() {
     fi
 
     local _rr_dr_newfd
-    exec {_rr_dr_newfd}<>/dev/tcp/localhost/"$_rr_dr_port"
+    exec {_rr_dr_newfd}<>/dev/tcp/127.0.0.1/"$_rr_dr_port"
     printf '/dev/fd/%d' "$_rr_dr_newfd"
 }
 
@@ -323,8 +340,11 @@ _rr_do_resolve() {
 # ---------------------------------------------------------------------------
 
 # _rr_bootstrap_fragment <port> <flags> <pipefail> <script> [args...]
-# Prints the bootstrap shell fragment to stdout.  The caller base64-encodes
-# it and passes it as the SSH remote command.
+# Prints the bootstrap shell fragment that the remote bash reads from stdin.
+# <port> is the TCP port sshd allocated on the remote loopback via -R 0:sock.
+# The bootstrap opens /dev/tcp/localhost/<port> as a single bidirectional fd,
+# wires up source() and rr_resolve() with the fd number baked in, propagates
+# caller shell flags, and runs the user script.
 _rr_bootstrap_fragment() {
     local _port=$1 _flags=$2 _pipefail=$3 _script=$4
     shift 4
@@ -347,10 +367,9 @@ _rr_bootstrap_fragment() {
     for _a in "$@"; do _qa+=" $(printf '%q' "$_a")"; done
 
     cat <<BOOTSTRAP
-exec {_rr_proto_fd}<>/dev/tcp/localhost/$_port || { echo '[rr] ERROR: cannot connect to protocol channel' >&2; exit 1; }
+exec {_rr_proto_fd}<>/dev/tcp/127.0.0.1/${_port} || { printf '[rr] ERROR: cannot connect to protocol channel\n' >&2; exit 1; }
 eval "\$(printf 'source() { _rr_outer_wrapper %d "\$@"; }' "\$_rr_proto_fd")"
 eval "\$(printf 'rr_resolve() { _rr_do_resolve %d "\$@"; }' "\$_rr_proto_fd")"
-{ exec 0</dev/tty 1>/dev/tty 2>/dev/tty; } 2>/dev/null || true
 ${_set_cmds}PS4='[rr:\${BASH_SOURCE[0]:-?}:\$LINENO]+ '
 $_outer_def
 $_inner_def
@@ -365,11 +384,26 @@ BOOTSTRAP
 
 # rr_init [-s <state>] [-S <var>] [--allow <path>] [--ssh-opt <opt>]
 #
-# Optional.  Captures default SSH options and whitelist entries into a
-# handle_state vector.  Both -s (consume existing state) and -S (write output
-# state into a named variable) are supported.  Calling rr_run without a prior
-# rr_init is valid; built-in defaults are used.
+# Optional.  Appends rr_init's own state (_rr_ssh_opts_str, _rr_whitelist_str)
+# to a shared application state vector managed by hs_persist_state.  Each
+# library in a project appends its own variables to the same shared state;
+# hs_persist_state's collision detection prevents initialising the same library
+# twice on the same state variable (intentional error).
+#
+# -s <state>  Load a state string produced by previous library calls.  eval in
+#             rr_init only touches rr's own local vars (hs_persist_state emits
+#             `if local -p var` guards, so other libraries' variables are
+#             silently skipped).  Used to carry state from other libraries.
+# -S <var>    Append rr_init's vars to the state already in <var> and write
+#             the combined result back.  Do NOT pass the same <var> to -s: that
+#             would make rr_init's own vars appear twice → collision.
+#
+# Correct multi-library accumulation pattern:
+#   other_lib_init -S st [opts]       # st: other_lib's vars
+#   rr_init -s "$st" -S st [opts]     # st: other_lib's vars + rr's vars
+#   rr_run  -s "$st" user@host script.sh
 rr_init() {
+    hs_setup_output_to_stdout  # start FIFO reader; paired with rr_cleanup's hs_cleanup_output
     local _rr_ssh_opts_str="" _rr_whitelist_str=""
     local _out_var="" _in_state=""
 
@@ -377,8 +411,10 @@ rr_init() {
         case "$1" in
             -s) shift
                 _in_state=$1
-                # Restore prior state into our locals
-                local _rr_ssh_opts_str _rr_whitelist_str
+                # Merge the incoming state into our already-local variables.
+                # No extra `local` here: these vars are already declared at
+                # function top; adding a bare `local` again could reset them to
+                # unset in some bash versions before eval can set them.
                 eval "$_in_state"
                 shift ;;
             -S) shift; _out_var=$1; shift ;;
@@ -396,9 +432,12 @@ rr_init() {
     done
 
     if [[ -n "$_out_var" ]]; then
-        hs_persist_state -S "$_out_var" _rr_ssh_opts_str _rr_whitelist_str
+        local _rr_state
+        _rr_state=$(hs_persist_state -s "$_in_state" \
+            _rr_ssh_opts_str _rr_whitelist_str) || return $?
+        printf -v "$_out_var" '%s' "$_rr_state"
     else
-        hs_persist_state _rr_ssh_opts_str _rr_whitelist_str
+        hs_persist_state -s "$_in_state" _rr_ssh_opts_str _rr_whitelist_str
     fi
 }
 
@@ -411,13 +450,12 @@ rr_init() {
 # hosts are supported.
 rr_run() {
     local _rr_ssh_opts_str="" _rr_whitelist_str=""
-    local _out_var="" _saved_stty=""
+    local _out_var=""
 
     # Parse options (merge any incoming state with per-call overrides)
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -s) shift
-                local _rr_ssh_opts_str _rr_whitelist_str
                 eval "$1"
                 shift ;;
             -S) shift; _out_var=$1; shift ;;
@@ -464,26 +502,10 @@ rr_run() {
         _rr_whitelist_str+="${_rr_whitelist_str:+$'\n'}$_sdir"
     fi
 
-    # Find a free local port for the protocol channel
-    local _port
-    _port=$(_rr_free_port) || {
-        echo "[ERROR] rr_run: cannot find a free local port" >&2; return 1
-    }
-
-    # Detect PTY availability
-    local _tty_opt="-T"
-    if [[ -t 0 ]]; then
-        _tty_opt="-tt"
-        _saved_stty=$(stty -g 2>/dev/null) || _saved_stty=""
-        if [[ -n "$_saved_stty" ]]; then
-            # Build trap string with $_saved_stty expanded now (intentional).
-            local _stty_trap
-            printf -v _stty_trap "stty '%s' 2>/dev/null; trap - INT TERM HUP EXIT" \
-                "$_saved_stty"
-            # shellcheck disable=SC2064  # expansion is intentional: $_saved_stty captured above
-            trap "$_stty_trap" INT TERM HUP EXIT
-        fi
-    fi
+    # Local Unix-domain socket for nc (no TCP port needed locally; avoids
+    # TOCTOU races).  mktemp -u generates a unique name without creating a file.
+    local _local_sock
+    _local_sock=$(mktemp -u)
 
     # Capture shell flags to propagate (strip non-settable flags s, c, i)
     local _flags="${-//[sci]/}"
@@ -499,55 +521,92 @@ rr_run() {
         _ssh_opts+=("${_words[@]}")
     done <<< "$_rr_ssh_opts_str"
 
-    # Start the protocol server: nc listens on $_port; the serve loop reads
-    # from nc's stdout and writes to nc's stdin via two FIFOs.  Using FIFOs
-    # avoids coproc fd-inheritance races and works reliably across Bash versions.
-    #
-    # SSH -R forwards remote:$_port → local:$_port (127.0.0.1 not localhost, to
-    # avoid resolution issues in some sshd configurations).
+    # Protocol server: nc listens on a local Unix socket; the serve loop reads
+    # requests from nc's stdout and writes responses to nc's stdin via two FIFOs.
+    # FIFOs avoid coproc fd-inheritance races.  Both are opened O_RDWR so that
+    # neither open(2) blocks waiting for the other side.
     local _fifo_in _fifo_out
     _fifo_in=$(mktemp -u) && mkfifo "$_fifo_in"
     _fifo_out=$(mktemp -u) && mkfifo "$_fifo_out"
 
-    # Open both FIFOs in read-write mode to avoid open(2) blocking on the
-    # named pipe until the other end is connected.
     local _fd_in _fd_out
     exec {_fd_in}<>"$_fifo_in" {_fd_out}<>"$_fifo_out"
 
-    # nc reads from _fifo_in (responses we write) and writes to _fifo_out.
-    # OpenBSD nc: nc -l <port>  (no -p flag for listen port)
-    nc -l "$_port" <&"$_fd_in" >&"$_fd_out" &
+    nc -lU "$_local_sock" <&"$_fd_in" >&"$_fd_out" &
     local _nc_pid=$!
 
-    # Protocol server reads from _fifo_out (remote requests) and writes
-    # responses to _fifo_in; runs in background, exits when nc exits.
     _rr_serve_loop "$_fd_out" "$_fd_in" "$_rr_whitelist_str" &
     local _srv_pid=$!
 
-    # Close the fds in the parent; only nc and _rr_serve_loop need them.
     exec {_fd_in}>&- {_fd_out}>&-
 
-    # Generate bootstrap and base64-encode it for safe injection as SSH command
-    local _b64
-    _b64=$(_rr_bootstrap_fragment "$_port" "$_flags" "$_pipefail" \
-           "$_script" "${_args[@]}" | base64 -w0)
+    # Bootstrap FIFO: remote bash reads the bootstrap script from its stdin.
+    # Open the write end O_RDWR so the open(2) does not block before SSH starts.
+    local _boot_fifo
+    _boot_fifo=$(mktemp -u) && mkfifo "$_boot_fifo"
+    local _boot_wfd
+    exec {_boot_wfd}<>"$_boot_fifo"
 
-    # Execute on remote; bootstrap is decoded and evaluated by the remote shell.
-    # Use 127.0.0.1 in -R to avoid 'localhost' ambiguity in sshd GatewayPorts.
+    # ControlMaster socket for this rr_run invocation.
+    local _ctl_sock
+    _ctl_sock=$(mktemp -u)
+
+    # Step 1: Establish ControlMaster.
+    # ssh -f goes to background after authentication succeeds, so _ctl_sock is
+    # ready immediately on return.  All further SSH traffic is multiplexed here.
+    # Auth-related client messages are suppressed (they go to stderr, not needed).
+    if ! ssh -MNf \
+            -S "$_ctl_sock" \
+            -o ControlPersist=yes \
+            "${_ssh_opts[@]}" "$_host" 2>/dev/null
+    then
+        echo "[ERROR] rr_run: ControlMaster connection to $_host failed" >&2
+        exec {_boot_wfd}>&-
+        kill "$_nc_pid" "$_srv_pid" 2>/dev/null
+        wait "$_nc_pid" "$_srv_pid" 2>/dev/null
+        rm -f "$_fifo_in" "$_fifo_out" "$_local_sock" "$_boot_fifo" "$_ctl_sock"
+        return 1
+    fi
+
+    # Step 2: Allocate a remote TCP port for the protocol channel.
+    # ssh -O forward prints the allocated port to stdout — no grep on stderr.
+    # 127.0.0.1:0 requests any free port bound to the remote loopback only.
+    local _port
+    _port=$(ssh -S "$_ctl_sock" -O forward \
+                -R "127.0.0.1:0:${_local_sock}" \
+                "$_host" 2>/dev/null)
+    if [[ $? -ne 0 || -z "$_port" ]]; then
+        echo "[ERROR] rr_run: -O forward failed (AllowTcpForwarding enabled on remote sshd?)" >&2
+        ssh -S "$_ctl_sock" -O exit "$_host" 2>/dev/null
+        exec {_boot_wfd}>&-
+        kill "$_nc_pid" "$_srv_pid" 2>/dev/null
+        wait "$_nc_pid" "$_srv_pid" 2>/dev/null
+        rm -f "$_fifo_in" "$_fifo_out" "$_local_sock" "$_boot_fifo" "$_ctl_sock"
+        return 1
+    fi
+
+    # Step 3: Write bootstrap (port baked in) to FIFO, then close the write end.
+    # The kernel FIFO buffer holds the data until the remote bash drains it.
+    # Closing _boot_wfd delivers EOF to the remote bash after the bootstrap,
+    # terminating bash's stdin cleanly once the user script has been fetched.
+    _rr_bootstrap_fragment "$_port" "$_flags" "$_pipefail" \
+        "$_script" "${_args[@]}" >&"$_boot_wfd"
+    exec {_boot_wfd}>&-
+
+    # Step 4: Run remote bash via the ControlMaster session (no new TCP handshake).
+    # Remote stderr flows naturally back to our stderr through the mux.
     local _rc
-    ssh "$_tty_opt" -R "127.0.0.1:${_port}:127.0.0.1:${_port}" \
-        "${_ssh_opts[@]}" "$_host" \
-        "printf '%s' '$_b64' | base64 -d | bash --norc --noprofile"
+    ssh -T -S "$_ctl_sock" "$_host" \
+        "bash --norc --noprofile" \
+        < "$_boot_fifo"
     _rc=$?
 
-    # Cleanup
+    # Step 5: Tear down the ControlMaster (closes all port forwards and sessions).
+    ssh -S "$_ctl_sock" -O exit "$_host" 2>/dev/null
+
     kill "$_nc_pid" "$_srv_pid" 2>/dev/null
     wait "$_nc_pid" "$_srv_pid" 2>/dev/null
-    rm -f "$_fifo_in" "$_fifo_out"
-    if [[ -n "$_saved_stty" ]]; then
-        stty "$_saved_stty" 2>/dev/null
-        trap - INT TERM HUP EXIT
-    fi
+    rm -f "$_fifo_in" "$_fifo_out" "$_local_sock" "$_boot_fifo" "$_ctl_sock"
 
     return $_rc
 }
@@ -580,9 +639,48 @@ rr_resolve() {
 
 # rr_cleanup [-s <state>] [-S <var>]
 #
-# No-op in the current implementation.  Reserved for a future ControlMaster
-# mode that would hold a persistent multiplexed SSH connection across multiple
-# rr_run calls.
+# Cleans up resources allocated by this library.  Must be called at the end of
+# any script that sourced remote_run.sh, to terminate the handle_state logging
+# FIFO reader started automatically when the library was sourced.  Omitting
+# this call leaves the background reader running for up to 5 seconds (its idle
+# timeout) before it self-terminates.
+#
+# When ControlMaster relay support is added (issue #58), rr_cleanup will also
+# close the long-lived ControlMaster socket; the call site is already correct.
 rr_cleanup() {
-    :
+    local _in_state="" _out_var=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -s) shift; _in_state=$1; shift ;;
+            -S) shift; _out_var=$1; shift ;;
+            --) shift; break ;;
+            *) echo "[ERROR] rr_cleanup: unknown option '$1'" >&2; return 1 ;;
+        esac
+    done
+
+    # When -S is given without -s, read the current value of the -S variable as
+    # the input state (read-modify-write semantics).
+    if [[ -n "$_out_var" && -z "$_in_state" ]]; then
+        _in_state="${!_out_var}"
+    fi
+
+    # Strip rr-managed variables from the shared state and write back to -S var.
+    # State format (one block per variable, produced by hs_persist_state):
+    #   if local -p VAR >/dev/null 2>&1; then\n  VAR=value\nfi\n
+    # The outer fi has no indentation (col 0); the inner fi has 2 spaces, so
+    # [[ "$_line" == "fi" ]] correctly identifies only the outer block terminator.
+    if [[ -n "$_out_var" && -n "$_in_state" ]]; then
+        local _stripped="" _skip=false _line
+        while IFS= read -r _line || [[ -n "$_line" ]]; do
+            if [[ "$_line" == "if local -p _rr_ssh_opts_str "* || \
+                  "$_line" == "if local -p _rr_whitelist_str "* ]]; then
+                _skip=true
+            fi
+            [[ "$_skip" == false ]] && _stripped+="${_line}"$'\n'
+            [[ "$_skip" == true && "$_line" == "fi" ]] && _skip=false
+        done <<< "$_in_state"
+        printf -v "$_out_var" '%s' "$_stripped"
+    fi
+
+    hs_cleanup_output
 }
