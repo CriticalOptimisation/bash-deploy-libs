@@ -95,6 +95,8 @@ teardown_file() {
 # ---------------------------------------------------------------------------
 # Per-test setup / teardown
 # ---------------------------------------------------------------------------
+# setup() and teardown() perform library load and initialization/termination
+# unless the test name ends with [no setup].
 
 setup() {
     export RR_TMP RR_INIT_STATE=""
@@ -102,16 +104,19 @@ setup() {
     # shellcheck source=config/remote_run.sh
     # shellcheck disable=SC1091
     source "$LIB"
-    rr_init -S RR_INIT_STATE
-    export RR_INIT_STATE
+    if [[ "$BATS_TEST_NAME" != *"-5bno-2dsetup-5d"* ]]; then
+        rr_init -S RR_INIT_STATE
+    fi
 }
 
 teardown() {
+    if [[ "$BATS_TEST_NAME" != *"-5bno-2dsetup-5d"* ]]; then
+        rr_cleanup -S RR_INIT_STATE
+    fi
     if [[ -z "${RR_TMP:-}" ]]; then
         echo "teardown: RR_TMP is empty — setup() may have failed (mktemp -d?)" >&2
         return 1
     fi
-    rr_cleanup -S RR_INIT_STATE
     rm -rf "$RR_TMP"
 }
 
@@ -182,24 +187,27 @@ _rr_fixture() {
 }
 
 # bats test_tags=remote_run,local
-@test "rr_init: can be called without arguments" {
+@test "rr_init: can be called without arguments [no-setup]" {
     run rr_init
     [[ "$status" -eq 0 ]]
 }
 
 # bats test_tags=remote_run,local
-@test "rr_init: -S writes state into named variable" {
+@test "rr_init: -S writes state into named variable [no-setup]" {
     run rr_init -S rr_test_state
     [[ "$status" -eq 0 ]]
 }
 
 # bats test_tags=remote_run,local
-@test "rr_init: -s with -S preserves incoming state and appends rr state" {
+@test "rr_init: -S reads existing state from var and appends rr state [no-setup]" {
     _rr_init_state_accumulates() {
-        local incoming_state combined_state=""
-        printf -v incoming_state 'if local -p other_lib_var >/dev/null 2>&1; then\n  other_lib_var=%q\nfi\n' "kept"
+        # Pre-load another library's state into the variable, then let rr_init
+        # read it via -S (read-modify-write).  hs_persist_state -S already reads
+        # the current value of the variable, so no -s is needed or allowed here.
+        local combined_state=""
+        printf -v combined_state 'if local -p other_lib_var >/dev/null 2>&1; then\n  other_lib_var=%q\nfi\n' "kept"
 
-        rr_init -s "$incoming_state" -S combined_state --ssh-opt "-i ~/.ssh/test_key" || return 1
+        rr_init -S combined_state --ssh-opt "-i ~/.ssh/test_key" || return 1
 
         local _rr_ssh_opts_str="" _rr_whitelist_str="" other_lib_var=""
         eval "$combined_state"
@@ -212,13 +220,13 @@ _rr_fixture() {
 }
 
 # bats test_tags=remote_run,local
-@test "rr_cleanup: is a no-op" {
+@test "rr_cleanup: is a no-op [no-setup]" {
     run rr_cleanup
     [[ "$status" -eq 0 ]]
 }
 
 # bats test_tags=remote_run,local
-@test "rr_cleanup: -S strips rr vars from state (read-modify-write)" {
+@test "rr_cleanup: -S strips rr vars from state (read-modify-write) [no-setup]" {
     # Simulate multi-library state accumulation: another library persists
     # other_lib_var first, then rr_init appends its own vars.  After
     # rr_cleanup -S combined_state, the rr vars must be gone but other_lib_var
@@ -241,6 +249,12 @@ _rr_fixture() {
 # ---------------------------------------------------------------------------
 # 1. Basic execution
 # ---------------------------------------------------------------------------
+
+# bats test_tags=sshd,basic
+@test "fixture: test the docker ssh server [no-setup]" {
+    _rr_require_docker
+    run -0 true
+} 
 
 # bats test_tags=remote_run,basic
 @test "rr_run: simple script executes and exits 0" {
