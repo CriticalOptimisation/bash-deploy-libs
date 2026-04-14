@@ -14,6 +14,7 @@
 
 setup_file() {
     bats_require_minimum_version 1.5.0
+    export BATS_TEST_TIMEOUT=30
 
     export LIB="$BATS_TEST_DIRNAME/../config/remote_run.sh"
     if [[ ! -f "$LIB" ]]; then
@@ -32,8 +33,13 @@ setup_file() {
     mkdir -p "$RR_KEY_DIR"
     ssh-keygen -t ed25519 -f "$RR_KEY_DIR/id_ed25519" -N "" -q || return 0
 
-    # Unique container name for this test run
+    # Unique names for this test run
     export RR_CONTAINER="rr-test-$$"
+    export RR_NETWORK="rr-test-$$"
+
+    # Isolated Docker network so the container gets its own IP and SSH is
+    # reachable on port 22 directly — no host-port mapping needed.
+    docker network create "$RR_NETWORK" >/dev/null 2>&1 || return 0
 
     # Start Alpine with openssh-server; inject the public key via env var so
     # that the container can write it to the correct location with correct
@@ -43,7 +49,7 @@ setup_file() {
     _pubkey=$(cat "$RR_KEY_DIR/id_ed25519.pub")
     docker run -d \
         --name "$RR_CONTAINER" \
-        -p 0:22 \
+        --network "$RR_NETWORK" \
         -e "RR_PUBKEY=$_pubkey" \
         alpine:latest \
         /bin/sh -c '
@@ -57,45 +63,33 @@ setup_file() {
             sed -i "s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/" /etc/ssh/sshd_config &&
             sed -i "s/^.*AllowTcpForwarding.*/AllowTcpForwarding yes/" /etc/ssh/sshd_config &&
             exec /usr/sbin/sshd -D -e 2>&1
-        ' >/dev/null 2>&1 || return 0
+        ' >/dev/null 2>&1 || { docker network rm "$RR_NETWORK" >/dev/null 2>&1; return 0; }
 
-    # Resolve the host port assigned to container port 22
-    local port attempts=30
+    # Resolve container IP on the dedicated network (no host-port translation).
+    local _ip attempts=10
     while [[ $attempts -gt 0 ]]; do
-        port=$(docker port "$RR_CONTAINER" 22/tcp 2>/dev/null | head -1 | sed 's/.*://')
-        [[ -n "$port" ]] && break
+        _ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+              "$RR_CONTAINER" 2>/dev/null)
+        [[ -n "$_ip" ]] && break
         sleep 1
         (( attempts-- ))
     done
-    if [[ -z "${port:-}" ]]; then
-        docker rm -f "$RR_CONTAINER" >/dev/null 2>&1; return 0
-    fi
-    export RR_SSH_PORT="$port"
-
-    # Wait for sshd to accept connections (max 30 s)
-    attempts=30
-    while [[ $attempts -gt 0 ]]; do
-        ssh -o BatchMode=yes \
-            -o ConnectTimeout=2 \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -i "$RR_KEY_DIR/id_ed25519" \
-            -p "$RR_SSH_PORT" \
-            root@127.0.0.1 true 2>/dev/null && break
-        sleep 1
-        (( attempts-- ))
-    done
-    if [[ $attempts -eq 0 ]]; then
-        docker logs "$RR_CONTAINER" >&2 2>/dev/null
-        docker rm -f "$RR_CONTAINER" >/dev/null 2>&1; return 0
+    if [[ -z "${_ip:-}" ]]; then
+        docker rm -f "$RR_CONTAINER" >/dev/null 2>&1
+        docker network rm "$RR_NETWORK" >/dev/null 2>&1
+        return 0
     fi
 
-    export RR_SSH_TARGET="root@127.0.0.1"
-    export RR_DOCKER_AVAILABLE=1
+    # SSH readiness check is deferred to _rr_require_docker so that local-only
+    # test runs (e.g. a single test in the VS Code test explorer) are not blocked
+    # by the container boot time.
+    export RR_CONTAINER_IP="$_ip"
+    export RR_CONTAINER_STARTED=1
 }
 
 teardown_file() {
     docker rm -f "${RR_CONTAINER:-}" >/dev/null 2>&1 || true
+    docker network rm "${RR_NETWORK:-}" >/dev/null 2>&1 || true
 }
 
 # ---------------------------------------------------------------------------
@@ -103,15 +97,22 @@ teardown_file() {
 # ---------------------------------------------------------------------------
 
 setup() {
-    export RR_TMP
+    export RR_TMP RR_INIT_STATE=""
     RR_TMP=$(mktemp -d)
     # shellcheck source=config/remote_run.sh
     # shellcheck disable=SC1091
     source "$LIB"
+    rr_init -S RR_INIT_STATE
+    export RR_INIT_STATE
 }
 
 teardown() {
-    rm -rf "${RR_TMP:-}"
+    if [[ -z "${RR_TMP:-}" ]]; then
+        echo "teardown: RR_TMP is empty — setup() may have failed (mktemp -d?)" >&2
+        return 1
+    fi
+    rr_cleanup -S RR_INIT_STATE
+    rm -rf "$RR_TMP"
 }
 
 # ---------------------------------------------------------------------------
@@ -119,16 +120,38 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 # Skip when the Docker SSH container is not available.
+# Also owns the SSH readiness wait (deferred from setup_file) so that local
+# tests are never blocked by container boot time.  A flag file prevents
+# re-waiting on subsequent Docker tests within the same run.
 _rr_require_docker() {
-    if [[ "${RR_DOCKER_AVAILABLE:-0}" != 1 ]]; then
+    if [[ "${RR_CONTAINER_STARTED:-0}" != 1 ]]; then
         skip "Docker SSH container not available"
     fi
+    local _flag="$BATS_FILE_TMPDIR/ssh_ready"
+    if [[ ! -f "$_flag" ]]; then
+        local attempts=20
+        while [[ $attempts -gt 0 ]]; do
+            ssh -o BatchMode=yes \
+                -o ConnectTimeout=2 \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                -i "$RR_KEY_DIR/id_ed25519" \
+                root@"$RR_CONTAINER_IP" true 2>/dev/null \
+                && { touch "$_flag"; break; }
+            sleep 1
+            (( attempts-- ))
+        done
+        if [[ ! -f "$_flag" ]]; then
+            docker logs "$RR_CONTAINER" >&2 2>/dev/null
+            skip "SSH not ready in time"
+        fi
+    fi
+    RR_SSH_TARGET="root@$RR_CONTAINER_IP"
 }
 
 # Invoke rr_run with the test container's SSH options pre-filled.
 _rr() {
     rr_run \
-        --ssh-opt "-p ${RR_SSH_PORT}" \
         --ssh-opt "-i ${RR_KEY_DIR}/id_ed25519" \
         --ssh-opt "-o StrictHostKeyChecking=no" \
         --ssh-opt "-o UserKnownHostsFile=/dev/null" \
@@ -171,9 +194,48 @@ _rr_fixture() {
 }
 
 # bats test_tags=remote_run,local
+@test "rr_init: -s with -S preserves incoming state and appends rr state" {
+    _rr_init_state_accumulates() {
+        local incoming_state combined_state=""
+        printf -v incoming_state 'if local -p other_lib_var >/dev/null 2>&1; then\n  other_lib_var=%q\nfi\n' "kept"
+
+        rr_init -s "$incoming_state" -S combined_state --ssh-opt "-i ~/.ssh/test_key" || return 1
+
+        local _rr_ssh_opts_str="" _rr_whitelist_str="" other_lib_var=""
+        eval "$combined_state"
+
+        [[ "$other_lib_var" == "kept" ]]
+        [[ "$_rr_ssh_opts_str" == "-i ~/.ssh/test_key" ]]
+    }
+
+    run -0 _rr_init_state_accumulates
+}
+
+# bats test_tags=remote_run,local
 @test "rr_cleanup: is a no-op" {
     run rr_cleanup
     [[ "$status" -eq 0 ]]
+}
+
+# bats test_tags=remote_run,local
+@test "rr_cleanup: -S strips rr vars from state (read-modify-write)" {
+    # Simulate multi-library state accumulation: another library persists
+    # other_lib_var first, then rr_init appends its own vars.  After
+    # rr_cleanup -S combined_state, the rr vars must be gone but other_lib_var
+    # must survive.
+    #
+    # Use a simplified state format (no inner overwrite-check block, no double
+    # quotes) so the hs_persist_state collision-check subshell can safely embed
+    # it in a double-quoted -c string.
+    local combined_state=""
+    printf -v combined_state 'if local -p other_lib_var >/dev/null 2>&1; then\n  other_lib_var=%q\nfi\n' "kept"
+    rr_init -s "$combined_state" -S combined_state --ssh-opt "-i ~/.ssh/test_key"
+    rr_cleanup -S combined_state
+
+    # rr vars must be gone; other_lib_var block must remain
+    [[ "$combined_state" != *"_rr_ssh_opts_str"* ]]
+    [[ "$combined_state" != *"_rr_whitelist_str"* ]]
+    [[ "$combined_state" == *"other_lib_var"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -265,15 +327,17 @@ EOF
 @test "rr_run: source fetches a local file and sets variables" {
     _rr_require_docker
 
-    _rr_fixture mylib.sh <<'EOF' > /dev/null
+    local mylib
+    mylib=$(_rr_fixture mylib.sh <<'EOF'
 MY_VAR="sourced_value"
 EOF
+)
 
     local script
-    # $RR_TMP must expand here; $MY_VAR must remain literal in the script.
+    # $mylib must expand here; $MY_VAR must remain literal in the script.
     script=$(_rr_fixture use_lib.sh <<EOF
 #!/usr/bin/env bash
-source $RR_TMP/mylib.sh
+source $mylib
 printf '%s\n' "\$MY_VAR"
 EOF
 )
@@ -285,15 +349,17 @@ EOF
 @test "rr_run: source makes variables visible in calling scope" {
     _rr_require_docker
 
-    _rr_fixture vars.sh <<'EOF' > /dev/null
+    local vars
+    vars=$(_rr_fixture vars.sh <<'EOF'
 REMOTE_VAR="visible"
 ANOTHER="also_visible"
 EOF
+)
 
     local script
     script=$(_rr_fixture check_vars.sh <<EOF
 #!/usr/bin/env bash
-source $RR_TMP/vars.sh
+source $vars
 [[ "\$REMOTE_VAR" == "visible"      ]] || exit 1
 [[ "\$ANOTHER"    == "also_visible" ]] || exit 2
 EOF
@@ -305,14 +371,16 @@ EOF
 @test "rr_run: source makes functions available globally" {
     _rr_require_docker
 
-    _rr_fixture funcs.sh <<'EOF' > /dev/null
+    local funcs
+    funcs=$(_rr_fixture funcs.sh <<'EOF'
 greet() { printf 'Hello, %s!\n' "$1"; }
 EOF
+)
 
     local script
     script=$(_rr_fixture use_funcs.sh <<EOF
 #!/usr/bin/env bash
-source $RR_TMP/funcs.sh
+source $funcs
 greet "world"
 EOF
 )
@@ -328,16 +396,18 @@ EOF
 @test "rr_run: source passes positional args to the sourced file" {
     _rr_require_docker
 
-    _rr_fixture print_args.sh <<'EOF' > /dev/null
+    local print_args
+    print_args=$(_rr_fixture print_args.sh <<'EOF'
 printf 'argc=%d\n' "$#"
 printf 'arg1=%s\n' "$1"
 printf 'arg2=%s\n' "$2"
 EOF
+)
 
     local script
     script=$(_rr_fixture pass_args.sh <<EOF
 #!/usr/bin/env bash
-source $RR_TMP/print_args.sh foo bar
+source $print_args foo bar
 EOF
 )
     run -0 _rr "$RR_SSH_TARGET" "$script"
@@ -350,15 +420,17 @@ EOF
 @test "rr_run: shift inside sourced file works" {
     _rr_require_docker
 
-    _rr_fixture do_shift.sh <<'EOF' > /dev/null
+    local do_shift
+    do_shift=$(_rr_fixture do_shift.sh <<'EOF'
 shift
 printf 'after_shift=%s\n' "$1"
 EOF
+)
 
     local script
     script=$(_rr_fixture shift_test.sh <<EOF
 #!/usr/bin/env bash
-source $RR_TMP/do_shift.sh first second
+source $do_shift first second
 EOF
 )
     run -0 _rr "$RR_SSH_TARGET" "$script"
@@ -369,16 +441,18 @@ EOF
 @test "rr_run: return in sourced file stops it and resumes caller" {
     _rr_require_docker
 
-    _rr_fixture early_return.sh <<'EOF' > /dev/null
+    local early_return
+    early_return=$(_rr_fixture early_return.sh <<'EOF'
 printf 'before_return\n'
 return 0
 printf 'after_return\n'
 EOF
+)
 
     local script
     script=$(_rr_fixture check_return.sh <<EOF
 #!/usr/bin/env bash
-source $RR_TMP/early_return.sh
+source $early_return
 printf 'after_source\n'
 EOF
 )
@@ -392,14 +466,16 @@ EOF
 @test "rr_run: return N is the exit code of source" {
     _rr_require_docker
 
-    _rr_fixture return_code.sh <<'EOF' > /dev/null
+    local return_code
+    return_code=$(_rr_fixture return_code.sh <<'EOF'
 return 7
 EOF
+)
 
     local script
     script=$(_rr_fixture check_rc.sh <<EOF
 #!/usr/bin/env bash
-source $RR_TMP/return_code.sh
+source $return_code
 printf 'rc=%d\n' "\$?"
 EOF
 )
@@ -416,16 +492,18 @@ EOF
     # parsed first — this test documents the known divergence if it exists.
     _rr_require_docker
 
-    _rr_fixture return_then_bad.sh <<'EOF' > /dev/null
+    local return_then_bad
+    return_then_bad=$(_rr_fixture return_then_bad.sh <<'EOF'
 printf 'reached\n'
 return 0
 this is not valid syntax )(
 EOF
+)
 
     local script
     script=$(_rr_fixture check_syntax.sh <<EOF
 #!/usr/bin/env bash
-source $RR_TMP/return_then_bad.sh || true
+source $return_then_bad || true
 printf 'after_source\n'
 EOF
 )
@@ -443,20 +521,24 @@ EOF
 @test "rr_run: nested source (A sources B) works" {
     _rr_require_docker
 
-    _rr_fixture base.sh <<'EOF' > /dev/null
+    local base
+    base=$(_rr_fixture base.sh <<'EOF'
 BASE_LOADED=1
 base_func() { printf 'base_func_called\n'; }
 EOF
+)
 
-    _rr_fixture mid.sh <<EOF > /dev/null
-source $RR_TMP/base.sh
+    local mid
+    mid=$(_rr_fixture mid.sh <<EOF
+source $base
 MID_LOADED=1
 EOF
+)
 
     local script
     script=$(_rr_fixture top.sh <<EOF
 #!/usr/bin/env bash
-source $RR_TMP/mid.sh
+source $mid
 [[ "\$BASE_LOADED" == 1 ]] || { printf 'BASE_LOADED not set\n' >&2; exit 1; }
 [[ "\$MID_LOADED"  == 1 ]] || { printf 'MID_LOADED not set\n'  >&2; exit 2; }
 base_func
