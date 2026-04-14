@@ -394,14 +394,15 @@ BOOTSTRAP
 #             rr_init only touches rr's own local vars (hs_persist_state emits
 #             `if local -p var` guards, so other libraries' variables are
 #             silently skipped).  Used to carry state from other libraries.
-# -S <var>    Append rr_init's vars to the state already in <var> and write
-#             the combined result back.  Do NOT pass the same <var> to -s: that
-#             would make rr_init's own vars appear twice → collision.
+# -S <var>    Read-modify-write: read the current value of <var> as the input
+#             state (if -s is not also given), append rr_init's vars, and write
+#             the combined result back.  Do NOT pass the same <var> to both -s
+#             and -S: that would make rr_init's own vars appear twice → collision.
 #
 # Correct multi-library accumulation pattern:
-#   other_lib_init -S st [opts]       # st: other_lib's vars
-#   rr_init -s "$st" -S st [opts]     # st: other_lib's vars + rr's vars
-#   rr_run  -s "$st" user@host script.sh
+#   other_lib_init -S st [opts]   # st: other_lib's vars
+#   rr_init        -S st [opts]   # st: other_lib's vars + rr's vars (reads st first)
+#   rr_run         -s "$st" user@host script.sh
 rr_init() {
     hs_setup_output_to_stdout  # start FIFO reader; paired with rr_cleanup's hs_cleanup_output
     local _rr_ssh_opts_str="" _rr_whitelist_str=""
@@ -430,6 +431,14 @@ rr_init() {
             *) echo "[ERROR] rr_init: unknown option '$1'" >&2; return 1 ;;
         esac
     done
+
+    # When -S is given without -s, read the current value of the -S variable as
+    # the input state and eval it into our local vars (read-modify-write semantics,
+    # symmetric with rr_cleanup).
+    if [[ -n "$_out_var" && -z "$_in_state" ]]; then
+        _in_state="${!_out_var}"
+        [[ -n "$_in_state" ]] && eval "$_in_state"
+    fi
 
     if [[ -n "$_out_var" ]]; then
         local _rr_state

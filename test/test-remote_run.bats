@@ -229,7 +229,7 @@ _rr_fixture() {
     # it in a double-quoted -c string.
     local combined_state=""
     printf -v combined_state 'if local -p other_lib_var >/dev/null 2>&1; then\n  other_lib_var=%q\nfi\n' "kept"
-    rr_init -s "$combined_state" -S combined_state --ssh-opt "-i ~/.ssh/test_key"
+    rr_init -S combined_state --ssh-opt "-i ~/.ssh/test_key"
     rr_cleanup -S combined_state
 
     # rr vars must be gone; other_lib_var block must remain
