@@ -478,3 +478,19 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [[ "$stderr" =~ "prior state is corrupted" ]]
   [ -z "$output" ]
 }
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state -s works when called via bats run on a shell function" {
+  # Regression test for issue #59: hs_persist_state used $0 to re-invoke the
+  # shell for collision checking, but $0 is the Bats runner (not bash) when a
+  # function is invoked via 'bats run'.  The fix uses ${BASH:-bash} instead.
+  # Also verifies that the collision-check subshell does not leak 'a' globally.
+  state_accumulates() {
+    local incoming_state="local a=kept"
+    hs_persist_state -s "$incoming_state" b >/dev/null
+  }
+  run -0 --separate-stderr state_accumulates
+  [ -z "$stderr" ]
+  # a must not have leaked into the current scope from the collision-check subshell
+  [ -z "${a+set}" ]
+}
