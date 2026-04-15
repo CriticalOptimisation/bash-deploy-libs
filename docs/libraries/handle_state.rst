@@ -152,16 +152,72 @@ The alternate solution is to keep and eval separate state snippets for each libr
 .. warning::
   The function cannot currently properly capture arrays, namerefs, associative arrays nor
   functions. Only scalar string variables are supported.
+
+hs_destroy_state
+~~~~~~~~~~~~~~~~
+
+Rebuilds a persisted state snippet while removing specific variable
+definitions from it. This is intended for cleanup paths that need to strip a
+library's own variables from a shared state vector so the same init function
+can later be called again without triggering name-collision errors in
+``hs_persist_state``.
+
+The function accepts optional ``-s`` or ``-S`` arguments:
+
+- ``-s <state>``: treats ``<state>`` as the input state snippet and prints the
+  rebuilt state to stdout.
+- ``-S <var>``: reads the input state from variable ``<var>``, removes the
+  listed variables, and writes the rebuilt state back into ``<var>``.
+
+The arguments after the options are the variable names to destroy. Each name
+must be a valid shell variable name and must already exist in the input state.
+
+- Usage: ``hs_destroy_state [-s <state> | -S <var>] var1 var2 ...``
+- Output: a rebuilt Bash state snippet with the requested variables removed
+  (when not assigning to a variable via ``-S``).
+- Errors:
+  - Detects an invalid variable name passed either to ``-S`` or in the destroy list.
+  - Fails if a requested variable is not defined in the input state.
+  - Detects corrupt prior state when the input cannot be interpreted as a
+    state snippet emitted by ``hs_persist_state``.
+- Guarantees:
+  - Rebuilds the resulting state from the surviving variables rather than
+    mutating the original text blocks in place.
+
+This is the typical pattern:
+
+.. code-block:: bash
+
+   init_function() {
+       local temp_file="/tmp/some_temp_file"
+       local resource_id="resource_123"
+       hs_persist_state -S state temp_file resource_id
+   }
+
+   cleanup_function() {
+       local temp_file resource_id
+       eval "$state"
+       rm -f "$temp_file"
+       hs_destroy_state -S state temp_file resource_id
+   }
+
+After ``cleanup_function`` has removed its own variables from ``state``, a
+later call to ``init_function`` can reuse the same state variable without
+colliding with stale entries from the previous cycle.
+
 hs_read_persisted_state
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-This function is a simple wrapper around `echo`. There is no way in Bash to
-set variables in the caller scope without `eval`ing code, so this function
-is only provided for symmetry with `hs_persist_state`. Its output must be
-`eval`'d by the caller to restore state anyway and the effect is identical to
-`eval "$state"`. Code readability is slightly improved by using this function.
+This function is a simple wrapper around `echo`. `hs_read_persisted_state`
+accepts the name of the variable holding the persisted state and reads it via a
+nameref. It currently requires eval because the persisted state is stored as a Bash code
+snippet. This is a property of the chosen format, not a fundamental limitation
+of Bash for restoring values into already-declared caller-local variables.
+The output must be `eval`'d by the caller to restore state anyway and the
+effect is identical to `eval "$state"`. Code readability is slightly improved
+by using this function, and code is future proven against format changes.
 
-- Usage: `eval "$(hs_read_persisted_state "$state")"`
+- Usage: `eval "$(hs_read_persisted_state state)"`
 
 hs_get_pid_of_subshell
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -198,6 +254,15 @@ State Persistence
 in a guarded assignment snippet, and prints that snippet. The guards ensure that
 only `local` variables are populated in the receiving scope and that non-empty
 locals are not overwritten.
+
+State Destruction
+~~~~~~~~~~~~~~~~~
+
+`hs_destroy_state` scans a persisted state snippet for the variable headers
+emitted by `hs_persist_state`, computes the survivor list, then rebuilds the
+state from those survivors. This keeps the removal logic centralized in
+`handle_state.sh` and gives libraries a way to reuse a shared state variable
+across several init/cleanup cycles.
 
 Supported Variables
 -------------------
@@ -237,8 +302,9 @@ Workarounds
   encoded=$(printf '%s\0' "${myarray[@]}" | base64 -w0)
   hs_persist_state encoded
   # In the cleanup function
+  local state="$1"
   local encoded
-  eval "$(hs_read_persisted_state "$1")"
+  eval "$(hs_read_persisted_state state)"
   declare -a newarray
   mapfile -d '' -t newarray < <(printf '%s' "$encoded" | base64 -d)
 Caveats

@@ -17,8 +17,8 @@ setup_file() {
   source "$LIB"  # run hs_setup_output_to_stdout
   hs_cleanup_output  # ensure clean state at start
   export -f hs_setup_output_to_stdout hs_cleanup_output hs_get_pid_of_subshell\
-            hs_persist_state hs_read_persisted_state hs_echo
-  export HS_ERR_RESERVED_VAR_NAME HS_ERR_VAR_NAME_COLLISION 
+            _hs_resolve_state_inputs hs_persist_state hs_destroy_state hs_read_persisted_state hs_echo
+  export HS_ERR_RESERVED_VAR_NAME HS_ERR_VAR_NAME_COLLISION HS_ERR_VAR_NAME_NOT_IN_STATE
   export HS_ERR_MULTIPLE_STATE_INPUTS HS_ERR_CORRUPT_STATE HS_ERR_INVALID_VAR_NAME
   # Accelerate test failure
   export BATS_TEST_TIMEOUT=2
@@ -156,7 +156,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc ' 
   init(){ local foo=secret; local bar=v2; local baz=new; hs_persist_state foo bar baz; }; 
-  cleanup(){ local foo bar baz; eval "$(hs_read_persisted_state "$1")"; printf "%s:%s:%s" "$foo" "$bar" "$baz"; }; 
+  cleanup(){ local state="$1"; local foo bar baz; eval "$(hs_read_persisted_state state)"; printf "%s:%s:%s" "$foo" "$bar" "$baz"; }; 
   set -x
   state=$(init) 
   cleanup "$state"'
@@ -493,4 +493,92 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$stderr" ]
   # a must not have leaked into the current scope from the collision-check subshell
   [ -z "${a+set}" ]
+}
+
+# bats test_tags=hs_destroy_state
+@test "hs_destroy_state with -s removes the listed variables and prints the rebuilt state" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    source "$LIB" 2>/dev/null
+    hs_cleanup_output
+    init() {
+      local foo=one bar=two baz=three
+      hs_persist_state foo bar baz
+    }
+    cleanup() {
+      local foo="" bar="" baz=""
+      eval "$1"
+      printf "%s:%s:%s" "${foo:-}" "${bar:-}" "${baz:-}"
+    }
+    state=$(init)
+    stripped=$(hs_destroy_state -s "$state" foo baz)
+    cleanup "$stripped"
+  '
+  [[ "$output" == *":two:"* ]]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_destroy_state
+@test "hs_destroy_state with -S rewrites the named variable in place" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    source "$LIB" 2>/dev/null
+    hs_cleanup_output
+    init() {
+      local foo=one bar=two
+      hs_persist_state -S state foo bar
+    }
+    cleanup() {
+      local foo="" bar=""
+      eval "$state"
+      printf "%s:%s" "${foo:-}" "${bar:-}"
+    }
+    init
+    hs_destroy_state -S state foo
+    cleanup
+  '
+  [[ "$output" == *":two"* ]]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_destroy_state
+@test "hs_destroy_state rejects invalid destroy variable names" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr bash --noprofile -lc '
+    source "$LIB" 2>/dev/null
+    hs_cleanup_output
+    state=$(make_state foo one)
+    hs_destroy_state -s "$state" "1invalid-var-name" >/dev/null
+  '
+  [[ "$stderr" == *"invalid variable name '1invalid-var-name'"* ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_destroy_state
+@test "hs_destroy_state fails when asked to remove a variable not present in the state" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_VAR_NAME_NOT_IN_STATE" --separate-stderr bash --noprofile -lc '
+    source "$LIB" 2>/dev/null
+    hs_cleanup_output
+    init() {
+      local foo=one
+      hs_persist_state foo
+    }
+    state=$(init)
+    hs_destroy_state -s "$state" missing >/dev/null
+  '
+  [[ "$stderr" == *"variable 'missing' is not defined in the state"* ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_destroy_state
+@test "hs_destroy_state detects corrupt prior state" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_CORRUPT_STATE" --separate-stderr bash --noprofile -lc '
+    source "$LIB" 2>/dev/null
+    hs_cleanup_output
+    hs_destroy_state -s "$(corrupt_state error)" foo >/dev/null
+  '
+  [[ "$stderr" == *"prior state is corrupted"* ]]
+  [ -z "$output" ]
 }

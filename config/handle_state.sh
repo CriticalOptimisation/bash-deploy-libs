@@ -469,21 +469,23 @@ hs_destroy_state() {
 # Function: 
 #   hs_read_persisted_state
 # Description: 
-#   Emits the state string produced by `hs_persist_state` without
-#   evaluating it. This avoids executing the state inside this function's scope
-#   (which would prevent assignments to `local` variables declared in the
-#   calling function). Callers should `eval "$(hs_read_persisted_state "$state")"`
+#   Emits the state string produced by `hs_persist_state` without evaluating it.
+#   The state is passed by variable name and accessed via a nameref, so callers
+#   do not pass the snippet by value. This function still only returns the
+#   stored code snippet; callers should `eval "$(hs_read_persisted_state state)"`
 #   or simply `eval "$state"` to recreate variables in the caller scope.
 #   Can be called several times to extract distinct variables.
-#   "$state" is a bash code snippet that assigns values to existing local and empty
-#   variables in the current scope.
+#   The referenced state variable contains a bash code snippet that assigns
+#   values to existing local and empty variables in the current scope.
 # Arguments:
-#   $1 - state string produced by `hs_persist_state`
+#   $1 - name of the variable holding the state string produced by `hs_persist_state`
 # Usage examples:
 #   # direct eval
 #   cleanup() {
+#       local state_var="$1"
+#       local -n state_ref="$state_var"
 #       local temp_file resource_id
-#       eval "$1"
+#       eval "$state_ref"
 #       # vars are available here
 #   }
 #
@@ -491,10 +493,10 @@ hs_destroy_state() {
 #   cleanup() {
 #       local state="$1"
 #       local temp_file resource_id
-#       eval "$(hs_read_persisted_state \"$state\")"
+#       eval "$(hs_read_persisted_state state)"
 #   }
 hs_read_persisted_state() {
-    local state_string="$1"
+    local -n state_string="$1"
     printf '%s' "$state_string"
 }
 
