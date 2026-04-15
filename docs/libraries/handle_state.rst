@@ -12,10 +12,9 @@ Purpose
 This library provides two core capabilities for Bash libraries:
 
 - Persisting local variable state from one function to another (typically
-  initialization to cleanup) via a generated snippet that can be `eval`'d.
-- As its state persistence functions output code on stdout, the library allows
-  provides the means to display messages to stdout from within initialization 
-  functions using a logging FIFO and background reader process.
+  initialization to cleanup) via a generated snippet stored in a named state variable.
+- Providing a logging FIFO and background reader process for cases where
+  subshell output still needs to be surfaced in the main script output.
 
 Dependencies
 ------------
@@ -28,8 +27,7 @@ Quick Start
 -----------
 
 Source the file once, then use `hs_persist_state_as_code` in the init function and
-`eval` the state in cleanup. For cleaner code, assign to a variable instead of
-capturing stdout.
+`hs_read_persisted_state` in cleanup.
 
 .. code-block:: bash
 
@@ -42,13 +40,13 @@ capturing stdout.
        # Define some opaque library resources
        local temp_file="/tmp/some_temp_file"
        local resource_id="resource_123"
-       hs_persist_state_as_code "$@" temp_file resource_id
+       hs_persist_state_as_code -S state temp_file resource_id
    }
 
    cleanup() {
-       local state="$1"
+       local state_var="$1"
        local temp_file resource_id
-       eval "$state"
+       hs_read_persisted_state "$state_var" temp_file resource_id
        rm -f "$temp_file"
        echo "Cleaned up resource: $resource_id"
    }
@@ -58,14 +56,6 @@ capturing stdout.
    init_function -S my_state
    # Your main script logic here
    cleanup "$my_state"
-
-For backward compatibility, the old stdout capture method still works:
-
-.. code-block:: bash
-
-   # Capture the opaque state snippet emitted on stdout
-   state=$(init_function)  
-   cleanup "$state"
 
 Public API
 ----------
@@ -111,15 +101,9 @@ Emits Bash code that restores specified local variables in a receiving scope.
 The emitted snippet only assigns values if the target variable is declared
 `local` in the receiving scope and is still empty.
 
-The function accepts optional `-s` or `-S` arguments:
+The function requires the `-S` argument:
 
-- `-s <state>`: Treats `<state>` as an existing state snippet to append to.
-- `-S <var>`: Assigns the state (appended to any existing content in `<var>`) to the variable named `<var>` instead of printing to stdout.
-
-These options can be used together; when both are provided, `<var>` is used for output and must be empty or uninitialized.
-
-This allows avoiding stdout output for opaque data when assigning to a variable,
-while maintaining backward compatibility for appending to state strings or state vars.
+- `-S <var>`: Assigns the state (appended to any existing content in `<var>`) to the variable named `<var>`.
 
 .. warning::
    When using `-S` with a variable name, the function will `eval` the current contents of that variable during collision checking. Callers must ensure the variable contains only safe, trusted Bash code or is empty/unset to avoid execution of harmful code.
@@ -130,18 +114,17 @@ checking, and only if the variable is not empty. Corrupted state code is detecte
 it calls undefined commands during this evaluation, and when the evaluation takes more
 than one second (to prevent hangs).
 
-Libraries are encouraged to provide the same ``-s`` and ``-S`` options to their initialization
-functions to allow callers to chain state snippets together.
+Libraries are encouraged to provide the same ``-S`` option to their initialization
+functions so callers can keep state transport explicit and by-name.
 
 When appending to an existing state snippet, the function checks for name collisions
-and refuses to overwrite existing variables. Some library combinations can be 
+and refuses to overwrite existing variables. Some library combinations can be
 incompatible with the chaining approach because they use overlapping variable names.
-The alternate solution is to keep and eval separate state snippets for each library.
+The alternate solution is to keep separate state variables for each library.
 
-- Usage: `hs_persist_state_as_code [-s <state> | -S <var>] var1 var2 ...`
-- Output: a string of Bash code intended to be `eval`'d by the caller (when not assigning to variable).
+- Usage: `hs_persist_state_as_code -S <var> var1 var2 ...`
+- Output: writes a string of Bash code intended to be `eval`'d by the caller into `<var>`.
 - Errors:
-  - Refuses to take into account more than one prior state.
   - Detects an invalid variable name passed to option `-S`.
   - Refuses to persist reserved names `__var_name`, `__existing_state`, `__output_state_var` and `__output`.
   - Rejects collisions when a variable already exists in the provided prior state.
@@ -162,19 +145,16 @@ library's own variables from a shared state vector so the same init function
 can later be called again without triggering name-collision errors in
 ``hs_persist_state_as_code``.
 
-The function accepts optional ``-s`` or ``-S`` arguments:
+The function requires the ``-S`` argument:
 
-- ``-s <state>``: treats ``<state>`` as the input state snippet and prints the
-  rebuilt state to stdout.
 - ``-S <var>``: reads the input state from variable ``<var>``, removes the
   listed variables, and writes the rebuilt state back into ``<var>``.
 
 The arguments after the options are the variable names to destroy. Each name
 must be a valid shell variable name and must already exist in the input state.
 
-- Usage: ``hs_destroy_state [-s <state> | -S <var>] var1 var2 ...``
-- Output: a rebuilt Bash state snippet with the requested variables removed
-  (when not assigning to a variable via ``-S``).
+- Usage: ``hs_destroy_state -S <var> var1 var2 ...``
+- Output: rewrites ``<var>`` with a rebuilt Bash state snippet with the requested variables removed.
 - Errors:
   - Detects an invalid variable name passed either to ``-S`` or in the destroy list.
   - Fails if a requested variable is not defined in the input state.
@@ -208,16 +188,42 @@ colliding with stale entries from the previous cycle.
 hs_read_persisted_state
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-This function is a simple wrapper around `echo`. `hs_read_persisted_state`
-accepts the name of the variable holding the persisted state and reads it via a
-nameref. It currently requires eval because the persisted state is stored as a Bash code
-snippet. This is a property of the chosen format, not a fundamental limitation
-of Bash for restoring values into already-declared caller-local variables.
-The output must be `eval`'d by the caller to restore state anyway and the
-effect is identical to `eval "$state"`. Code readability is slightly improved
-by using this function, and code is future proven against format changes.
+`hs_read_persisted_state` reads state from a named state variable. It supports
+two modes:
 
-- Usage: `eval "$(hs_read_persisted_state state)"`
+- Explicit restore: ``hs_read_persisted_state state foo bar``
+- Probe-snippet generation: ``eval "$(hs_read_persisted_state state)"``
+
+Explicit restore is the preferred API. The caller names exactly which variables
+must be restored, and `hs_read_persisted_state` writes those values into the
+current caller scope.
+
+When no explicit variable list is given, `hs_read_persisted_state` does not
+return the raw persisted state snippet. Instead, it emits a locally generated
+probe snippet. When that snippet is `eval`'d, it checks the immediate caller
+scope for matching ``local`` variables that are currently empty, then reenters
+`hs_read_persisted_state` with that explicit list.
+
+This design is safer than `eval "$state"` because the caller executes only the
+local probe snippet, not the transmitted persisted state directly. Direct
+``eval`` of the raw state is discouraged outside early unit tests of the library.
+
+.. warning::
+
+   Without an explicit variable list, every empty ``local`` variable in the
+   immediate caller scope whose name also exists in the state may be restored
+   automatically. This may be unwanted if the caller manages several unrelated
+   state variables or reuses the same local names for different purposes.
+   Prefer explicit variable lists in non-trivial cleanup functions.
+
+Automatic probing only inspects the immediate caller scope. Locals declared in
+the caller's caller are not restored automatically, but they can still be
+restored if an intermediate function knows their name and names them explicitly.
+
+The optional ``-q`` flag suppresses warnings for explicitly requested variables
+that are not present in the state. It is intended for explicit
+caller-supplied variable lists. When probing automatically, only variables 
+present in the state are probed.
 
 hs_get_pid_of_subshell
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -264,6 +270,19 @@ state from those survivors. This keeps the removal logic centralized in
 `handle_state.sh` and gives libraries a way to reuse a shared state variable
 across several init/cleanup cycles.
 
+State Restoration
+~~~~~~~~~~~~~~~~~
+
+`hs_read_persisted_state` should usually be used in one of these forms:
+
+- ``hs_read_persisted_state state foo bar``
+- ``eval "$(hs_read_persisted_state state)"``
+
+The first form is preferred because it is explicit and does not require the
+caller to execute the transmitted state snippet. The second form exists for the
+common case where the caller simply wants all matching empty locals in its own
+scope restored.
+
 Supported Variables
 -------------------
 
@@ -300,18 +319,22 @@ Workarounds
   # In the init function
   local -a myarray=("value1" "value2" "value with spaces"
   encoded=$(printf '%s\0' "${myarray[@]}" | base64 -w0)
-  hs_persist_state_as_code encoded
+  hs_persist_state_as_code -S state encoded
   # In the cleanup function
-  local state="$1"
+  local state_var="$1"
   local encoded
-  eval "$(hs_read_persisted_state state)"
+  hs_read_persisted_state "$state_var" encoded
   declare -a newarray
   mapfile -d '' -t newarray < <(printf '%s' "$encoded" | base64 -d)
 Caveats
 -------
 
-- Always declare target variables `local` before `eval`'ing the state snippet;
-  otherwise assignments are skipped to avoid leaking globals.
+- Prefer ``hs_read_persisted_state state var1 var2`` over direct ``eval``.
+- If you use ``eval "$(hs_read_persisted_state state)"``, declare target
+  variables ``local`` first and remember that only the immediate caller scope
+  is probed automatically.
+- Direct ``eval "$state"`` should be avoided in library code unless you are
+  deliberately handling the raw persisted snippet yourself.
 - The library uses `eval` internally; treat state strings as trusted input.
 - Call `hs_cleanup_output` when you are done to stop the background reader.
 

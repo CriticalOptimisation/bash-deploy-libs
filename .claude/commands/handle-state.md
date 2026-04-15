@@ -15,7 +15,7 @@ API, warnings, and limitations.
 - In init/setup or wherever the state information is created, define local scalar
   variables holding the state, then call `hs_persist_state_as_code -S <state_var> <local1> <local2> ...`.
 - Future libraries using `handle_state` are only required to support `-S`.
-- The state snippet is assigned directly to the specified variable; do not rely on stdout emission as part of a library API.
+- The state snippet is assigned directly to the specified variable; stdout-based state transport is obsolete and should not be supported in library APIs.
 - Pass the state variable to cleanup or any API function which needs state information.
 - In cleanup, declare locals with the same names, then `eval "$state"`.
 - If the same state variable must be reused across several init/cleanup cycles,
@@ -58,7 +58,7 @@ state_destroyer() {
   local _state_var=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -s|-S)
+      -S)
         # Same option shape as hs_persist_state_as_code; implementation is expected to
         # delegate to a future hs_destroy_state helper.
         break
@@ -80,11 +80,12 @@ state_destroyer -S state
 state_producer -S state
 ```
 
-**API Documentation Note**: New libraries should expose `-S` directly and are not required to preserve the older stdout-based calling convention. If a function both consumes and produces state, it can still use `hs_persist_state_as_code -S <var>` internally after processing its own arguments.
+**API Documentation Note**: New libraries should expose `-S` directly and should not preserve the older stdout-based calling convention. If a function both consumes and produces state, it can still use `hs_persist_state_as_code -S <var>` internally after processing its own arguments.
 
 The same function can begin by consuming some state and terminate producing some other state.
-If it uses the `-s <$state>` option to `hs_persist_state_as_code`, that function can append to the
-supplied state vector rather than producing a new one.
+If it receives a state variable name from the caller, that function can append
+to the supplied state vector by passing the same variable name to
+`hs_persist_state_as_code -S <var>` rather than producing a new one.
 
 When a library needs to reinitialize against the same state variable after
 cleanup, document a companion `state_destroyer` pattern. Its syntax should
@@ -122,6 +123,6 @@ The following behaviors are tracked in GitHub; avoid them or apply workarounds.
 
 - `hs_persist_state_as_code` and `hs_read_persisted_state` rely on `eval`; treat state
   strings as trusted input only.
-- Avoid name collisions when chaining state snippets; prefer separate state
-  strings if libraries overlap variable names.
-- Do not require stdout to carry state as part of a new library API; reserve stdout for normal user-visible output.
+- Avoid name collisions when chaining state through a shared state variable; prefer separate state
+  variables if libraries overlap variable names.
+- Do not require stdout to carry state as part of a library API; reserve stdout for normal user-visible output.

@@ -136,64 +136,148 @@ readonly HS_ERR_MULTIPLE_STATE_INPUTS=3
 readonly HS_ERR_CORRUPT_STATE=4
 readonly HS_ERR_INVALID_VAR_NAME=5
 readonly HS_ERR_VAR_NAME_NOT_IN_STATE=6
+readonly HS_ERR_STATE_VAR_UNINITIALIZED=7
+readonly HS_ERR_MISSING_ARGUMENT=8
 
-# _hs_resolve_state_inputs <caller_name> <existing_state_var> <output_state_var> <consumed_count_var> [args...]
-# Parses -s/-S options for state-oriented helpers and resolves the prior state
-# from either the explicit -s payload or the named -S variable. The caller
-# receives the parsed values via the variable names passed in arguments 2 and 3,
-# plus the number of consumed option arguments in argument 4.
+# --- _hs_is_valid_variable_name -------------------------------------------------------
+# Function:
+#   _hs_is_valid_variable_name
+# Description:
+#   Returns success if the argument is a syntactically valid Bash variable name.
+# Arguments:
+#   $1 - candidate variable name
+# Returns:
+#   0 if the name is valid, 1 otherwise.
+_hs_is_valid_variable_name() {
+    [[ "${1-}" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]
+}
+
+# --- _hs_resolve_state_inputs ---------------------------------------------------------
+# Function:
+#   _hs_resolve_state_inputs
+# Description:
+#   Parses the `-S <statevar>` option for state-oriented helpers and resolves
+#   the current state from the named variable. Parsed results are returned to
+#   the caller through variable names passed as parameters.
+# Arguments:
+#   $1 - caller function name, used in error messages; must be a valid Bash name
+#   $2 - name of the variable that will receive the current state value; must be a valid Bash name
+#   $3 - name of the variable that will receive the destination state variable name; must be a valid Bash name
+#   $4 - name of the variable that will receive the number of consumed option arguments; must be a valid Bash name
+#   $5 - first variable name to process or `-S`
+#   $6... - additional variable names to process, with `-S <statevar>` required somewhere in the argument list
+# Returns:
+#   0 on success.
+#   `HS_ERR_MISSING_ARGUMENT` if fewer than 6 arguments are provided.
+#   `HS_ERR_STATE_VAR_UNINITIALIZED` if no `-S <statevar>` option is provided.
+#   `HS_ERR_INVALID_VAR_NAME` if `-S` is followed by an invalid variable name.
+# Usage:
+#   local existing_state="" output_state_var="" consumed_state_args=0
+#   _hs_resolve_state_inputs my_helper existing_state output_state_var consumed_state_args "$@" || return $?
 _hs_resolve_state_inputs() {
+    if [ $# -lt 6 ]; then
+        echo "[ERROR] _hs_resolve_state_inputs: missing required arguments; expected at least 6 parameters." >&2
+        return "$HS_ERR_MISSING_ARGUMENT"
+    fi
+    local __arg
+    for __arg in "$1" "$2" "$3" "$4"; do
+        if ! _hs_is_valid_variable_name "$__arg"; then
+            echo "[ERROR] _hs_resolve_state_inputs: invalid variable name '$__arg'." >&2
+            return "$HS_ERR_INVALID_VAR_NAME"
+        fi
+    done
     local __caller_name=$1
-    local __existing_state_ref=$2
-    local __output_state_var_ref=$3
-    local __consumed_count_ref=$4
-    local __consumed_count=0
-    local __output_state_var_name=""
+    local -n __existing_state_ref=$2
+    local -n __output_state_var_ref=$3
+    local -n __consumed_count_ref=$4
     shift 4
 
-    printf -v "$__existing_state_ref" '%s' ""
-    printf -v "$__output_state_var_ref" '%s' ""
-    printf -v "$__consumed_count_ref" '%s' "0"
+    __existing_state_ref=""
+    __output_state_var_ref=""
+    __consumed_count_ref=0
 
     while [ $# -gt 0 ]; do
         case "$1" in
-            -s)
-                shift
-                __consumed_count=$((__consumed_count + 1))
-                printf -v "$__existing_state_ref" '%s' "$1"
-                shift
-                __consumed_count=$((__consumed_count + 1))
-                ;;
             -S)
-                shift
-                __consumed_count=$((__consumed_count + 1))
-                printf -v "$__output_state_var_ref" '%s' "$1"
-                __output_state_var_name="${!__output_state_var_ref}"
-                if ! [[ "$__output_state_var_name" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-                    echo "[ERROR] ${__caller_name}: invalid variable name '$__output_state_var_name' for -S option." >&2
+                __output_state_var_ref="$2"
+                if ! _hs_is_valid_variable_name "$__output_state_var_ref"; then
+                    echo "[ERROR] ${__caller_name}: invalid variable name '$__output_state_var_ref' for -S option." >&2
+                    return "$HS_ERR_INVALID_VAR_NAME"
+                fi
+                shift 2
+                __consumed_count_ref=$((__consumed_count_ref + 2))
+                ;;
+            *)
+                if ! _hs_is_valid_variable_name "$1"; then
+                    echo "[ERROR] ${__caller_name}: invalid variable name '$1'." >&2
                     return "$HS_ERR_INVALID_VAR_NAME"
                 fi
                 shift
-                __consumed_count=$((__consumed_count + 1))
-                ;;
-            *)
-                break
                 ;;
         esac
     done
 
-    __output_state_var_name="${!__output_state_var_ref}"
-
-    if [ -n "$__output_state_var_name" ] && [ -n "${!__existing_state_ref}" ]; then
-        echo "[ERROR] ${__caller_name}: cannot pass prior state using both -s and -S options simultaneously." >&2
-        return "$HS_ERR_MULTIPLE_STATE_INPUTS"
+    if [ -z "$__output_state_var_ref" ]; then
+        echo "[ERROR] ${__caller_name}: state variable is uninitialized; missing required -S <statevar> option." >&2
+        return "$HS_ERR_STATE_VAR_UNINITIALIZED"
     fi
 
-    if [ -n "$__output_state_var_name" ]; then
-        printf -v "$__existing_state_ref" '%s' "${!__output_state_var_name}"
+    eval "__existing_state_ref=\${$__output_state_var_ref-}"
+}
+
+# --- _hs_extract_persisted_state_var_names -------------------------------------------
+# Function:
+#   _hs_extract_persisted_state_var_names
+# Description:
+#   Parses a code-snippet state produced by `hs_persist_state_as_code` and
+#   extracts the variable names declared by its guarded `if local -p VAR ...`
+#   blocks. Results are returned through an array nameref.
+# Arguments:
+#   $1 - caller function name, used in error messages
+#   $2 - state snippet string to inspect
+#   $3 - name of the array variable that will receive extracted variable names
+# Returns:
+#   0 on success.
+#   `HS_ERR_INVALID_VAR_NAME` if one of the first or third arguments is not a
+#   valid Bash variable name.
+#   `HS_ERR_CORRUPT_STATE` if the snippet contains an invalid persisted variable
+#   name or if the state is non-empty but contains no persisted variable blocks.
+# Usage:
+#   local -a state_var_names=()
+#   _hs_extract_persisted_state_var_names my_helper "$state" state_var_names || return $?
+_hs_extract_persisted_state_var_names() {
+    if [ $# -ne 3 ]; then
+        echo "[ERROR] _hs_extract_persisted_state_var_names: expected exactly 3 arguments." >&2
+        return "$HS_ERR_MISSING_ARGUMENT"
+    fi
+    if ! _hs_is_valid_variable_name "$1" || ! _hs_is_valid_variable_name "$3"; then
+        echo "[ERROR] _hs_extract_persisted_state_var_names: invalid variable name '$1' or '$3'." >&2
+        return "$HS_ERR_INVALID_VAR_NAME"
     fi
 
-    printf -v "$__consumed_count_ref" '%s' "$__consumed_count"
+    local __caller_name=$1
+    local __state=$2
+    local -n __out_names_ref=$3
+    local __line=""
+    local __state_var_name=""
+
+    __out_names_ref=()
+    while IFS= read -r __line || [[ -n "$__line" ]]; do
+        if [[ "$__line" == "if local -p "* ]]; then
+            __state_var_name=${__line#if local -p }
+            __state_var_name=${__state_var_name%% *}
+            if ! _hs_is_valid_variable_name "$__state_var_name"; then
+                echo "[ERROR] ${__caller_name}: prior state is corrupted." >&2
+                return "$HS_ERR_CORRUPT_STATE"
+            fi
+            __out_names_ref+=("$__state_var_name")
+        fi
+    done <<< "$__state"
+
+    if [[ -n "$__state" && ${#__out_names_ref[@]} -eq 0 ]]; then
+        echo "[ERROR] ${__caller_name}: prior state is corrupted." >&2
+        return "$HS_ERR_CORRUPT_STATE"
+    fi
 }
 
 # --- hs_persist_state_as_code ----------------------------------------------------------
@@ -207,14 +291,10 @@ _hs_resolve_state_inputs() {
 #   If the variable already exists and is non-empty in the receiving scope,
 #   an error message is printed and the assignment is skipped.
 # Arguments:
-#   -s <state> - optional; if provided, appends the emitted code to variable
-#                definitions found in <state> (bash code snippet - deprecated).
-#   -S <statevar> - optional; if provided, appends the emitted code to variable
-#                   definitions found in the variable <statevar>. The variable 
-#                   must be empty or uninitialized if -s is also used.
+#   -S <statevar> - required; appends the emitted code to variable
+#                   definitions found in the variable <statevar>.
 #   $@ - names of local variables to persist.
 # Usage examples:
-#   # direct eval
 #   local state
 #   hs_persist_state_as_code -S state var1 var2
 #   cleanup() {
@@ -296,11 +376,7 @@ fi
             __output="${__output}${__snippet}"
         fi
     done
-    if [ -n "$__output_state_var" ]; then
-        eval "$__output_state_var=\"\$__output\""
-    else
-        printf '%s\n' "$__output"
-    fi
+    printf -v "$__output_state_var" '%s' "$__output"
 }
 
 # --- hs_destroy_state ---------------------------------------------------------------
@@ -312,18 +388,15 @@ fi
 #   variables, so that the init function can be called again without triggering
 #   name collision errors.
 # Arguments:
-#   -s <state> - optional; if provided, appends the emitted code to variable
-#                definitions found in <state> (bash code snippet).
-#   -S <statevar> - optional; if provided, appends the emitted code to variable
-#                   definitions found in the variable <statevar>. The variable 
-#                   must be empty or uninitialized if -s is also used.
+#   -S <statevar> - required; reads and rewrites the state held in
+#                   the variable <statevar>.
 #   $@ - names of local variables to destroy.
 # Usage examples:
 #   mylib_cleanup() {
-#       hs_destroystate "$@" mylib_statevar1 mylibstatevar2 
+#       hs_destroy_state -S state mylib_statevar1 mylibstatevar2
 #   }
 hs_destroy_state() {
-    # Step 1: resolve the input/output state sources using the same -s/-S
+    # Step 1: resolve the input/output state sources using the same -S-only
     # parsing rules as hs_persist_state_as_code. After this call:
     #   - __existing_state contains the input state snippet to transform
     #   - __output_state_var names the destination variable, if -S was used
@@ -341,72 +414,48 @@ hs_destroy_state() {
     # variables that remain after removing the requested names.
     local __output=""
     local __var_name
-    local __line=""
     local __state_var=""
     local __state_var_found=false
     local __keep_var=""
     local __keep_state_names=""
-    local __state_var_names=""
+    local -a __state_var_names=()
 
-    # Step 3: validate the destroy list itself before touching the state.
-    # Each requested name must be a syntactically valid shell variable name.
-    for __var_name in "$@"; do
-        if ! [[ "$__var_name" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-            echo "[ERROR] hs_destroy_state: invalid variable name '$__var_name'." >&2
-            return "$HS_ERR_INVALID_VAR_NAME"
+    # Step 3: scan the existing state snippet for persisted variable names.
+    # We intentionally look only for the top-level headers emitted by
+    # hs_persist_state_as_code. We do not splice the blocks directly. We only
+    # discover the names here; the actual output state will be rebuilt from
+    # surviving variables later.
+    _hs_extract_persisted_state_var_names hs_destroy_state "$__existing_state" __state_var_names || return $?
+    for __state_var in "${__state_var_names[@]}"; do
+        __state_var_found=false
+        for __var_name in "$@"; do
+            if [[ "$__var_name" == "$__state_var" ]]; then
+                __state_var_found=true
+                break
+            fi
+        done
+        if [[ "$__state_var_found" == false ]]; then
+            __keep_state_names+="${__state_var}"$'\n'
         fi
     done
 
-    # Step 4: scan the existing state snippet for persisted variable names.
-    # We intentionally look only for the top-level headers emitted by
-    # hs_persist_state_as_code:
-    #   if local -p VAR >/dev/null 2>&1; then
-    # For each discovered variable:
-    #   - record it in __state_var_names
-    #   - if it is NOT in the destroy list, add it to __keep_state_names
-    # We do not splice the blocks directly. We only discover the names here;
-    # the actual output state will be rebuilt from surviving variables later.
-    while IFS= read -r __line || [[ -n "$__line" ]]; do
-        if [[ "$__line" =~ ^if\ local\ -p\ ([a-zA-Z_][a-zA-Z0-9_]*)\ \>/dev/null\ 2\>\&1\;\ then$ ]]; then
-            __state_var="${BASH_REMATCH[1]}"
-            __state_var_names+="${__state_var}"$'\n'
-            __state_var_found=false
-            for __var_name in "$@"; do
-                if [[ "$__var_name" == "$__state_var" ]]; then
-                    __state_var_found=true
-                    break
-                fi
-            done
-            if [[ "$__state_var_found" == false ]]; then
-                __keep_state_names+="${__state_var}"$'\n'
-            fi
-        fi
-    done <<< "$__existing_state"
-
-    # Step 5: if we were given a non-empty state string but found no persisted
-    # variable headers at all, treat that state as corrupt.
-    if [[ -n "$__existing_state" && -z "$__state_var_names" ]]; then
-        echo "[ERROR] hs_destroy_state: prior state is corrupted." >&2
-        return "$HS_ERR_CORRUPT_STATE"
-    fi
-
-    # Step 6: every requested variable must actually exist in the incoming
+    # Step 5: every requested variable must actually exist in the incoming
     # state. If a requested name is absent, return HS_ERR_INVALID_VAR_NAME.
     for __var_name in "$@"; do
         __state_var_found=false
-        while IFS= read -r __state_var || [[ -n "$__state_var" ]]; do
+        for __state_var in "${__state_var_names[@]}"; do
             if [[ "$__state_var" == "$__var_name" ]]; then
                 __state_var_found=true
                 break
             fi
-        done <<< "$__state_var_names"
+        done
         if [[ "$__state_var_found" == false ]]; then
             echo "[ERROR] hs_destroy_state: variable '$__var_name' is not defined in the state." >&2
             return "$HS_ERR_VAR_NAME_NOT_IN_STATE"
         fi
     done
 
-    # Step 7: rebuild the state from scratch using only the survivor names.
+    # Step 6: rebuild the state from scratch using only the survivor names.
     # Instead of editing the text blocks in place, run a fresh Bash subprocess
     # that:
     #   1. defines the minimal helpers needed (_hs_resolve_state_inputs and
@@ -437,16 +486,18 @@ hs_destroy_state() {
                 local __rebuild_state=$1
                 shift
                 local __name
+                local __rebuilt_state=""
                 for __name in "$@"; do
                     local "$__name"
                 done
                 eval "$__rebuild_state" >/dev/null
-                hs_persist_state_as_code "$@"
+                hs_persist_state_as_code -S __rebuilt_state "$@"
+                printf '%s' "$__rebuilt_state"
             }
             _hs_destroy_state_rebuild "$@"
         ' bash "$__existing_state" "${__keep_state_args[@]}")
         local __status=$?
-        # Step 8: map rebuild failures to the same "corrupt prior state"
+        # Step 7: map rebuild failures to the same "corrupt prior state"
         # category used elsewhere in handle_state when we cannot safely process
         # the supplied snippet.
         if [ $__status -eq 124 ] || [ $__status -eq 127 ] || [ $__status -eq 137 ] || [ $__status -eq 143 ]; then
@@ -458,13 +509,8 @@ hs_destroy_state() {
         fi
     fi
 
-    # Step 9: emit the rebuilt state using the same stdout / -S convention as
-    # hs_persist_state_as_code.
-    if [ -n "$__output_state_var" ]; then
-        printf -v "$__output_state_var" '%s' "$__output"
-    else
-        printf '%s\n' "$__output"
-    fi
+    # Step 8: write the rebuilt state back into the named state variable.
+    printf -v "$__output_state_var" '%s' "$__output"
 }
 # --- hs_read_persisted_state --------------------------------------------------------
 # Function: 
@@ -475,11 +521,19 @@ hs_destroy_state() {
 #   do not pass the snippet by value. This function still only returns the
 #   stored code snippet; callers should `eval "$(hs_read_persisted_state state)"`
 #   or simply `eval "$state"` to recreate variables in the caller scope.
+#   For convenience, callers may pass either `state` or `-S state`.
 #   Can be called several times to extract distinct variables.
 #   The referenced state variable contains a bash code snippet that assigns
 #   values to existing local and empty variables in the current scope.
 # Arguments:
-#   $1 - name of the variable holding the state string produced by `hs_persist_state_as_code`
+#   $1 - name of the variable holding the state string produced by `hs_persist_state_as_code`,
+#        or `-S`
+#   $2 - state variable name when `$1` is `-S`
+# Errors:
+#   - Rejects a missing first argument.
+#   - Rejects an invalid variable name.
+#   - Rejects a valid variable name that does not refer to an existing,
+#     non-empty state variable.
 # Usage examples:
 #   # direct eval
 #   cleanup() {
@@ -497,8 +551,108 @@ hs_destroy_state() {
 #       eval "$(hs_read_persisted_state state)"
 #   }
 hs_read_persisted_state() {
-    local -n state_string="$1"
-    printf '%s' "$state_string"
+    # Step 1: parse hs_read_persisted_state-specific flags before delegating
+    # the shared state-input handling to _hs_resolve_state_inputs.
+    local __quiet=false
+    while [ $# -gt 0 ] && [ "${1-}" = "-q" ]; do
+        __quiet=true
+        shift
+    done
+
+    if [ $# -eq 0 ]; then
+        echo "[ERROR] hs_read_persisted_state: missing required state variable name." >&2
+        return "$HS_ERR_MISSING_ARGUMENT"
+    fi
+
+    if [ "${1-}" != "-S" ]; then
+        set -- -S "$@"
+    fi
+
+    # Step 2: resolve the named state variable and capture its current payload.
+    # The helper validates names, enforces the presence of -S, and returns:
+    #   - __existing_state: the current serialized state snippet
+    #   - __output_state_var: the caller-visible variable name holding that state
+    #   - __consumed_state_args: how many leading arguments belong to state input
+    local __existing_state=""
+    local __output_state_var=""
+    local __consumed_state_args=0
+    _hs_resolve_state_inputs hs_read_persisted_state __existing_state __output_state_var __consumed_state_args "$@" || return $?
+
+    if [ -z "$__existing_state" ]; then
+        echo "[ERROR] hs_read_persisted_state: state variable '$__output_state_var' is not set or is empty." >&2
+        return "$HS_ERR_STATE_VAR_UNINITIALIZED"
+    fi
+
+    # Step 3: if the caller listed variable names after the state input, restore
+    # only those variables directly into the caller scope. This is the explicit
+    # selective-restore API.
+    if [ $# -ne "$__consumed_state_args" ]; then
+        shift "$__consumed_state_args"
+
+        local __requested_var
+        local __restored_value=""
+        local __restore_status=0
+        for __requested_var in "$@"; do
+            # Evaluate the persisted state in a short-lived Bash subprocess,
+            # scoped to one requested variable, then print the resulting value
+            # back to this function. The subprocess is isolated and time-bounded
+            # because the persisted format is still executable Bash code.
+            __restored_value=$(timeout --preserve-status -k 2 1 "${BASH:-bash}" --noprofile -lc '
+                _hs_read_requested_state_var() {
+                    local __state=$1
+                    local __requested_var=$2
+                    local "$__requested_var"
+                    eval "$__state" >/dev/null 2>&1 || return $?
+                    if [ "${!__requested_var+x}" ]; then
+                        printf "%s" "${!__requested_var}"
+                        return 0
+                    fi
+                    return 10
+                }
+                _hs_read_requested_state_var "$@"
+            ' bash "$__existing_state" "$__requested_var")
+            __restore_status=$?
+
+            if [ $__restore_status -eq 124 ] || [ $__restore_status -eq 127 ] || [ $__restore_status -eq 137 ] || [ $__restore_status -eq 143 ]; then
+                echo "[ERROR] hs_read_persisted_state: prior state is corrupted." >&2
+                return "$HS_ERR_CORRUPT_STATE"
+            elif [ $__restore_status -eq 10 ]; then
+                if [ "$__quiet" = false ]; then
+                    echo "[WARNING] hs_read_persisted_state: variable '$__requested_var' is not defined in the state." >&2
+                fi
+                continue
+            elif [ $__restore_status -ne 0 ]; then
+                echo "[ERROR] hs_read_persisted_state: internal error while restoring '$__requested_var'." >&2
+                return "$HS_ERR_CORRUPT_STATE"
+            fi
+
+            # Write the restored value back into the caller's variable by name.
+            local -n __requested_var_ref="$__requested_var"
+            __requested_var_ref="$__restored_value"
+        done
+        return 0
+    fi
+
+    # Step 4: otherwise, generate a safe, local probe snippet instead of
+    # returning the raw persisted code. The snippet checks which matching local
+    # variables are currently declared and unset in the caller, then reenters
+    # hs_read_persisted_state with an explicit variable list. This avoids asking
+    # callers to eval arbitrary transmitted state directly in the common case.
+    local -a __probe_state_names=()
+    _hs_extract_persisted_state_var_names hs_read_persisted_state "$__existing_state" __probe_state_names || return $?
+
+    # Emit a compact Bash snippet that rebuilds the requested-variable list from
+    # the caller's local scope and then reenters this function in quiet mode.
+    local __probe_snippet=$'local -a __hs_read_requested_vars=()\n'
+    local __probe_var
+    for __probe_var in "${__probe_state_names[@]}"; do
+        printf -v __probe_snippet '%sif local -p %s >/dev/null 2>&1 && [ -z "${%s}" ]; then __hs_read_requested_vars+=(%s); fi\n' \
+            "$__probe_snippet" "$__probe_var" "$__probe_var" "$__probe_var"
+    done
+    printf -v __probe_snippet '%sif [ ${#__hs_read_requested_vars[@]} -gt 0 ]; then\n  hs_read_persisted_state -S %q "${__hs_read_requested_vars[@]}"\nfi\n' \
+        "$__probe_snippet" "$__output_state_var"
+
+    printf '%s' "$__probe_snippet"
 }
 
 # --- Utility functions --------------------------------------------------------
