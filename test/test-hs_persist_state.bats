@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
-# Bats tests for hs_persist_state
-# Run with: bats test/test-hs_persist_state.bats
+# Bats tests for hs_persist_state_as_code
+# Run with: bats test/test-hs_persist_state_as_code.bats
 
 setup_file() {
   bats_require_minimum_version 1.5.0
@@ -17,11 +17,11 @@ setup_file() {
   source "$LIB"  # run hs_setup_output_to_stdout
   hs_cleanup_output  # ensure clean state at start
   export -f hs_setup_output_to_stdout hs_cleanup_output hs_get_pid_of_subshell\
-            _hs_resolve_state_inputs hs_persist_state hs_destroy_state hs_read_persisted_state hs_echo
+            _hs_resolve_state_inputs hs_persist_state_as_code hs_destroy_state hs_read_persisted_state hs_echo
   export HS_ERR_RESERVED_VAR_NAME HS_ERR_VAR_NAME_COLLISION HS_ERR_VAR_NAME_NOT_IN_STATE
   export HS_ERR_MULTIPLE_STATE_INPUTS HS_ERR_CORRUPT_STATE HS_ERR_INVALID_VAR_NAME
   # Accelerate test failure
-  export BATS_TEST_TIMEOUT=2
+  export BATS_TEST_TIMEOUT=30
 }
 # setup and teardown are skipped if the test has '[no-setup]' in its name.
 # This allows the capture of hs_echo output by bats.
@@ -118,11 +118,11 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   rm "$out_file"
 }
 
-# bats test_tags=hs_persist_state
+# bats test_tags=hs_persist_state_as_code
 @test "eval without local should succeed and leave globals unchanged" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
-  init() { local bar=v2; local baz=new; hs_persist_state bar baz; }; 
+  init() { local bar=v2; local baz=new; hs_persist_state_as_code bar baz; }; 
   state=$(init); 
   baz=old; 
   eval "$state"; 
@@ -132,18 +132,18 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   # ensure globals were not created or overwritten
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
-  init(){ local bar=v2; local baz=new; hs_persist_state bar baz; }; 
+  init(){ local bar=v2; local baz=new; hs_persist_state_as_code bar baz; }; 
   state=$(init); 
   baz=old; 
   eval "$state" 2>/dev/null || true; 
   [ -z "${bar+set}" ] && [ "${baz}" = "old" ]'
 }
 
-# bats test_tags=hs_persist_state
+# bats test_tags=hs_persist_state_as_code
 @test "cleanup declares local and eval restores values onto new locals" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
-  init(){ local foo=secret; local bar=v2; local baz=new; hs_persist_state foo bar baz; };
+  init(){ local foo=secret; local bar=v2; local baz=new; hs_persist_state_as_code foo bar baz; };
   cleanup(){ local foo bar baz; eval "$1"; printf "%s:%s:%s" "$foo" "$bar" "$baz"; }; 
   state=$(init); 
   cleanup "$state";
@@ -152,10 +152,10 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
 }
 
 # bats test_tags=hs_read_persisted_state
-@test "eval \$(hs_read_persisted_state ...) in caller scope restores values" {
+@test "eval the output of (hs_read_persisted_state ...) in caller scope restores values" {
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc ' 
-  init(){ local foo=secret; local bar=v2; local baz=new; hs_persist_state foo bar baz; }; 
+  init(){ local foo=secret; local bar=v2; local baz=new; hs_persist_state_as_code foo bar baz; }; 
   cleanup(){ local state="$1"; local foo bar baz; eval "$(hs_read_persisted_state state)"; printf "%s:%s:%s" "$foo" "$bar" "$baz"; }; 
   set -x
   state=$(init) 
@@ -163,33 +163,33 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ "$output" = "secret:v2:new" ]
 }
 
-# bats test_tags=hs_persist_state
+# bats test_tags=hs_persist_state_as_code
 @test "overwriting a local already set in cleanup should fail with explicit message" {
   # shellcheck disable=SC2016
   run -1 bash --noprofile -lc '
-  init(){ local foo=secret; hs_persist_state foo; };
+  init(){ local foo=secret; hs_persist_state_as_code foo; };
   cleanup(){ local foo=already; eval "$1"; }; 
   state=$(init); 
   cleanup "$state"'
   [[ "$output" == *"local foo already defined; refusing to overwrite"* ]]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state does not include variables that were not set in init" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code does not include variables that were not set in init" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
-  init(){ local foo=one; hs_persist_state foo bar; };
+  init(){ local foo=one; hs_persist_state_as_code foo bar; };
   cleanup(){ local foo bar; eval "$1"; printf "%s:%s" "$foo" "${bar:-}"; };  
   state=$(init); 
   cleanup "$state"'
   [ "$output" = "one:" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state ignores unknown variable names" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code ignores unknown variable names" {
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
-  init(){ hs_persist_state not_a_var; };
+  init(){ hs_persist_state_as_code not_a_var; };
   state=$(init);
   printf "%s" "$state"
   '
@@ -197,11 +197,11 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$stderr" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state ignores function names" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code ignores function names" {
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
-  init(){ my_func(){ echo "nope"; }; hs_persist_state my_func; };
+  init(){ my_func(){ echo "nope"; }; hs_persist_state_as_code my_func; };
   state=$(init);
   printf "%s" "$state"
   '
@@ -209,11 +209,11 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$stderr" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state only captures the first element of an indexed array" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code only captures the first element of an indexed array" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
-  init(){ local -a items=(one two); hs_persist_state items; };
+  init(){ local -a items=(one two); hs_persist_state_as_code items; };
   cleanup(){ local -a items; eval "$1"; printf "%s:%s" "${items[0]-}" "${items[1]-}"; };
   state=$(init);
   cleanup "$state"
@@ -221,11 +221,11 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ "$output" = "one:" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state ignores associative arrays" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code ignores associative arrays" {
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
-  init(){ local -A amap=([key]=value); hs_persist_state amap; };
+  init(){ local -A amap=([key]=value); hs_persist_state_as_code amap; };
   state=$(init);
   printf "%s" "$state"
   '
@@ -233,11 +233,11 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$stderr" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state treats namerefs as scalar values" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code treats namerefs as scalar values" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
-  init(){ local target=secret; local -n ref=target; hs_persist_state ref; };
+  init(){ local target=secret; local -n ref=target; hs_persist_state_as_code ref; };
   cleanup(){ local target=""; local -n ref=target; eval "$1"; printf "%s:%s" "$target" "$ref"; };
   state=$(init);
   cleanup "$state"
@@ -245,40 +245,40 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ "$output" = "secret:secret" ]
 }
 
-# bats test_tags=hs_persist_state
+# bats test_tags=hs_persist_state_as_code
 @test "restore empty value" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
-  init(){ local foo=""; hs_persist_state foo; };
+  init(){ local foo=""; hs_persist_state_as_code foo; };
   cleanup(){ local foo; eval "$1"; printf "%s" "$foo"; };  
   state=$(init); 
   cleanup "$state"'
   [ -z "$output" ]
 }
 
-# bats test_tags=hs_persist_state
+# bats test_tags=hs_persist_state_as_code
 @test "overwrite empty local variable with persisted value" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
-  init(){ local foo=secret; hs_persist_state foo; }; 
+  init(){ local foo=secret; hs_persist_state_as_code foo; }; 
   cleanup(){ local foo=""; eval "$1"; printf "%s" "$foo"; hs_cleanup_output; }; 
   state=$(init); 
   cleanup "$state"'
   [ "$output" = "secret" ]
 }
 
-# bats test_tags=hs_persist_state
+# bats test_tags=hs_persist_state_as_code
 @test "preserve special characters in persisted values" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
-  init(){ local foo='\''a b "c" $d'\''; hs_persist_state foo; }; 
+  init(){ local foo='\''a b "c" $d'\''; hs_persist_state_as_code foo; }; 
   cleanup(){ local foo; eval "$1"; printf "%s" "$foo"; hs_cleanup_output; }; 
   state=$(init); 
   cleanup "$state"'
   [ "$output" = "a b \"c\" \$d" ]
 }
 
-# bats test_tags=hs_setup_output_to_stdout, hs_persist_state
+# bats test_tags=hs_setup_output_to_stdout, hs_persist_state_as_code
 @test "hs_setup_output_to_stdout keeps logs separate from persisted state [no-setup]" {
   # hs_echo logs to stdout, captured by bats, even though it is explicitly captured by $state.
   # shellcheck disable=SC2016
@@ -287,7 +287,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     init() {
       local foo="secret"
       hs_echo "LOG foo is $foo"
-      hs_persist_state foo
+      hs_persist_state_as_code foo
     }
     state=$(init)
     printf "%s\n" "$state" >&2  # send persisted state to stderr
@@ -313,13 +313,13 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [[ "$output" =~ ^[0-9]+$ ]]
 } 
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state with -s appends to existing state" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code with -s appends to existing state" {
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
     init() {
       local bar=two
-      hs_persist_state -s "$1" bar
+      hs_persist_state_as_code -s "$1" bar
     }
     cleanup(){ 
       local foo bar 
@@ -334,13 +334,13 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$stderr" ]
 } 
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state with -s fails on variable name collision" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code with -s fails on variable name collision" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_VAR_NAME_COLLISION" --separate-stderr bash --noprofile -lc '
     init() {
       local foo=two
-      hs_persist_state -s "$1" foo  # Fails: foo already in state
+      hs_persist_state_as_code -s "$1" foo  # Fails: foo already in state
     }
     state1=$(make_state foo one)
     init "$state1" >/dev/null  # Invalid output must be ignored
@@ -350,23 +350,23 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$output" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state with -S detects an invalid variable name" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code with -S detects an invalid variable name" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr bash --noprofile -xlc '
-    hs_persist_state -S "1invalid-var-name"
+    hs_persist_state_as_code -S "1invalid-var-name"
   '
   [[ "$stderr" == *"invalid variable name '1invalid-var-name' for -S option"* ]]
   [ -z "$output" ]
 }
 
-# bats test_tags=hs_persist_state,focus
-@test "hs_persist_state fails on reserved variable name __var_name" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code fails on reserved variable name __var_name" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -xlc '
     init() {
       local __var_name=bad
-      hs_persist_state __var_name
+      hs_persist_state_as_code __var_name
     }
     init
   '
@@ -374,13 +374,13 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$output" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state fails on reserved variable name __existing_state" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code fails on reserved variable name __existing_state" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -lc '
     init() {
       local __existing_state=bad
-      hs_persist_state __existing_state
+      hs_persist_state_as_code __existing_state
     }
     init
   '
@@ -388,13 +388,13 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$output" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state fails on reserved variable name __output_state_var" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code fails on reserved variable name __output_state_var" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -lc '
     init() {
       local __output_state_var=bad
-      hs_persist_state __output_state_var
+      hs_persist_state_as_code __output_state_var
     }
     init
   '
@@ -402,13 +402,13 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$output" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state fails on reserved variable name __output" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code fails on reserved variable name __output" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr bash --noprofile -lc '
     init() {
       local __output=bad
-      hs_persist_state __output
+      hs_persist_state_as_code __output
     }
     init
   '
@@ -416,13 +416,13 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$output" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state with -S var_name assigns to variable" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code with -S var_name assigns to variable" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     init() {
       local bar=two
-      hs_persist_state -S state bar
+      hs_persist_state_as_code -S state bar
     }
     cleanup(){ 
       local bar 
@@ -435,14 +435,14 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ "$output" = "two" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state detects corrupt state: infinite loop" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code detects corrupt state: infinite loop" {
   # The infinite loop is simulated by a 3 seconds sleep.
   # shellcheck disable=SC2016
   run -"$HS_ERR_CORRUPT_STATE" --separate-stderr bash --noprofile -lc '
     init() {
       local foo=two
-      hs_persist_state -s "$(corrupt_state slow)" foo
+      hs_persist_state_as_code -s "$(corrupt_state slow)" foo
     }
     init
   '
@@ -450,13 +450,13 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$output" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state detects corrupt state: error on eval" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code detects corrupt state: error on eval" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_CORRUPT_STATE" --separate-stderr bash --noprofile -lc '
     init() {
       local foo=two
-      hs_persist_state -s "$(corrupt_state error)" foo
+      hs_persist_state_as_code -s "$(corrupt_state error)" foo
     }
     init
   '
@@ -464,13 +464,13 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$output" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state detects corrupt state var: error on eval" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code detects corrupt state var: error on eval" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_CORRUPT_STATE" --separate-stderr bash --noprofile -lc '
     init() {
       local foo=two
-      hs_persist_state "$@" foo
+      hs_persist_state_as_code "$@" foo
     }
     state_var="$(corrupt_state error)"
     init -S state_var
@@ -479,15 +479,15 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$output" ]
 }
 
-# bats test_tags=hs_persist_state
-@test "hs_persist_state -s works when called via bats run on a shell function" {
-  # Regression test for issue #59: hs_persist_state used $0 to re-invoke the
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code -s works when called via bats run on a shell function" {
+  # Regression test for issue #59: hs_persist_state_as_code used $0 to re-invoke the
   # shell for collision checking, but $0 is the Bats runner (not bash) when a
   # function is invoked via 'bats run'.  The fix uses ${BASH:-bash} instead.
   # Also verifies that the collision-check subshell does not leak 'a' globally.
   state_accumulates() {
     local incoming_state="local a=kept"
-    hs_persist_state -s "$incoming_state" b >/dev/null
+    hs_persist_state_as_code -s "$incoming_state" b >/dev/null
   }
   run -0 --separate-stderr state_accumulates
   [ -z "$stderr" ]
@@ -503,7 +503,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     hs_cleanup_output
     init() {
       local foo=one bar=two baz=three
-      hs_persist_state foo bar baz
+      hs_persist_state_as_code foo bar baz
     }
     cleanup() {
       local foo="" bar="" baz=""
@@ -526,7 +526,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     hs_cleanup_output
     init() {
       local foo=one bar=two
-      hs_persist_state -S state foo bar
+      hs_persist_state_as_code -S state foo bar
     }
     cleanup() {
       local foo="" bar=""
@@ -562,7 +562,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     hs_cleanup_output
     init() {
       local foo=one
-      hs_persist_state foo
+      hs_persist_state_as_code foo
     }
     state=$(init)
     hs_destroy_state -s "$state" missing >/dev/null

@@ -27,7 +27,7 @@ resolved when the library is sourced.
 Quick Start
 -----------
 
-Source the file once, then use `hs_persist_state` in the init function and
+Source the file once, then use `hs_persist_state_as_code` in the init function and
 `eval` the state in cleanup. For cleaner code, assign to a variable instead of
 capturing stdout.
 
@@ -42,7 +42,7 @@ capturing stdout.
        # Define some opaque library resources
        local temp_file="/tmp/some_temp_file"
        local resource_id="resource_123"
-       hs_persist_state "$@" temp_file resource_id
+       hs_persist_state_as_code "$@" temp_file resource_id
    }
 
    cleanup() {
@@ -104,7 +104,7 @@ so they appear in the main script stdout even when stdout of a subshell is being
 - Usage: `hs_echo "message"`
 - Notes: preserves Bash echo argument concatenation behavior.
 
-hs_persist_state
+hs_persist_state_as_code
 ~~~~~~~~~~~~~~~~
 
 Emits Bash code that restores specified local variables in a receiving scope.
@@ -138,7 +138,7 @@ and refuses to overwrite existing variables. Some library combinations can be
 incompatible with the chaining approach because they use overlapping variable names.
 The alternate solution is to keep and eval separate state snippets for each library.
 
-- Usage: `hs_persist_state [-s <state> | -S <var>] var1 var2 ...`
+- Usage: `hs_persist_state_as_code [-s <state> | -S <var>] var1 var2 ...`
 - Output: a string of Bash code intended to be `eval`'d by the caller (when not assigning to variable).
 - Errors:
   - Refuses to take into account more than one prior state.
@@ -160,7 +160,7 @@ Rebuilds a persisted state snippet while removing specific variable
 definitions from it. This is intended for cleanup paths that need to strip a
 library's own variables from a shared state vector so the same init function
 can later be called again without triggering name-collision errors in
-``hs_persist_state``.
+``hs_persist_state_as_code``.
 
 The function accepts optional ``-s`` or ``-S`` arguments:
 
@@ -179,7 +179,7 @@ must be a valid shell variable name and must already exist in the input state.
   - Detects an invalid variable name passed either to ``-S`` or in the destroy list.
   - Fails if a requested variable is not defined in the input state.
   - Detects corrupt prior state when the input cannot be interpreted as a
-    state snippet emitted by ``hs_persist_state``.
+    state snippet emitted by ``hs_persist_state_as_code``.
 - Guarantees:
   - Rebuilds the resulting state from the surviving variables rather than
     mutating the original text blocks in place.
@@ -191,7 +191,7 @@ This is the typical pattern:
    init_function() {
        local temp_file="/tmp/some_temp_file"
        local resource_id="resource_123"
-       hs_persist_state -S state temp_file resource_id
+       hs_persist_state_as_code -S state temp_file resource_id
    }
 
    cleanup_function() {
@@ -229,7 +229,7 @@ Error Codes
 -----------
 
 - `HS_ERR_RESERVED_VAR_NAME=1`: a reserved variable name was passed to
-  `hs_persist_state`.
+  `hs_persist_state_as_code`.
 - `HS_ERR_VAR_NAME_COLLISION=2`: the requested variable was already defined in
   the state string when persisting.
 
@@ -250,7 +250,7 @@ spawns a background reader that:
 State Persistence
 ~~~~~~~~~~~~~~~~~
 
-`hs_persist_state` captures caller-local variables by name, embeds their values
+`hs_persist_state_as_code` captures caller-local variables by name, embeds their values
 in a guarded assignment snippet, and prints that snippet. The guards ensure that
 only `local` variables are populated in the receiving scope and that non-empty
 locals are not overwritten.
@@ -259,7 +259,7 @@ State Destruction
 ~~~~~~~~~~~~~~~~~
 
 `hs_destroy_state` scans a persisted state snippet for the variable headers
-emitted by `hs_persist_state`, computes the survivor list, then rebuilds the
+emitted by `hs_persist_state_as_code`, computes the survivor list, then rebuilds the
 state from those survivors. This keeps the removal logic centralized in
 `handle_state.sh` and gives libraries a way to reuse a shared state variable
 across several init/cleanup cycles.
@@ -267,7 +267,7 @@ across several init/cleanup cycles.
 Supported Variables
 -------------------
 
-`hs_persist_state` reliably preserves local scalar variables (strings or numbers)
+`hs_persist_state_as_code` reliably preserves local scalar variables (strings or numbers)
 that are defined in the calling scope and re-declared as `local` in the receiving
 scope.
 
@@ -300,7 +300,7 @@ Workarounds
   # In the init function
   local -a myarray=("value1" "value2" "value with spaces"
   encoded=$(printf '%s\0' "${myarray[@]}" | base64 -w0)
-  hs_persist_state encoded
+  hs_persist_state_as_code encoded
   # In the cleanup function
   local state="$1"
   local encoded

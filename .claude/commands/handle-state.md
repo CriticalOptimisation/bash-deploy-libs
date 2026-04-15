@@ -13,7 +13,7 @@ API, warnings, and limitations.
 
 - Source `config/handle_state.sh` once in the main script or library entrypoint.
 - In init/setup or wherever the state information is created, define local scalar
-  variables holding the state, then call `hs_persist_state -S <state_var> <local1> <local2> ...`.
+  variables holding the state, then call `hs_persist_state_as_code -S <state_var> <local1> <local2> ...`.
 - Future libraries using `handle_state` are only required to support `-S`.
 - The state snippet is assigned directly to the specified variable; do not rely on stdout emission as part of a library API.
 - Pass the state variable to cleanup or any API function which needs state information.
@@ -44,7 +44,7 @@ state_producer() {
 
   local temp_file="/tmp/resource"
   local resource_id="abc123"
-  hs_persist_state -S "$_state_var" temp_file resource_id
+  hs_persist_state_as_code -S "$_state_var" temp_file resource_id
 }
 
 state_consumer() {
@@ -59,7 +59,7 @@ state_destroyer() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -s|-S)
-        # Same option shape as hs_persist_state; implementation is expected to
+        # Same option shape as hs_persist_state_as_code; implementation is expected to
         # delegate to a future hs_destroy_state helper.
         break
         ;;
@@ -80,18 +80,18 @@ state_destroyer -S state
 state_producer -S state
 ```
 
-**API Documentation Note**: New libraries should expose `-S` directly and are not required to preserve the older stdout-based calling convention. If a function both consumes and produces state, it can still use `hs_persist_state -S <var>` internally after processing its own arguments.
+**API Documentation Note**: New libraries should expose `-S` directly and are not required to preserve the older stdout-based calling convention. If a function both consumes and produces state, it can still use `hs_persist_state_as_code -S <var>` internally after processing its own arguments.
 
 The same function can begin by consuming some state and terminate producing some other state.
-If it uses the `-s <$state>` option to `hs_persist_state`, that function can append to the
+If it uses the `-s <$state>` option to `hs_persist_state_as_code`, that function can append to the
 supplied state vector rather than producing a new one.
 
 When a library needs to reinitialize against the same state variable after
 cleanup, document a companion `state_destroyer` pattern. Its syntax should
-match `hs_persist_state`, but its implementation should rely on a future
+match `hs_persist_state_as_code`, but its implementation should rely on a future
 `hs_destroy_state` helper to remove the listed variables from the state vector
 before the next producer call. This avoids collision errors from repeated
-`hs_persist_state` calls on the same state variable.
+`hs_persist_state_as_code` calls on the same state variable.
 
 ## Supported Variables
 
@@ -120,7 +120,7 @@ The following behaviors are tracked in GitHub; avoid them or apply workarounds.
 
 ## Safety Notes
 
-- `hs_persist_state` and `hs_read_persisted_state` rely on `eval`; treat state
+- `hs_persist_state_as_code` and `hs_read_persisted_state` rely on `eval`; treat state
   strings as trusted input only.
 - Avoid name collisions when chaining state snippets; prefer separate state
   strings if libraries overlap variable names.

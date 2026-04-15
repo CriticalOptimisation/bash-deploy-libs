@@ -12,13 +12,13 @@
 source "${BASH_SOURCE%/*}/command_guard.sh"
 
 # Library usage:
-#   In an initialization function, call hs_persist_state with the names of local variables
+#   In an initialization function, call hs_persist_state_as_code with the names of local variables
 #   that need to be preserved for later use in a cleanup function.
 # Example:
 #   init_function() {
 #       local temp_file="/tmp/some_temp_file"
 #       local resource_id="resource_123"
-#       hs_persist_state temp_file resource_id
+#       hs_persist_state_as_code temp_file resource_id
 #       exit 0
 #   }
 #   cleanup() {
@@ -196,9 +196,9 @@ _hs_resolve_state_inputs() {
     printf -v "$__consumed_count_ref" '%s' "$__consumed_count"
 }
 
-# --- hs_persist_state ----------------------------------------------------------
+# --- hs_persist_state_as_code ----------------------------------------------------------
 # Function:
-#   hs_persist_state
+#   hs_persist_state_as_code
 # Description:
 #   Emits a bash code snippet that, when eval'd in the receiving scope,
 #   will recreate the specified local variables with their current values.
@@ -208,24 +208,25 @@ _hs_resolve_state_inputs() {
 #   an error message is printed and the assignment is skipped.
 # Arguments:
 #   -s <state> - optional; if provided, appends the emitted code to variable
-#                definitions found in <state> (bash code snippet).
+#                definitions found in <state> (bash code snippet - deprecated).
 #   -S <statevar> - optional; if provided, appends the emitted code to variable
 #                   definitions found in the variable <statevar>. The variable 
 #                   must be empty or uninitialized if -s is also used.
 #   $@ - names of local variables to persist.
 # Usage examples:
 #   # direct eval
-#   state=$(hs_persist_state var1 var2)
+#   local state
+#   hs_persist_state_as_code -S state var1 var2
 #   cleanup() {
 #       local var1 var2
 #       eval "$1"
 #       # vars are available here
 #   }
-hs_persist_state() {
+hs_persist_state_as_code() {
     local __existing_state=""
     local __output_state_var=""
     local __consumed_state_args=0
-    _hs_resolve_state_inputs hs_persist_state __existing_state __output_state_var __consumed_state_args "$@" || return $?
+    _hs_resolve_state_inputs hs_persist_state_as_code __existing_state __output_state_var __consumed_state_args "$@" || return $?
     shift "$__consumed_state_args"
     # Initialize output state string
     local __output=""
@@ -236,7 +237,7 @@ hs_persist_state() {
     for __var_name in "$@"; do
         # Check that the value of __var_name is neither "__var_name" nor "__existing_state"
         if [ "$__var_name" = "__var_name" ] || [ "$__var_name" = "__existing_state" ] || [ "$__var_name" = "__output_state_var" ] || [ "$__var_name" = "__output" ]; then
-            echo "[ERROR] hs_persist_state: refusing to persist reserved variable name '$__var_name'." >&2  
+            echo "[ERROR] hs_persist_state_as_code: refusing to persist reserved variable name '$__var_name'." >&2  
             return "$HS_ERR_RESERVED_VAR_NAME"
         fi
         # Detect name collisions if __existing_state is provided
@@ -245,7 +246,7 @@ hs_persist_state() {
             # and attempt to restore it from "$__existing_state".
             timeout --preserve-status -k 2 1 "${BASH:-bash}" --noprofile -elc "
                 command_not_found_handle() {
-                    echo \"[ERROR] hs_persist_state: command '\$1' not found.\" >&2
+                    echo \"[ERROR] hs_persist_state_as_code: command '\$1' not found.\" >&2
                     exit 127
                 }
                 test_collision() {
@@ -253,7 +254,7 @@ hs_persist_state() {
                     eval \"$__existing_state\" >/dev/null
                     # Check if the variable pointed to by __var_name has been initialized
                     if ! [ -z \"\${${__var_name}+x}\" ]; then
-                        echo \"[ERROR] hs_persist_state: variable '$__var_name' is already defined in the state, with value '\${${__var_name}}'.\" >&2
+                        echo \"[ERROR] hs_persist_state_as_code: variable '$__var_name' is already defined in the state, with value '\${${__var_name}}'.\" >&2
                         exit 1
                     fi
                 }
@@ -262,12 +263,12 @@ hs_persist_state() {
             local status=$?
             if [ $status -eq 124 ] || [ $status -eq 127 ] || [ $status -eq 137 ] || [ $status -eq 143 ]; then
                 # Status code snippet timed out: 124 (timeout), 137 (killed), 127 (command not found), 143 (sigterm)
-                echo "[ERROR] hs_persist_state: prior state is corrupted." >&2
+                echo "[ERROR] hs_persist_state_as_code: prior state is corrupted." >&2
                 return $((HS_ERR_CORRUPT_STATE))
             elif [ $status -eq 1 ]; then
                 return $((HS_ERR_VAR_NAME_COLLISION))
             elif [ $status -ne 0 ]; then
-                echo "[ERROR] hs_persist_state: internal error while checking for variable name collision for '$__var_name'." >&2
+                echo "[ERROR] hs_persist_state_as_code: internal error while checking for variable name collision for '$__var_name'." >&2
                 return $((HS_ERR_CORRUPT_STATE))
             fi
         fi
@@ -323,7 +324,7 @@ fi
 #   }
 hs_destroy_state() {
     # Step 1: resolve the input/output state sources using the same -s/-S
-    # parsing rules as hs_persist_state. After this call:
+    # parsing rules as hs_persist_state_as_code. After this call:
     #   - __existing_state contains the input state snippet to transform
     #   - __output_state_var names the destination variable, if -S was used
     #   - __consumed_state_args tells us how many option arguments to discard
@@ -358,7 +359,7 @@ hs_destroy_state() {
 
     # Step 4: scan the existing state snippet for persisted variable names.
     # We intentionally look only for the top-level headers emitted by
-    # hs_persist_state:
+    # hs_persist_state_as_code:
     #   if local -p VAR >/dev/null 2>&1; then
     # For each discovered variable:
     #   - record it in __state_var_names
@@ -409,10 +410,10 @@ hs_destroy_state() {
     # Instead of editing the text blocks in place, run a fresh Bash subprocess
     # that:
     #   1. defines the minimal helpers needed (_hs_resolve_state_inputs and
-    #      hs_persist_state plus their error-code constants),
+    #      hs_persist_state_as_code plus their error-code constants),
     #   2. declares every survivor variable local,
     #   3. evals the incoming state to restore those locals,
-    #   4. calls the stdout form of hs_persist_state on the survivor list.
+    #   4. calls the stdout form of hs_persist_state_as_code on the survivor list.
     #
     # This avoids depending on BASH_SOURCE or on re-sourcing this file from a
     # filesystem path, which would break when handle_state.sh was obtained via
@@ -431,7 +432,7 @@ hs_destroy_state() {
             readonly HS_ERR_CORRUPT_STATE='"$HS_ERR_CORRUPT_STATE"'
             readonly HS_ERR_INVALID_VAR_NAME='"$HS_ERR_INVALID_VAR_NAME"'
             '"$(declare -f _hs_resolve_state_inputs)"'
-            '"$(declare -f hs_persist_state)"'
+            '"$(declare -f hs_persist_state_as_code)"'
             _hs_destroy_state_rebuild() {
                 local __rebuild_state=$1
                 shift
@@ -440,7 +441,7 @@ hs_destroy_state() {
                     local "$__name"
                 done
                 eval "$__rebuild_state" >/dev/null
-                hs_persist_state "$@"
+                hs_persist_state_as_code "$@"
             }
             _hs_destroy_state_rebuild "$@"
         ' bash "$__existing_state" "${__keep_state_args[@]}")
@@ -458,7 +459,7 @@ hs_destroy_state() {
     fi
 
     # Step 9: emit the rebuilt state using the same stdout / -S convention as
-    # hs_persist_state.
+    # hs_persist_state_as_code.
     if [ -n "$__output_state_var" ]; then
         printf -v "$__output_state_var" '%s' "$__output"
     else
@@ -469,7 +470,7 @@ hs_destroy_state() {
 # Function: 
 #   hs_read_persisted_state
 # Description: 
-#   Emits the state string produced by `hs_persist_state` without evaluating it.
+#   Emits the state string produced by `hs_persist_state_as_code` without evaluating it.
 #   The state is passed by variable name and accessed via a nameref, so callers
 #   do not pass the snippet by value. This function still only returns the
 #   stored code snippet; callers should `eval "$(hs_read_persisted_state state)"`
@@ -478,7 +479,7 @@ hs_destroy_state() {
 #   The referenced state variable contains a bash code snippet that assigns
 #   values to existing local and empty variables in the current scope.
 # Arguments:
-#   $1 - name of the variable holding the state string produced by `hs_persist_state`
+#   $1 - name of the variable holding the state string produced by `hs_persist_state_as_code`
 # Usage examples:
 #   # direct eval
 #   cleanup() {
