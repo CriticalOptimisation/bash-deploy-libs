@@ -13,11 +13,12 @@ API, warnings, and limitations.
 
 - Source `config/handle_state.sh` once in the main script or library entrypoint.
 - In init/setup or wherever the state information is created, define local scalar
-  variables holding the state, then call `hs_persist_state_as_code -S <state_var> <local1> <local2> ...`.
+  variables holding the state, then call
+  `hs_persist_state_as_code "$@" -- <local1> <local2> ...`.
 - Future libraries using `handle_state` are only required to support `-S`.
 - The state snippet is assigned directly to the specified variable; stdout-based state transport is obsolete and should not be supported in library APIs.
 - Pass the state variable to cleanup or any API function which needs state information.
-- In cleanup, declare locals with the same names, then `eval "$state"`.
+- In cleanup, restore the needed locals with `hs_read_persisted_state "$@" -- <local1> <local2> ...`.
 - If the same state variable must be reused across several init/cleanup cycles,
   provide a matching state-destruction path that removes the library's vars
   from the state vector before the next init.
@@ -28,71 +29,40 @@ API, warnings, and limitations.
 ```bash
 source "$(dirname "$0")/config/handle_state.sh"
 
-state_producer() {
-  local _state_var=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -S) shift; _state_var=$1; shift ;;
-      *) echo "[ERROR] state_producer: unknown option '$1'" >&2; return 1 ;;
-    esac
-  done
-
-  [[ -n "$_state_var" ]] || {
-    echo "[ERROR] state_producer: missing required -S <state_var>" >&2
-    return 1
-  }
-
+init_function() {
   local temp_file="/tmp/resource"
   local resource_id="abc123"
-  hs_persist_state_as_code -S "$_state_var" temp_file resource_id
+  hs_persist_state_as_code "$@" -- temp_file resource_id
 }
 
-state_consumer() {
+cleanup_function() {
   local temp_file resource_id
-  eval "$1"
+  hs_read_persisted_state "$@" -- temp_file resource_id
   rm -f "$temp_file"
   echo "Cleaned $resource_id"
-}
-
-state_destroyer() {
-  local _state_var=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -S)
-        # Same option shape as hs_persist_state_as_code; implementation is expected to
-        # delegate to a future hs_destroy_state helper.
-        break
-        ;;
-      *)
-        echo "[ERROR] state_destroyer: unknown option '$1'" >&2
-        return 1
-        ;;
-    esac
-  done
-
-  hs_destroy_state "$@" temp_file resource_id
+  hs_destroy_state "$@" -- temp_file resource_id
 }
 
 local state
-state_producer -S state
-state_consumer "$state"
-state_destroyer -S state
-state_producer -S state
+init_function -S state
+cleanup_function -S state
+init_function -S state
 ```
 
-**API Documentation Note**: New libraries should expose `-S` directly and should not preserve the older stdout-based calling convention. If a function both consumes and produces state, it can still use `hs_persist_state_as_code -S <var>` internally after processing its own arguments.
-
-The same function can begin by consuming some state and terminate producing some other state.
-If it receives a state variable name from the caller, that function can append
-to the supplied state vector by passing the same variable name to
-`hs_persist_state_as_code -S <var>` rather than producing a new one.
+**API Documentation Note**: New libraries should expose `-S` directly and should not preserve the older stdout-based calling convention. Pass the full parameter set to `hs_persist_state_as_code`, `hs_read_persisted_state`, and `hs_destroy_state`, then use `--` as the separator before the list of local variable names.
 
 When a library needs to reinitialize against the same state variable after
-cleanup, document a companion `state_destroyer` pattern. Its syntax should
-match `hs_persist_state_as_code`, but its implementation should rely on a future
-`hs_destroy_state` helper to remove the listed variables from the state vector
-before the next producer call. This avoids collision errors from repeated
-`hs_persist_state_as_code` calls on the same state variable.
+cleanup, the cleanup function must call `hs_destroy_state` to remove the
+library's variables from the state vector before the next init call. This
+avoids collision errors from repeated `hs_persist_state_as_code` calls on the
+same state variable.
+
+If a library function consumes some of its own arguments before calling
+`handle_state`, preserve the remaining parameter list and still pass the full
+residual `"$@"` to the helper. Use `--` before the local variable list so
+future helper options cannot collide with local variable names or parameter
+values. The last `--` is the effective separator; earlier ones may belong to the
+library's own API.
 
 ## Supported Variables
 
@@ -121,8 +91,9 @@ The following behaviors are tracked in GitHub; avoid them or apply workarounds.
 
 ## Safety Notes
 
-- `hs_persist_state_as_code` and `hs_read_persisted_state` rely on `eval`; treat state
-  strings as trusted input only.
+- Avoid direct `eval` of the raw state string in new library code.
+- `hs_persist_state_as_code` and `hs_read_persisted_state` still rely on `eval`
+  internally; treat state strings as trusted input only.
 - Avoid name collisions when chaining state through a shared state variable; prefer separate state
   variables if libraries overlap variable names.
 - Do not require stdout to carry state as part of a library API; reserve stdout for normal user-visible output.
