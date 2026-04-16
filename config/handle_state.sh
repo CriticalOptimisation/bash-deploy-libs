@@ -18,116 +18,23 @@ source "${BASH_SOURCE%/*}/command_guard.sh"
 #   init_function() {
 #       local temp_file="/tmp/some_temp_file"
 #       local resource_id="resource_123"
-#       hs_persist_state_as_code temp_file resource_id
-#       exit 0
+#       hs_persist_state_as_code "$@" temp_file resource_id
+#       return 0
 #   }
 #   cleanup() {
 #       local temp_file
 #       local resource_id
-#       eval "$1"  # Recreate local variables from the state string
+#       hs_read_persisted_state "$@" temp_file resource_id  # Recreate local variables from the state string
 #       # Now temp_file and resource_id are available for cleanup operations
 #       rm -f "$temp_file"
 #       echo "Cleaned up resource: $resource_id"
+#       hs_destroy_state "$@" -- temp_file resource_id  # Ensure the state variable can be reused.
 #   }
 #
 # Upper level usage: state=$(init_function)
 #                    cleanup "$state"
 
-guard mkfifo rm timeout
-
-# --- logging from $(command) using a FIFO ---------------------------------------
-# This section sets up a FIFO and a background reader process to allow functions
-# to log messages to the main script's stdout/stderr even when they are called
-# from subshells (e.g., inside `$(...)` command substitutions). Functions can
-# use `hs_echo "message"` to send messages to the main script's output.
-
-# Function: 
-#   _hs_set_up_logging
-# Description:
-#   Sets up a FIFO and background reader process for logging.
-#   The background reader must start before any I/O redirection occurs. This
-#   is why it is called at the end of this file, so that when this file is sourced,
-#   the logging is set up.
-# Usage:
-#   Do not call directly; called automatically when this file is sourced.
-#   When done with the library, call `hs_cleanup_output` to terminate the background reader
-#   or else a 5 seconds idle timeout will occur.
-hs_setup_output_to_stdout() {
-    # Test if already set up
-    if hs_get_pid_of_subshell >/dev/null 2>&1; then
-        echo "[WARN] hs_setup_output_to_stdout: already set up; skipping." >&2
-        return 0
-    fi
-    # Create a FIFO using a proper temporary file and file descriptor 3 
-    fifo_file=$(mktemp -u)
-    mkfifo "$fifo_file"
-    # Redirect fd 3 into the FIFO
-    exec {_hs_fifo_fd}<> "$fifo_file"
-    # Make file disappear immediately. The FIFO remains accessible via fd 3.
-    rm "$fifo_file"
-    # Kill token
-    _hs_fifo_kill_token="hs_kill_${$}_$RANDOM_$RANDOM"
-    _hs_fifo_idle_limit=5  # seconds before self-termination
-
-    # Run a background task that reads from the FIFO and displays messages
-    (
-        idle=0
-
-        while true; do
-            line=''
-
-            if IFS= read -t 1 -r line <&"${_hs_fifo_fd}"; then
-                # Received a line; reset idle counter
-                idle=0
-                # Self-terminate on the exact magic token
-                if [ "${line:-}" = "${_hs_fifo_kill_token}" ]; then
-                    break
-                fi
-                echo "$line"
-            else
-                # read timed out or encountered EOF/error - increment idle counter
-                idle=$((idle + 1))
-                if [ "$idle" -ge "$_hs_fifo_idle_limit" ]; then
-                    break
-                fi
-                # continue to wait
-            fi
-        done
-        # Dismantle FIFO: close fd
-        exec {_hs_fifo_fd}>&-
-    ) & _hs_fifo_reader_pid=$!
- 
-    # Function:
-    #   hs_cleanup_output, or redefined globally with the kill token embedded.
-    # Description:
-    #   Sends the magic kill token to the logging FIFO to terminate the background reader.
-    #   Waits for the background reader to exit and redefines itself to a no-op.
-    #   Redefines hs_echo to a simple echo.
-    # Parameters:
-    #   None
-    printf -v _hs_qtoken '%q' "$_hs_fifo_kill_token"
-    eval "hs_cleanup_output() {
-        if hs_echo $_hs_qtoken ; then
-            wait $_hs_fifo_reader_pid 2>/dev/null
-            hs_cleanup_output() { :; }
-            hs_echo() { echo \"\$*\" ; }
-        fi
-        return 0
-    }"
-        
-    # Function:
-    #   hs_echo
-    # Description:
-    #   Writes messages to the logging FIFO for display in the main script's stdout.
-    #   Specifically designed to work inside subshells called via `$(...)`.
-    #   Mimic Bash echo argument concatenation behavior.
-    #   Here IFS acts on "$*" expansion to insert spaces between arguments.
-    # Arguments:
-    #   $* - echo options -neE or message parts to echo
-    eval "hs_echo() {
-        IFS=\" \" echo \"\$*\" >&\"${_hs_fifo_fd}\"
-    }"
-}
+guard timeout
 
 # --- Public error codes --------------------------------------------------------
 readonly HS_ERR_RESERVED_VAR_NAME=1
@@ -138,147 +45,6 @@ readonly HS_ERR_INVALID_VAR_NAME=5
 readonly HS_ERR_VAR_NAME_NOT_IN_STATE=6
 readonly HS_ERR_STATE_VAR_UNINITIALIZED=7
 readonly HS_ERR_MISSING_ARGUMENT=8
-
-# --- _hs_is_valid_variable_name -------------------------------------------------------
-# Function:
-#   _hs_is_valid_variable_name
-# Description:
-#   Returns success if the argument is a syntactically valid Bash variable name.
-# Arguments:
-#   $1 - candidate variable name
-# Returns:
-#   0 if the name is valid, 1 otherwise.
-_hs_is_valid_variable_name() {
-    [[ "${1-}" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]
-}
-
-# --- _hs_resolve_state_inputs ---------------------------------------------------------
-# Function:
-#   _hs_resolve_state_inputs
-# Description:
-#   Parses the `-S <statevar>` option for state-oriented helpers and resolves
-#   the current state from the named variable. Parsed results are returned to
-#   the caller through variable names passed as parameters.
-# Arguments:
-#   $1 - caller function name, used in error messages; must be a valid Bash name
-#   $2 - name of the variable that will receive the current state value; must be a valid Bash name
-#   $3 - name of the variable that will receive the destination state variable name; must be a valid Bash name
-#   $4 - name of the variable that will receive the number of consumed option arguments; must be a valid Bash name
-#   $5 - first variable name to process or `-S`
-#   $6... - additional variable names to process, with `-S <statevar>` required somewhere in the argument list
-# Returns:
-#   0 on success.
-#   `HS_ERR_MISSING_ARGUMENT` if fewer than 6 arguments are provided.
-#   `HS_ERR_STATE_VAR_UNINITIALIZED` if no `-S <statevar>` option is provided.
-#   `HS_ERR_INVALID_VAR_NAME` if `-S` is followed by an invalid variable name.
-# Usage:
-#   local existing_state="" output_state_var="" consumed_state_args=0
-#   _hs_resolve_state_inputs my_helper existing_state output_state_var consumed_state_args "$@" || return $?
-_hs_resolve_state_inputs() {
-    if [ $# -lt 6 ]; then
-        echo "[ERROR] _hs_resolve_state_inputs: missing required arguments; expected at least 6 parameters." >&2
-        return "$HS_ERR_MISSING_ARGUMENT"
-    fi
-    local __arg
-    for __arg in "$1" "$2" "$3" "$4"; do
-        if ! _hs_is_valid_variable_name "$__arg"; then
-            echo "[ERROR] _hs_resolve_state_inputs: invalid variable name '$__arg'." >&2
-            return "$HS_ERR_INVALID_VAR_NAME"
-        fi
-    done
-    local __caller_name=$1
-    local -n __existing_state_ref=$2
-    local -n __output_state_var_ref=$3
-    local -n __consumed_count_ref=$4
-    shift 4
-
-    __existing_state_ref=""
-    __output_state_var_ref=""
-    __consumed_count_ref=0
-
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            -S)
-                __output_state_var_ref="$2"
-                if ! _hs_is_valid_variable_name "$__output_state_var_ref"; then
-                    echo "[ERROR] ${__caller_name}: invalid variable name '$__output_state_var_ref' for -S option." >&2
-                    return "$HS_ERR_INVALID_VAR_NAME"
-                fi
-                shift 2
-                __consumed_count_ref=$((__consumed_count_ref + 2))
-                ;;
-            *)
-                if ! _hs_is_valid_variable_name "$1"; then
-                    echo "[ERROR] ${__caller_name}: invalid variable name '$1'." >&2
-                    return "$HS_ERR_INVALID_VAR_NAME"
-                fi
-                shift
-                ;;
-        esac
-    done
-
-    if [ -z "$__output_state_var_ref" ]; then
-        echo "[ERROR] ${__caller_name}: state variable is uninitialized; missing required -S <statevar> option." >&2
-        return "$HS_ERR_STATE_VAR_UNINITIALIZED"
-    fi
-
-    eval "__existing_state_ref=\${$__output_state_var_ref-}"
-}
-
-# --- _hs_extract_persisted_state_var_names -------------------------------------------
-# Function:
-#   _hs_extract_persisted_state_var_names
-# Description:
-#   Parses a code-snippet state produced by `hs_persist_state_as_code` and
-#   extracts the variable names declared by its guarded `if local -p VAR ...`
-#   blocks. Results are returned through an array nameref.
-# Arguments:
-#   $1 - caller function name, used in error messages
-#   $2 - state snippet string to inspect
-#   $3 - name of the array variable that will receive extracted variable names
-# Returns:
-#   0 on success.
-#   `HS_ERR_INVALID_VAR_NAME` if one of the first or third arguments is not a
-#   valid Bash variable name.
-#   `HS_ERR_CORRUPT_STATE` if the snippet contains an invalid persisted variable
-#   name or if the state is non-empty but contains no persisted variable blocks.
-# Usage:
-#   local -a state_var_names=()
-#   _hs_extract_persisted_state_var_names my_helper "$state" state_var_names || return $?
-_hs_extract_persisted_state_var_names() {
-    if [ $# -ne 3 ]; then
-        echo "[ERROR] _hs_extract_persisted_state_var_names: expected exactly 3 arguments." >&2
-        return "$HS_ERR_MISSING_ARGUMENT"
-    fi
-    if ! _hs_is_valid_variable_name "$1" || ! _hs_is_valid_variable_name "$3"; then
-        echo "[ERROR] _hs_extract_persisted_state_var_names: invalid variable name '$1' or '$3'." >&2
-        return "$HS_ERR_INVALID_VAR_NAME"
-    fi
-
-    local __caller_name=$1
-    local __state=$2
-    local -n __out_names_ref=$3
-    local __line=""
-    local __state_var_name=""
-
-    __out_names_ref=()
-    while IFS= read -r __line || [[ -n "$__line" ]]; do
-        if [[ "$__line" == "if local -p "* ]]; then
-            __state_var_name=${__line#if local -p }
-            __state_var_name=${__state_var_name%% *}
-            if ! _hs_is_valid_variable_name "$__state_var_name"; then
-                echo "[ERROR] ${__caller_name}: prior state is corrupted." >&2
-                return "$HS_ERR_CORRUPT_STATE"
-            fi
-            __out_names_ref+=("$__state_var_name")
-        fi
-    done <<< "$__state"
-
-    if [[ -n "$__state" && ${#__out_names_ref[@]} -eq 0 ]]; then
-        echo "[ERROR] ${__caller_name}: prior state is corrupted." >&2
-        return "$HS_ERR_CORRUPT_STATE"
-    fi
-}
 
 # --- hs_persist_state_as_code ----------------------------------------------------------
 # Function:
@@ -480,6 +246,7 @@ hs_destroy_state() {
             readonly HS_ERR_MULTIPLE_STATE_INPUTS='"$HS_ERR_MULTIPLE_STATE_INPUTS"'
             readonly HS_ERR_CORRUPT_STATE='"$HS_ERR_CORRUPT_STATE"'
             readonly HS_ERR_INVALID_VAR_NAME='"$HS_ERR_INVALID_VAR_NAME"'
+            '"$(declare -f _hs_is_valid_variable_name)"'
             '"$(declare -f _hs_resolve_state_inputs)"'
             '"$(declare -f hs_persist_state_as_code)"'
             _hs_destroy_state_rebuild() {
@@ -656,6 +423,173 @@ hs_read_persisted_state() {
 }
 
 # --- Utility functions --------------------------------------------------------
+
+# Function:
+#   _hs_is_valid_variable_name
+# Description:
+#   Returns success if the argument is a syntactically valid Bash variable name.
+# Arguments:
+#   $1 - candidate variable name
+# Returns:
+#   0 if the name is valid, 1 otherwise.
+_hs_is_valid_variable_name() {
+    [[ "${1-}" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]
+}
+
+# Function:
+#   _hs_resolve_state_inputs
+# Description:
+#   Parses the `-S <statevar>` option for state-oriented helpers and resolves
+#   the current state from the named variable. Parsed results are returned to
+#   the caller through variable names passed as parameters.
+# Arguments:
+#   $1 - caller function name, used in error messages; must be a valid Bash name
+#   $2 - name of the variable that will receive the current state value; must be a valid Bash name
+#   $3 - name of the variable that will receive the destination state variable name; must be a valid Bash name
+#   $4 - name of the variable that will receive the number of consumed option arguments; must be a valid Bash name
+#   $5 - first variable name to process or `-S`
+#   $6... - additional variable names to process, with `-S <statevar>` required somewhere in the argument list
+# Returns:
+#   0 on success.
+#   `HS_ERR_MISSING_ARGUMENT` if fewer than 6 arguments are provided.
+#   `HS_ERR_STATE_VAR_UNINITIALIZED` if no `-S <statevar>` option is provided.
+#   `HS_ERR_INVALID_VAR_NAME` if `-S` is followed by an invalid variable name.
+# Usage:
+#   local existing_state="" output_state_var="" consumed_state_args=0
+#   _hs_resolve_state_inputs my_helper existing_state output_state_var consumed_state_args "$@" || return $?
+_hs_resolve_state_inputs() {
+    if [ $# -lt 6 ]; then
+        echo "[ERROR] _hs_resolve_state_inputs: missing required arguments; expected at least 6 parameters." >&2
+        return "$HS_ERR_MISSING_ARGUMENT"
+    fi
+    local __arg
+    for __arg in "$1" "$2" "$3" "$4"; do
+        if ! _hs_is_valid_variable_name "$__arg"; then
+            echo "[ERROR] _hs_resolve_state_inputs: invalid variable name '$__arg'." >&2
+            return "$HS_ERR_INVALID_VAR_NAME"
+        fi
+    done
+    local __caller_name=$1
+    local -n __existing_state_ref=$2
+    local -n __output_state_var_ref=$3
+    local -n __consumed_count_ref=$4
+    shift 4
+
+    __existing_state_ref=""
+    __output_state_var_ref=""
+    __consumed_count_ref=0
+
+    local -a __args=("$@")
+    local __arg_count=${#__args[@]}
+    local __last_separator_index=-1
+    local __i=0
+    local __parse_limit=$__arg_count
+
+    # If one or more `--` markers are present, the last one separates the
+    # forwarded helper options from the explicit list of variable names.
+    for ((__i = 0; __i < __arg_count; __i++)); do
+        if [[ "${__args[__i]}" == "--" ]]; then
+            __last_separator_index=$__i
+        fi
+    done
+
+    if (( __last_separator_index >= 0 )); then
+        __consumed_count_ref=$((__last_separator_index + 1))
+        __parse_limit=$__last_separator_index
+    else
+        __consumed_count_ref=2
+    fi
+
+    # Before the effective separator, only helper options are recognized.
+    # Any other forwarded arguments belong to the caller and are ignored here.
+    for ((__i = 0; __i < __parse_limit; __i++)); do
+        case "${__args[__i]}" in
+            -S)
+                if (( __i + 1 >= __parse_limit )); then
+                    echo "[ERROR] ${__caller_name}: missing required state variable name for -S option." >&2
+                    return "$HS_ERR_MISSING_ARGUMENT"
+                fi
+                __output_state_var_ref="${__args[__i + 1]}"
+                if ! _hs_is_valid_variable_name "$__output_state_var_ref"; then
+                    echo "[ERROR] ${__caller_name}: invalid variable name '$__output_state_var_ref' for -S option." >&2
+                    return "$HS_ERR_INVALID_VAR_NAME"
+                fi
+                ((__i++))
+                ;;
+        esac
+    done
+
+    # After the effective separator, every token is part of the variable list.
+    # Without a separator, this validates the traditional trailing "$@" list.
+    for ((__i = __consumed_count_ref; __i < __arg_count; __i++)); do
+        if ! _hs_is_valid_variable_name "${__args[__i]}"; then
+            echo "[ERROR] ${__caller_name}: invalid variable name '${__args[__i]}'." >&2
+            return "$HS_ERR_INVALID_VAR_NAME"
+        fi
+    done
+
+    if [ -z "$__output_state_var_ref" ]; then
+        echo "[ERROR] ${__caller_name}: state variable is uninitialized; missing required -S <statevar> option." >&2
+        return "$HS_ERR_STATE_VAR_UNINITIALIZED"
+    fi
+
+    eval "__existing_state_ref=\${$__output_state_var_ref-}"
+}
+
+# Function:
+#   _hs_extract_persisted_state_var_names
+# Description:
+#   Parses a code-snippet state produced by `hs_persist_state_as_code` and
+#   extracts the variable names declared by its guarded `if local -p VAR ...`
+#   blocks. Results are returned through an array nameref.
+# Arguments:
+#   $1 - caller function name, used in error messages
+#   $2 - state snippet string to inspect
+#   $3 - name of the array variable that will receive extracted variable names
+# Returns:
+#   0 on success.
+#   `HS_ERR_INVALID_VAR_NAME` if one of the first or third arguments is not a
+#   valid Bash variable name.
+#   `HS_ERR_CORRUPT_STATE` if the snippet contains an invalid persisted variable
+#   name or if the state is non-empty but contains no persisted variable blocks.
+# Usage:
+#   local -a state_var_names=()
+#   _hs_extract_persisted_state_var_names my_helper "$state" state_var_names || return $?
+_hs_extract_persisted_state_var_names() {
+    if [ $# -ne 3 ]; then
+        echo "[ERROR] _hs_extract_persisted_state_var_names: expected exactly 3 arguments." >&2
+        return "$HS_ERR_MISSING_ARGUMENT"
+    fi
+    if ! _hs_is_valid_variable_name "$1" || ! _hs_is_valid_variable_name "$3"; then
+        echo "[ERROR] _hs_extract_persisted_state_var_names: invalid variable name '$1' or '$3'." >&2
+        return "$HS_ERR_INVALID_VAR_NAME"
+    fi
+
+    local __caller_name=$1
+    local __state=$2
+    local -n __out_names_ref=$3
+    local __line=""
+    local __state_var_name=""
+
+    __out_names_ref=()
+    while IFS= read -r __line || [[ -n "$__line" ]]; do
+        if [[ "$__line" == "if local -p "* ]]; then
+            __state_var_name=${__line#if local -p }
+            __state_var_name=${__state_var_name%% *}
+            if ! _hs_is_valid_variable_name "$__state_var_name"; then
+                echo "[ERROR] ${__caller_name}: prior state is corrupted." >&2
+                return "$HS_ERR_CORRUPT_STATE"
+            fi
+            __out_names_ref+=("$__state_var_name")
+        fi
+    done <<< "$__state"
+
+    if [[ -n "$__state" && ${#__out_names_ref[@]} -eq 0 ]]; then
+        echo "[ERROR] ${__caller_name}: prior state is corrupted." >&2
+        return "$HS_ERR_CORRUPT_STATE"
+    fi
+}
+
 # Function:
 #    hs_get_pid_of_subshell
 # Description:
@@ -681,8 +615,5 @@ hs_get_pid_of_subshell() {
     pid=${pid%%[^0-9]*}
     printf '%s' "$pid"
 }
-
-# Initialize logging when the script is sourced
-hs_setup_output_to_stdout
 
 # Note: Remember to call hs_cleanup at the end of your main script to clean up resources.
