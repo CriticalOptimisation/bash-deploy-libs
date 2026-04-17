@@ -260,41 +260,44 @@ hs_destroy_state() {
     # Step 5: rebuild the state from scratch using only the survivor names.
     # Instead of editing the text blocks in place, run a fresh Bash subprocess
     # that:
-    #   1. defines the minimal helpers needed (_hs_resolve_state_inputs and
-    #      hs_persist_state_as_code plus their error-code constants),
+    #   1. inherits the minimal exported helpers and error-code constants
+    #      required by _hs_resolve_state_inputs and hs_persist_state_as_code,
     #   2. declares every survivor variable local,
     #   3. evals the incoming state to restore those locals,
     #   4. calls the stdout form of hs_persist_state_as_code on the survivor list.
     #
-    # This avoids depending on BASH_SOURCE or on re-sourcing this file from a
-    # filesystem path, which would break when handle_state.sh was obtained via
-    # remote_run's virtual source mechanism.
+    # Exporting the needed helpers avoids embedding their full function bodies
+    # with declare -f while still keeping the subprocess independent from the
+    # caller's test harness or shell startup files.
     local -a __keep_state_args=("${!__state_var_set[@]}")
     if (( ${#__keep_state_args[@]} > 0 )); then
 
-        __output=$(timeout --preserve-status -k 2 1 "${BASH:-bash}" --noprofile -lc '
-            readonly HS_ERR_RESERVED_VAR_NAME='"$HS_ERR_RESERVED_VAR_NAME"'
-            readonly HS_ERR_VAR_NAME_COLLISION='"$HS_ERR_VAR_NAME_COLLISION"'
-            readonly HS_ERR_MULTIPLE_STATE_INPUTS='"$HS_ERR_MULTIPLE_STATE_INPUTS"'
-            readonly HS_ERR_CORRUPT_STATE='"$HS_ERR_CORRUPT_STATE"'
-            readonly HS_ERR_INVALID_VAR_NAME='"$HS_ERR_INVALID_VAR_NAME"'
-            '"$(declare -f _hs_is_valid_variable_name)"'
-            '"$(declare -f _hs_resolve_state_inputs)"'
-            '"$(declare -f hs_persist_state_as_code)"'
-            _hs_destroy_state_rebuild() {
-                local __rebuild_state=$1
-                shift
-                local __name
-                local __rebuilt_state=""
-                for __name in "$@"; do
-                    local "$__name"
-                done
-                eval "$__rebuild_state" >/dev/null
-                hs_persist_state_as_code -S __rebuilt_state "$@"
-                printf '%s' "$__rebuilt_state"
-            }
-            _hs_destroy_state_rebuild "$@"
-        ' bash "$__existing_state" "${__keep_state_args[@]}")
+        __output=$(
+            (
+                export HS_ERR_RESERVED_VAR_NAME HS_ERR_VAR_NAME_COLLISION \
+                    HS_ERR_MULTIPLE_STATE_INPUTS HS_ERR_CORRUPT_STATE \
+                    HS_ERR_INVALID_VAR_NAME HS_ERR_STATE_VAR_UNINITIALIZED \
+                    HS_ERR_INVALID_ARGUMENT_TYPE
+                declare -fx _hs_is_array _hs_is_valid_variable_name \
+                    _hs_resolve_state_inputs hs_persist_state_as_code
+
+                timeout --preserve-status -k 2 1 "${BASH:-bash}" --noprofile -lc '
+                    _hs_destroy_state_rebuild() {
+                        local __rebuild_state=$1
+                        shift
+                        local __name
+                        local __rebuilt_state=""
+                        for __name in "$@"; do
+                            local "$__name"
+                        done
+                        eval "$__rebuild_state" >/dev/null
+                        hs_persist_state_as_code -S __rebuilt_state "$@"
+                        printf "%s" "$__rebuilt_state"
+                    }
+                    _hs_destroy_state_rebuild "$@"
+                ' bash "$__existing_state" "${__keep_state_args[@]}"
+            )
+        )
         local __status=$?
         # Step 6: map rebuild failures to the same "corrupt prior state"
         # category used elsewhere in handle_state when we cannot safely process
