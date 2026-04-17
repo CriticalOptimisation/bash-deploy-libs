@@ -104,6 +104,8 @@ The emitted snippet only assigns values if the target variable is declared
 The function requires the `-S` argument:
 
 - `-S <var>`: Assigns the state (appended to any existing content in `<var>`) to the variable named `<var>`.
+- ``--``: optional separator; if present, the last occurrence marks the start
+  of the explicit list of local variable names.
 
 .. warning::
    When using `-S` with a variable name, the function will `eval` the current contents of that variable during collision checking. Callers must ensure the variable contains only safe, trusted Bash code or is empty/unset to avoid execution of harmful code.
@@ -122,7 +124,7 @@ and refuses to overwrite existing variables. Some library combinations can be
 incompatible with the chaining approach because they use overlapping variable names.
 The alternate solution is to keep separate state variables for each library.
 
-- Usage: `hs_persist_state_as_code -S <var> var1 var2 ...`
+- Usage: `hs_persist_state_as_code -S <var> -- var1 var2 ...`
 - Output: writes a string of Bash code intended to be `eval`'d by the caller into `<var>`.
 - Errors:
   - Detects an invalid variable name passed to option `-S`.
@@ -149,11 +151,14 @@ The function requires the ``-S`` argument:
 
 - ``-S <var>``: reads the input state from variable ``<var>``, removes the
   listed variables, and writes the rebuilt state back into ``<var>``.
+- ``--``: optional separator; if present, the last occurrence marks the start
+  of the explicit list of local variable names.
 
-The arguments after the options are the variable names to destroy. Each name
-must be a valid shell variable name and must already exist in the input state.
+The arguments after the effective separator are the variable names to destroy.
+Each name must be a valid shell variable name and must already exist in the
+input state.
 
-- Usage: ``hs_destroy_state -S <var> var1 var2 ...``
+- Usage: ``hs_destroy_state -S <var> -- var1 var2 ...``
 - Output: rewrites ``<var>`` with a rebuilt Bash state snippet with the requested variables removed.
 - Errors:
   - Detects an invalid variable name passed either to ``-S`` or in the destroy list.
@@ -171,14 +176,14 @@ This is the typical pattern:
    init_function() {
        local temp_file="/tmp/some_temp_file"
        local resource_id="resource_123"
-       hs_persist_state_as_code -S state temp_file resource_id
+       hs_persist_state_as_code -S state -- temp_file resource_id
    }
 
    cleanup_function() {
        local temp_file resource_id
        eval "$state"
        rm -f "$temp_file"
-       hs_destroy_state -S state temp_file resource_id
+       hs_destroy_state -S state -- temp_file resource_id
    }
 
 After ``cleanup_function`` has removed its own variables from ``state``, a
@@ -191,8 +196,8 @@ hs_read_persisted_state
 `hs_read_persisted_state` reads state from a named state variable. It supports
 two modes:
 
-- Explicit restore: ``hs_read_persisted_state state foo bar``
-- Probe-snippet generation: ``eval "$(hs_read_persisted_state state)"``
+- Explicit restore: ``hs_read_persisted_state -S state -- foo bar``
+- Probe-snippet generation: ``eval "$(hs_read_persisted_state -S state)"``
 
 Explicit restore is the preferred API. The caller names exactly which variables
 must be restored, and `hs_read_persisted_state` writes those values into the
@@ -275,8 +280,8 @@ State Restoration
 
 `hs_read_persisted_state` should usually be used in one of these forms:
 
-- ``hs_read_persisted_state state foo bar``
-- ``eval "$(hs_read_persisted_state state)"``
+- ``hs_read_persisted_state -S state -- foo bar``
+- ``eval "$(hs_read_persisted_state -S state)"``
 
 The first form is preferred because it is explicit and does not require the
 caller to execute the transmitted state snippet. The second form exists for the
@@ -323,14 +328,14 @@ Workarounds
   # In the cleanup function
   local state_var="$1"
   local encoded
-  hs_read_persisted_state "$state_var" encoded
+  hs_read_persisted_state -S "$state_var" -- encoded
   declare -a newarray
   mapfile -d '' -t newarray < <(printf '%s' "$encoded" | base64 -d)
 Caveats
 -------
 
-- Prefer ``hs_read_persisted_state state var1 var2`` over direct ``eval``.
-- If you use ``eval "$(hs_read_persisted_state state)"``, declare target
+- Prefer ``hs_read_persisted_state -S state -- var1 var2`` over direct ``eval``.
+- If you use ``eval "$(hs_read_persisted_state -S state)"``, declare target
   variables ``local`` first and remember that only the immediate caller scope
   is probed automatically.
 - Direct ``eval "$state"`` should be avoided in library code unless you are

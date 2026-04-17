@@ -48,39 +48,54 @@ readonly HS_ERR_MISSING_ARGUMENT=8
 
 # --- hs_persist_state_as_code ----------------------------------------------------------
 # Function:
-#   hs_persist_state_as_code
+#   hs_persist_state_as_code [options] [--] [state_variable ...]
 # Description:
-#   Emits a bash code snippet that, when eval'd in the receiving scope,
-#   will recreate the specified local variables with their current values.
-#   The emitted code checks if the variable is declared `local` in the receiving
-#   scope before assigning to it, to avoid polluting global scope.
-#   If the variable already exists and is non-empty in the receiving scope,
-#   an error message is printed and the assignment is skipped.
+#   Produces an opaque state object that preserves the current values of the
+#   specified local variables for later restoration via
+#   `hs_read_persisted_state`.
+#   The current implementation stores that state as guarded Bash code, but
+#   callers should treat the resulting value as internal transport data rather
+#   than as a public snippet format.
+#   Restoration only initializes matching `local` variables in the receiving
+#   scope and skips variables that are already non-empty there.
+# Options:
+#   -S <state> - pass the state object by name, mandatory.
+#   Other options are ignored up to the last --, so this function is usually able
+#   to directly process its caller's argument list, future-proofing it against
+#   new hs_persist_state_as_code options.
+#   -- - marks the end of options and the beginning of the list of variable names.
 # Arguments:
-#   -S <statevar> - required; appends the emitted code to variable
-#                   definitions found in the variable <statevar>.
-#   $@ - names of local variables to persist.
+#   $@ - names of local variables to persist. Without `--`, the trailing
+#        arguments that are valid Bash identifiers are treated as the variable list.
+#        Note that the value associated with the last given option will be mistaken
+#        for a variable unless `--` is used.
+# Errors:
+#   - Rejects a missing `-S` option.
+#   - Rejects an invalid variable name.
+#   - Rejects collisions with variables already present in the prior state.
 # Usage examples:
 #   local state
-#   hs_persist_state_as_code -S state var1 var2
-#   cleanup() {
+#   init() {
 #       local var1 var2
-#       eval "$1"
-#       # vars are available here
+#       hs_persist_state_as_code "$@" -- var1 var2
 #   }
+#
+#   init -S state
 hs_persist_state_as_code() {
-    local __existing_state=""
-    local __output_state_var=""
-    local __consumed_state_args=0
-    _hs_resolve_state_inputs hs_persist_state_as_code __existing_state __output_state_var __consumed_state_args "$@" || return $?
-    shift "$__consumed_state_args"
+    local -a __remaining_args=()
+    local -A __processed_args=()
+    _hs_resolve_state_inputs hs_persist_state_as_code __remaining_args S: __processed_args "$@" || return $?
+    local __output_state_var="${__processed_args[state]}"
+    local __existing_state="${!__output_state_var-}"
+    local -a __persist_var_args=()
+    read -r -a __persist_var_args <<< "${__processed_args[vars]-}"
     # Initialize output state string
     local __output=""
     if [ -n "$__existing_state" ]; then
         __output="$__existing_state"
     fi
     local __var_name
-    for __var_name in "$@"; do
+    for __var_name in "${__persist_var_args[@]}"; do
         # Check that the value of __var_name is neither "__var_name" nor "__existing_state"
         if [ "$__var_name" = "__var_name" ] || [ "$__var_name" = "__existing_state" ] || [ "$__var_name" = "__output_state_var" ] || [ "$__var_name" = "__output" ]; then
             echo "[ERROR] hs_persist_state_as_code: refusing to persist reserved variable name '$__var_name'." >&2  
@@ -147,19 +162,29 @@ fi
 
 # --- hs_destroy_state ---------------------------------------------------------------
 # Function:
-#   hs_destroy_state
+#   hs_destroy_state [options] [--] [state_variable ...]
 # Description:
-#   Purge the state string from the given definitions. In the cleanup function
-#   of a library, the state vector should be stripped of that library's state
-#   variables, so that the init function can be called again without triggering
-#   name collision errors.
+#   Removes the specified local variables from an opaque state object.
+#   In a cleanup function, this allows the same state variable to be reused by
+#   a later init call without triggering name-collision errors.
+# Options:
+#   -S <state> - pass the state object by name, mandatory.
+#   Other options are ignored up to the last --, so this function is usually able
+#   to directly process its caller's argument list, future-proofing it against
+#   new hs_destroy_state options.
+#   -- - marks the end of options and the beginning of the list of variable names.
 # Arguments:
-#   -S <statevar> - required; reads and rewrites the state held in
-#                   the variable <statevar>.
-#   $@ - names of local variables to destroy.
+#   $@ - names of local variables to destroy. Without `--`, the trailing
+#        arguments that are valid Bash identifiers are treated as the variable list.
+#        Note that the value associated with the last given option will be mistaken
+#        for a variable unless `--` is used.
+# Errors:
+#   - Rejects a missing `-S` option.
+#   - Rejects an invalid variable name.
+#   - Rejects destroy requests for variables not present in the state object.
 # Usage examples:
-#   mylib_cleanup() {
-#       hs_destroy_state -S state mylib_statevar1 mylibstatevar2
+#   cleanup_function() {
+#       hs_destroy_state "$@" -- mylib_statevar1 mylib_statevar2
 #   }
 hs_destroy_state() {
     # Step 1: resolve the input/output state sources using the same -S-only
@@ -168,11 +193,13 @@ hs_destroy_state() {
     #   - __output_state_var names the destination variable, if -S was used
     #   - __consumed_state_args tells us how many option arguments to discard
     #     before "$@" contains only variable names to destroy.
-    local __existing_state=""
-    local __output_state_var=""
-    local __consumed_state_args=0
-    _hs_resolve_state_inputs hs_destroy_state __existing_state __output_state_var __consumed_state_args "$@" || return $?
-    shift "$__consumed_state_args"
+    local -a __remaining_args=()
+    local -A __processed_args=()
+    _hs_resolve_state_inputs hs_destroy_state __remaining_args S: __processed_args "$@" || return $?
+    local __output_state_var="${__processed_args[state]}"
+    local __existing_state="${!__output_state_var-}"
+    local -a __destroy_var_args=()
+    read -r -a __destroy_var_args <<< "${__processed_args[vars]-}"
 
     # Step 2: set up working variables.
     # __state_var_names will contain every variable name found in the incoming
@@ -194,7 +221,7 @@ hs_destroy_state() {
     _hs_extract_persisted_state_var_names hs_destroy_state "$__existing_state" __state_var_names || return $?
     for __state_var in "${__state_var_names[@]}"; do
         __state_var_found=false
-        for __var_name in "$@"; do
+        for __var_name in "${__destroy_var_args[@]}"; do
             if [[ "$__var_name" == "$__state_var" ]]; then
                 __state_var_found=true
                 break
@@ -207,7 +234,7 @@ hs_destroy_state() {
 
     # Step 5: every requested variable must actually exist in the incoming
     # state. If a requested name is absent, return HS_ERR_INVALID_VAR_NAME.
-    for __var_name in "$@"; do
+    for __var_name in "${__destroy_var_args[@]}"; do
         __state_var_found=false
         for __state_var in "${__state_var_names[@]}"; do
             if [[ "$__state_var" == "$__var_name" ]]; then
@@ -281,69 +308,124 @@ hs_destroy_state() {
 }
 # --- hs_read_persisted_state --------------------------------------------------------
 # Function: 
-#   hs_read_persisted_state
+#   hs_read_persisted_state [options] [--] [state_variable ...]
 # Description: 
-#   Emits the state string produced by `hs_persist_state_as_code` without evaluating it.
-#   The state is passed by variable name and accessed via a nameref, so callers
-#   do not pass the snippet by value. This function still only returns the
-#   stored code snippet; callers should `eval "$(hs_read_persisted_state state)"`
-#   or simply `eval "$state"` to recreate variables in the caller scope.
+#   Restores values from the opaque state object produced by
+#   `hs_persist_state_as_code`.
 #   For convenience, callers may pass either `state` or `-S state`.
-#   Can be called several times to extract distinct variables.
-#   The referenced state variable contains a bash code snippet that assigns
-#   values to existing local and empty variables in the current scope.
+#   When explicit variable names are provided, those named locals are restored
+#   directly into the current caller scope.
+#   Without an explicit list, the function emits a safe, locally generated probe
+#   snippet that reenters `hs_read_persisted_state` with the names of matching
+#   empty locals found in the immediate caller scope.
+# Options:
+#   -q - suppresses the warning that is normally emitted when a requested
+#        state variable is not present in the state object.
+#   -S <state> - pass the state object by name, mandatory.
+#   Other options are ignored up to the last --, so this function is usually able
+#   to directly process its caller's argument list, future-prooving it against
+#   new hs_read_persisted_state options.
+#   -- - marks the end of options and the beginning of the list of variable names.
 # Arguments:
-#   $1 - name of the variable holding the state string produced by `hs_persist_state_as_code`,
-#        or `-S`
-#   $2 - state variable name when `$1` is `-S`
+#   $@ - names of local variables to restore. Without `--`, the trailing
+#        arguments that are valid Bash identifiers are treated as the variable list.
+#        Note that the detached value associated with the last given option will be mistaken
+#        for a variable unless that option is known or `--` is used.
 # Errors:
-#   - Rejects a missing first argument.
+#   - Rejects a missing `-S` option.
 #   - Rejects an invalid variable name.
-#   - Rejects a valid variable name that does not refer to an existing,
-#     non-empty state variable.
+#   - Rejects a state variable that is missing, unset, or empty.
 # Usage examples:
-#   # direct eval
 #   cleanup() {
 #       local state_var="$1"
-#       local -n state_ref="$state_var"
 #       local temp_file resource_id
-#       eval "$state_ref"
-#       # vars are available here
+#       hs_read_persisted_state -S "$state_var" -- temp_file resource_id
 #   }
-#
-#   # helper wrapper form (prints state; caller evals it in its own scope)
+#   # Better: keeps -S convention for cleanup().
 #   cleanup() {
-#       local state="$1"
 #       local temp_file resource_id
-#       eval "$(hs_read_persisted_state state)"
+#       hs_read_persisted_state -q "$@" -- temp_file resource_id
 #   }
 hs_read_persisted_state() {
     # Step 1: parse hs_read_persisted_state-specific flags before delegating
     # the shared state-input handling to _hs_resolve_state_inputs.
     local __quiet=false
-    while [ $# -gt 0 ] && [ "${1-}" = "-q" ]; do
-        __quiet=true
-        shift
-    done
-
     if [ $# -eq 0 ]; then
         echo "[ERROR] hs_read_persisted_state: missing required state variable name." >&2
         return "$HS_ERR_MISSING_ARGUMENT"
     fi
 
+    local -a __args=("$@")
+    local -a __prefix_args=()
+    local -a __suffix_args=()
+    local -a __filtered_prefix_args=()
+    local __arg_count=${#__args[@]}
+    local __last_separator_index=-1
+    local __i=0
+
+    for ((__i = 0; __i < __arg_count; __i++)); do
+        if [[ "${__args[__i]}" == "--" ]]; then
+            __last_separator_index=$__i
+        fi
+    done
+
+    if (( __last_separator_index >= 0 )); then
+        __prefix_args=("${__args[@]:0:__last_separator_index}")
+        __suffix_args=("${__args[@]:__last_separator_index+1}")
+    else
+        __prefix_args=("${__args[@]}")
+    fi
+
+    set -- "${__prefix_args[@]}"
+    local OPTIND=1
+    local opt
+    while (( OPTIND <= $# )); do
+        if getopts ":qS:" opt; then
+            case "$opt" in
+                q)
+                    __quiet=true
+                    ;;
+                :)
+                    if [[ "$OPTARG" == "S" ]]; then
+                        echo "[ERROR] hs_read_persisted_state: missing required state variable name for -S option." >&2
+                        return "$HS_ERR_MISSING_ARGUMENT"
+                    fi
+                    ;;
+                \?)
+                    :
+                    ;;
+            esac
+        else
+            OPTIND=$((OPTIND + 1))
+        fi
+    done
+
+    local __prefix_arg=""
+    for __prefix_arg in "${__prefix_args[@]}"; do
+        if [[ "$__prefix_arg" != "-q" ]]; then
+            __filtered_prefix_args+=("$__prefix_arg")
+        fi
+    done
+
+    set -- "${__filtered_prefix_args[@]}"
+    if (( __last_separator_index >= 0 )); then
+        set -- "$@" -- "${__suffix_args[@]}"
+    fi
     if [ "${1-}" != "-S" ]; then
         set -- -S "$@"
     fi
-
     # Step 2: resolve the named state variable and capture its current payload.
     # The helper validates names, enforces the presence of -S, and returns:
     #   - __existing_state: the current serialized state snippet
     #   - __output_state_var: the caller-visible variable name holding that state
     #   - __consumed_state_args: how many leading arguments belong to state input
-    local __existing_state=""
-    local __output_state_var=""
-    local __consumed_state_args=0
-    _hs_resolve_state_inputs hs_read_persisted_state __existing_state __output_state_var __consumed_state_args "$@" || return $?
+    local -a __remaining_args=()
+    local -A __processed_args=()
+    _hs_resolve_state_inputs hs_read_persisted_state __remaining_args S: __processed_args "$@" || return $?
+    local __output_state_var="${__processed_args[state]}"
+    local __existing_state="${!__output_state_var-}"
+    local -a __requested_var_args=()
+    read -r -a __requested_var_args <<< "${__processed_args[vars]-}"
 
     if [ -z "$__existing_state" ]; then
         echo "[ERROR] hs_read_persisted_state: state variable '$__output_state_var' is not set or is empty." >&2
@@ -353,13 +435,11 @@ hs_read_persisted_state() {
     # Step 3: if the caller listed variable names after the state input, restore
     # only those variables directly into the caller scope. This is the explicit
     # selective-restore API.
-    if [ $# -ne "$__consumed_state_args" ]; then
-        shift "$__consumed_state_args"
-
+    if [ ${#__requested_var_args[@]} -gt 0 ]; then
         local __requested_var
         local __restored_value=""
         local __restore_status=0
-        for __requested_var in "$@"; do
+        for __requested_var in "${__requested_var_args[@]}"; do
             # Evaluate the persisted state in a short-lived Bash subprocess,
             # scoped to one requested variable, then print the resulting value
             # back to this function. The subprocess is isolated and time-bounded
@@ -444,11 +524,12 @@ _hs_is_valid_variable_name() {
 #   the caller through variable names passed as parameters.
 # Arguments:
 #   $1 - caller function name, used in error messages; must be a valid Bash name
-#   $2 - name of the variable that will receive the current state value; must be a valid Bash name
-#   $3 - name of the variable that will receive the destination state variable name; must be a valid Bash name
-#   $4 - name of the variable that will receive the number of consumed option arguments; must be a valid Bash name
-#   $5 - first variable name to process or `-S`
-#   $6... - additional variable names to process, with `-S <statevar>` required somewhere in the argument list
+#   $2 - name of the array variable that will receive the unprocessed arguments; must be a valid Bash name
+#   $3 - getopts format string of accepted parameters; e.g. qS::
+#   $4 - name of the associative array variable that will receive the processed arguments; must be a valid Bash name
+#   $5 - first forwarded argument option
+#   $6... - additional forwarded arguments; if `--` is present, its last
+#           occurrence marks the start of the explicit variable-name list
 # Returns:
 #   0 on success.
 #   `HS_ERR_MISSING_ARGUMENT` if fewer than 6 arguments are provided.
@@ -458,82 +539,112 @@ _hs_is_valid_variable_name() {
 #   local existing_state="" output_state_var="" consumed_state_args=0
 #   _hs_resolve_state_inputs my_helper existing_state output_state_var consumed_state_args "$@" || return $?
 _hs_resolve_state_inputs() {
-    if [ $# -lt 6 ]; then
-        echo "[ERROR] _hs_resolve_state_inputs: missing required arguments; expected at least 6 parameters." >&2
+    if [ $# -lt 4 ]; then
+        echo "[ERROR] $1: missing required arguments; expected at least 4 parameters." >&2
         return "$HS_ERR_MISSING_ARGUMENT"
     fi
     local __arg
-    for __arg in "$1" "$2" "$3" "$4"; do
+    for __arg in "$1" "$2" "$4"; do
         if ! _hs_is_valid_variable_name "$__arg"; then
-            echo "[ERROR] _hs_resolve_state_inputs: invalid variable name '$__arg'." >&2
+            echo "[ERROR] $1: invalid variable name '$__arg'." >&2
             return "$HS_ERR_INVALID_VAR_NAME"
         fi
     done
     local __caller_name=$1
-    local -n __existing_state_ref=$2
-    local -n __output_state_var_ref=$3
-    local -n __consumed_count_ref=$4
+    local -n __remaining_args_ref=$2
+    local __options=$3
+    local -n __processed_args_ref=$4
     shift 4
 
-    __existing_state_ref=""
-    __output_state_var_ref=""
-    __consumed_count_ref=0
-
-    local -a __args=("$@")
-    local __arg_count=${#__args[@]}
-    local __last_separator_index=-1
-    local __i=0
-    local __parse_limit=$__arg_count
-
-    # If one or more `--` markers are present, the last one separates the
-    # forwarded helper options from the explicit list of variable names.
-    for ((__i = 0; __i < __arg_count; __i++)); do
-        if [[ "${__args[__i]}" == "--" ]]; then
-            __last_separator_index=$__i
-        fi
-    done
-
-    if (( __last_separator_index >= 0 )); then
-        __consumed_count_ref=$((__last_separator_index + 1))
-        __parse_limit=$__last_separator_index
-    else
-        __consumed_count_ref=2
+    # Validate the types of passed arrays using ${...@a}
+    if ! _hs_is_array __remaining_args_ref; then
+        echo "[ERROR] ${__caller_name}: '$2' must name an indexed array variable." >&2
+        return "$HS_ERR_MISSING_ARGUMENT"
+    fi
+    if ! _hs_is_array -A __processed_args_ref; then
+        echo "[ERROR] ${__caller_name}: '$4' must name an associative array variable." >&2
+        return "$HS_ERR_MISSING_ARGUMENT"
     fi
 
-    # Before the effective separator, only helper options are recognized.
-    # Any other forwarded arguments belong to the caller and are ignored here.
-    for ((__i = 0; __i < __parse_limit; __i++)); do
-        case "${__args[__i]}" in
-            -S)
-                if (( __i + 1 >= __parse_limit )); then
-                    echo "[ERROR] ${__caller_name}: missing required state variable name for -S option." >&2
+    
+    # Initialize processed options
+    __processed_args_ref=(["quiet"]=false)
+
+    # Process options
+    # Increments OPTIND scanning for known options.
+    __remaining_args_ref=()
+    local -i OPTIND=1
+    local opt
+    local -i index
+    
+    # Force a colon in front of $__options to record unknown options in $OPTARG
+    while (( "$#" >= "$OPTIND" )); do
+        index=${OPTIND}
+        if getopts ":$__options" opt; then
+            # Returns OK if known or unknown option -X [val]
+            # value is assigned to $OPTARG for known options
+            # value can be attached -Svarname or detached -S varname
+            case "$opt" in
+                \?)
+                    # Unknown option
+                    __remaining_args_ref+=("-$OPTARG")
+                    ;;
+                S)
+                    if ! _hs_is_valid_variable_name "$OPTARG"; then
+                        echo "[ERROR] ${__caller_name}: invalid variable name '${OPTARG}'." >&2
+                        return "$HS_ERR_INVALID_VAR_NAME"
+                    fi
+                    __processed_args_ref["state"]="$OPTARG"
+                    ;;
+                q)
+                    __processed_args_ref["quiet"]=true
+                    ;;
+                :)
+                    # Only triggered by -S in the last position since getopts accepts
+                    # -q or -- as the value of -S if it encounters ... -S -q or ... -S -- ...
+                    echo "[ERROR] ${__caller_name}: missing required parameter to option -${OPTARG}." >&2
                     return "$HS_ERR_MISSING_ARGUMENT"
-                fi
-                __output_state_var_ref="${__args[__i + 1]}"
-                if ! _hs_is_valid_variable_name "$__output_state_var_ref"; then
-                    echo "[ERROR] ${__caller_name}: invalid variable name '$__output_state_var_ref' for -S option." >&2
+                    ;;
+            esac
+        elif (( "$index" == "$OPTIND" )); then
+            # It was a word (parameter to some unknown option)
+            __remaining_args_ref+=("${!OPTIND}")
+            OPTIND=$(( OPTIND + 1 ))
+        else
+            # Hit --. Stop decoding options.
+            __processed_args_ref["separator"]=true
+            while (( "$#" >= "$OPTIND" )); do 
+                if ! _hs_is_valid_variable_name "${!OPTIND}"; then
+                    echo "[ERROR] ${__caller_name}: invalid variable name '${!OPTIND}'." >&2
                     return "$HS_ERR_INVALID_VAR_NAME"
                 fi
-                ((__i++))
-                ;;
-        esac
-    done
-
-    # After the effective separator, every token is part of the variable list.
-    # Without a separator, this validates the traditional trailing "$@" list.
-    for ((__i = __consumed_count_ref; __i < __arg_count; __i++)); do
-        if ! _hs_is_valid_variable_name "${__args[__i]}"; then
-            echo "[ERROR] ${__caller_name}: invalid variable name '${__args[__i]}'." >&2
-            return "$HS_ERR_INVALID_VAR_NAME"
+                printf -v __processed_args_ref["vars"] "%s %s" "${!OPTIND}" "${__processed_args_ref['vars']}"
+                OPTIND=$(( OPTIND + 1 ))
+            done
         fi
     done
 
-    if [ -z "$__output_state_var_ref" ]; then
+    # Pull variable names from the end
+    : "${__processed_args_ref["vars"]:=}"
+    if [[ -z "${__processed_args_ref[separator]-}" ]]; then
+        while (( ${#__remaining_args_ref[@]} > 0 )) && _hs_is_valid_variable_name "${__remaining_args_ref[-1]}"; do
+            printf -v __processed_args_ref["vars"] "%s %s" "${__remaining_args_ref[-1]}" "${__processed_args_ref['vars']}"
+            unset "__remaining_args_ref[-1]"
+        done
+
+        local __remaining_arg
+        for __remaining_arg in "${__remaining_args_ref[@]}"; do
+            if [[ "$__remaining_arg" != -* ]]; then
+                echo "[ERROR] ${__caller_name}: invalid variable name '${__remaining_arg}'." >&2
+                return "$HS_ERR_INVALID_VAR_NAME"
+            fi
+        done
+    fi
+    
+    if [[ -z "${__processed_args_ref[state]-}" ]]; then
         echo "[ERROR] ${__caller_name}: state variable is uninitialized; missing required -S <statevar> option." >&2
         return "$HS_ERR_STATE_VAR_UNINITIALIZED"
     fi
-
-    eval "__existing_state_ref=\${$__output_state_var_ref-}"
 }
 
 # Function:
@@ -590,30 +701,14 @@ _hs_extract_persisted_state_var_names() {
     fi
 }
 
-# Function:
-#    hs_get_pid_of_subshell
-# Description:
-#    Returns the PID of the current subshell that works in conjunction with hs_echo to
-#    ensure output is properly captured and redirected to whatever stdout was when the
-#    library was sourced.
-# Usage:
-#    pid=$(hs_get_pid_of_subshell)
-# Return status:
-#    0 - Success
-#    1 - Internal error: hs_cleanup_output not defined or doesn't have the expected format.
-hs_get_pid_of_subshell() {
-    # Extract the PID of the background reader process from the function definition
-    local func_def
-    func_def=$(declare -f hs_cleanup_output)
-    local pid
-    pid=${func_def##*wait }
-    # The above string substitution will just return $func_det without an error if "wait " is not found.
-    if [ "$pid" = "$func_def" ]; then
-        echo "hs_cleanup_output function not found or has unexpected format" >&2
-        return 1
+_hs_is_array() {
+    local arraytypes="a"
+    if [[ "$1" == "-A" ]]; then
+        arraytypes="A"
+        shift
     fi
-    pid=${pid%%[^0-9]*}
-    printf '%s' "$pid"
+    local -n vname=$1 
+    local attrs
+    attrs=${vname@a}
+    [[ "$attrs" == *[$arraytypes]* ]]
 }
-
-# Note: Remember to call hs_cleanup at the end of your main script to clean up resources.

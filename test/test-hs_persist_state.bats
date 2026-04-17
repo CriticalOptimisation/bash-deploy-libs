@@ -15,7 +15,7 @@ setup_file() {
   # shellcheck source=config/handle_state.sh
   # shellcheck disable=SC1091
   source "$LIB"
-  export -f _hs_is_valid_variable_name \
+  export -f _hs_is_valid_variable_name _hs_is_array \
             _hs_resolve_state_inputs _hs_extract_persisted_state_var_names \
             hs_persist_state_as_code hs_destroy_state hs_read_persisted_state
   export HS_ERR_RESERVED_VAR_NAME HS_ERR_VAR_NAME_COLLISION HS_ERR_VAR_NAME_NOT_IN_STATE
@@ -57,6 +57,236 @@ corrupt_state() {
   esac
 }
 export -f make_state corrupt_state # makes it available in bash --noprofile -lc calls
+
+# bats test_tags=hs_is_array
+@test "_hs_is_array matches indexed and associative array attributes" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    f() {
+      local -a indexed=(one two)
+      local -A assoc=([key]=value)
+      _hs_is_array indexed &&
+      _hs_is_array -A assoc &&
+      ! _hs_is_array assoc &&
+      ! _hs_is_array -A indexed
+    }
+    f
+  '
+  [ -z "$output" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_is_array
+@test "_hs_is_array recognizes declared but uninitialized arrays" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    f() {
+      local -a indexed
+      local -A assoc
+      _hs_is_array indexed &&
+      _hs_is_array -A assoc &&
+      ! _hs_is_array -A indexed &&
+      ! _hs_is_array assoc
+    }
+    f
+  '
+  [ -z "$output" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_is_array
+@test "_hs_is_array rejects integers and strings" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    f() {
+      local -i number=42
+      local text="hello"
+      ! _hs_is_array number &&
+      ! _hs_is_array -A number &&
+      ! _hs_is_array text &&
+      ! _hs_is_array -A text
+    }
+    f
+  '
+  [ -z "$output" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_is_array
+@test "_hs_is_array works through namerefs for array targets" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    f() {
+      local -a indexed=(one two)
+      local -A assoc=([key]=value)
+      local -n indexed_ref=indexed
+      local -n assoc_ref=assoc
+      _hs_is_array indexed_ref &&
+      _hs_is_array -A assoc_ref &&
+      ! _hs_is_array assoc_ref &&
+      ! _hs_is_array -A indexed_ref
+    }
+    f
+  '
+  [ -z "$output" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_is_array
+@test "_hs_is_array rejects scalar namerefs" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    f() {
+      local text="hello"
+      local -i number=42
+      local -n text_ref=text
+      local -n number_ref=number
+      ! _hs_is_array text_ref &&
+      ! _hs_is_array -A text_ref &&
+      ! _hs_is_array number_ref &&
+      ! _hs_is_array -A number_ref
+    }
+    f
+  '
+  [ -z "$output" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs parses known options and preserves remaining arguments" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    f() {
+      local -a remaining_args=()
+      local -A processed_args=([old]=x)
+      _hs_resolve_state_inputs my_helper remaining_args qS: processed_args bad -q -S state -- foo bar
+      printf "%s|%s|%s" "${processed_args[state]}" "${processed_args[quiet]}" "${remaining_args[*]}"
+    }
+    f
+  '
+  [ "$output" = "state|true|bad" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs extracts trailing variable names into processed vars" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    f() {
+      local -a remaining_args=()
+      local -A processed_args=()
+      _hs_resolve_state_inputs my_helper remaining_args qS: processed_args bad -q -S state -- foo bar
+      printf "%s|%s|%s|%s" "${processed_args[state]}" "${processed_args[quiet]}" "${remaining_args[*]}" "${processed_args[vars]}"
+    }
+    f
+  '
+  [ "$output" = "state|true|bad|bar foo " ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs rejects a missing -S option" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_STATE_VAR_UNINITIALIZED" --separate-stderr bash --noprofile -lc '
+    f() {
+      local -a remaining_args=()
+      local -A processed_args=()
+      _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -q foo
+    }
+    f
+  '
+  [[ "$stderr" == *"missing required -S <statevar> option"* ]]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs rejects an invalid -S variable name" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr bash --noprofile -lc '
+    f() {
+      local -a remaining_args=()
+      local -A processed_args=()
+      _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S 1invalid foo
+    }
+    f
+  '
+  [[ "$stderr" == *"invalid variable name '1invalid'"* ]]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs rejects -S without a parameter" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_MISSING_ARGUMENT" --separate-stderr bash --noprofile -lc '
+    f() {
+      local -a remaining_args=()
+      local -A processed_args=()
+      _hs_resolve_state_inputs my_helper remaining_args qS: processed_args bad -S
+    }
+    f
+  '
+  [[ "$stderr" == *"missing required parameter to option -S"* ]]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs preserves an unknown short option without parameter" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    f() {
+      local -a remaining_args=()
+      local -A processed_args=()
+      _hs_resolve_state_inputs my_helper remaining_args S: processed_args -a -S state foo
+      printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
+    }
+    f
+  '
+  [ "$output" = "state|-a|foo " ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs preserves an unknown short option and its parameter" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    f() {
+      local -a remaining_args=()
+      local -A processed_args=()
+      _hs_resolve_state_inputs my_helper remaining_args S: processed_args -b toto -S state foo
+      printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
+    }
+    f
+  '
+  [ "$output" = "state|-b|toto foo " ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs extracts vars after unknown forwarded options" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    f() {
+      local -a remaining_args=()
+      local -A processed_args=()
+      _hs_resolve_state_inputs my_helper remaining_args S: processed_args -b toto -S state foo bar
+      printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
+    }
+    f
+  '
+  [ "$output" = "state|-b|toto foo bar " ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs rejects invalid bare words left outside the vars list" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr bash --noprofile -lc '
+    f() {
+      local -a remaining_args=()
+      local -A processed_args=()
+      _hs_resolve_state_inputs my_helper remaining_args S: processed_args -S state 1invalid foo
+    }
+    f
+  '
+  [[ "$stderr" == *"invalid variable name '1invalid'"* ]]
+}
 
 # bats test_tags=hs_persist_state_as_code
 @test "eval without local should succeed and leave globals unchanged" {
@@ -195,6 +425,25 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
       local state_var="$1"
       local foo="" bar=""
       hs_read_persisted_state -q -S "$state_var" foo bar
+      printf "%s:%s" "$foo" "${bar:-}"
+    }
+    state=""
+    init state
+    cleanup state
+  '
+  [ "$output" = "secret:" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state accepts -q after -S state" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    init(){ local foo=secret; hs_persist_state_as_code -S "$1" foo; }
+    cleanup(){
+      local state_var="$1"
+      local foo="" bar=""
+      hs_read_persisted_state -S "$state_var" -q foo bar
       printf "%s:%s" "$foo" "${bar:-}"
     }
     state=""
@@ -367,7 +616,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr bash --noprofile -xlc '
     hs_persist_state_as_code -S "1invalid-var-name"
   '
-  [[ "$stderr" == *"invalid variable name '1invalid-var-name' for -S option"* ]]
+  [[ "$stderr" == *"invalid variable name '1invalid-var-name'"* ]]
   [ -z "$output" ]
 }
 
@@ -519,7 +768,6 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
 @test "hs_destroy_state with -S rewrites the named variable in place" {
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
-    source "$LIB" 2>/dev/null
     init() {
       local foo=one bar=two
       hs_persist_state_as_code -S "$1" foo bar
@@ -542,7 +790,6 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
 @test "hs_destroy_state requires -S" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_STATE_VAR_UNINITIALIZED" --separate-stderr bash --noprofile -lc '
-    source "$LIB" 2>/dev/null
     hs_destroy_state foo bar >/dev/null
   '
   [[ "$stderr" == *"missing required -S <statevar> option"* ]]
@@ -553,7 +800,6 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
 @test "hs_destroy_state rejects invalid destroy variable names" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr bash --noprofile -lc '
-    source "$LIB" 2>/dev/null
     state="if local -p foo >/dev/null 2>&1; then
   foo=one
 fi"
@@ -567,7 +813,6 @@ fi"
 @test "hs_destroy_state ignores forwarded args before final --" {
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
-    source "$LIB" 2>/dev/null
     init() {
       local foo=one bar=two
       hs_persist_state_as_code -S "$1" foo bar
@@ -590,7 +835,6 @@ fi"
 @test "hs_destroy_state fails when asked to remove a variable not present in the state" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_VAR_NAME_NOT_IN_STATE" --separate-stderr bash --noprofile -lc '
-    source "$LIB" 2>/dev/null
     init() {
       local foo=one
       hs_persist_state_as_code -S "$1" foo
@@ -607,7 +851,6 @@ fi"
 @test "hs_destroy_state detects corrupt prior state" {
   # shellcheck disable=SC2016
   run -"$HS_ERR_CORRUPT_STATE" --separate-stderr bash --noprofile -lc '
-    source "$LIB" 2>/dev/null
     local state
     state="$(corrupt_state error)"
     hs_destroy_state -S state foo >/dev/null
