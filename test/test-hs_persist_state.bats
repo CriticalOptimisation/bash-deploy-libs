@@ -591,8 +591,8 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ "$output" = "one:" ]
 }
 
-# bats test_tags=hs_persist_state_as_code
-@test "hs_persist_state_as_code ignores unknown variable names" {
+# bats test_tags=hs_persist_state_as_code,known_issue
+@test "known issue nr.1: hs_persist_state_as_code silently ignores unknown variable names" {
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
   state="";
@@ -604,8 +604,8 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$stderr" ]
 }
 
-# bats test_tags=hs_persist_state_as_code
-@test "hs_persist_state_as_code ignores function names" {
+# bats test_tags=hs_persist_state_as_code,known_issue
+@test "known issue nr.2: hs_persist_state_as_code silently ignores function names" {
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
   state="";
@@ -617,8 +617,8 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$stderr" ]
 }
 
-# bats test_tags=hs_persist_state_as_code
-@test "hs_persist_state_as_code only captures the first element of an indexed array" {
+# bats test_tags=hs_persist_state_as_code,known_issue
+@test "known issue nr.3: hs_persist_state_as_code only captures the first element of an indexed array" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
   init(){ local -a items=(one two); hs_persist_state_as_code -S "$1" items; };
@@ -630,8 +630,8 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ "$output" = "one:" ]
 }
 
-# bats test_tags=hs_persist_state_as_code
-@test "hs_persist_state_as_code ignores associative arrays" {
+# bats test_tags=hs_persist_state_as_code,known_issue
+@test "known issue nr.4: hs_persist_state_as_code silently ignores associative arrays" {
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
   state="";
@@ -643,8 +643,8 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$stderr" ]
 }
 
-# bats test_tags=hs_persist_state_as_code
-@test "hs_persist_state_as_code treats namerefs as scalar values" {
+# bats test_tags=hs_persist_state_as_code,known_issue
+@test "known issue nr.5: hs_persist_state_as_code persists namerefs as scalar values" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
   init(){ local target=secret; local -n ref=target; hs_persist_state_as_code -S "$1" ref; };

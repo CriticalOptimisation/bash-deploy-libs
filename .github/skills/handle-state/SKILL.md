@@ -1,6 +1,6 @@
 ---
 name: handle-state
-description: Expert guidance for implementing and using the handle_state.sh Bash library to persist initialization state to cleanup functions, including hs_persist_state usage, logging FIFO setup, and limitations/workarounds for unsupported variable types. Triggers on requests like "pass information", "write initialization function" or "write cleanup function" while developing a library or code module.
+description: Expert guidance for implementing and using the handle_state.sh Bash library to persist initialization state to cleanup functions, centered on the -S state-variable pattern and current hs_persist_state_as_code / hs_read_persisted_state / hs_destroy_state API. Triggers on requests like "pass information", "write initialization function" or "write cleanup function" while developing a library or code module.
 ---
 
 # Handle State Library Skill
@@ -8,90 +8,105 @@ description: Expert guidance for implementing and using the handle_state.sh Bash
 ## Core Reference
 
 Use `docs/libraries/handle_state.rst` as the canonical local reference for the
-API, warnings, and limitations.
+current API, warnings, and limitations.
 
 ## Quick Workflow
 
 - Source `config/handle_state.sh` once in the main script or library entrypoint.
-- In init/setup or wherever the state information is created, define local scalar 
-  variables holding the state, then call `hs_persist_state -S <var_name> <var_name> ...`.
-- The state snippet is assigned directly to the specified variable, avoiding stdout usage.
-- Pass the state variable to cleanup or any API function which needs state information.
-- In cleanup, declare locals with the same names, then `eval "$state"`.
-- Call `hs_cleanup_output` when done to stop the logging reader.
+- In init/setup, define local scalar variables holding the state, then call
+  `hs_persist_state_as_code "$@" -- <local1> <local2> ...`.
+- Future libraries using `handle_state` are only required to support `-S`.
+- State transport is by name only. Do not design new library APIs around stdout
+  state transport.
+- Pass the state variable by name to cleanup or any API function that needs
+  state information.
+- In cleanup, declare matching locals and restore them with
+  `hs_read_persisted_state "$@" -- <local1> <local2> ...`.
+- If the same state variable must be reused across several init/cleanup cycles,
+  call `hs_destroy_state "$@" -- <local1> <local2> ...` during cleanup.
 
 ## Standard Pattern
 
-.. code-block:: bash
+```bash
+source "$(dirname "$0")/config/handle_state.sh"
 
-   source "$(dirname "$0")/config/handle_state.sh"
+init_function() {
+  local temp_file="/tmp/resource"
+  local resource_id="abc123"
+  hs_persist_state_as_code "$@" -- temp_file resource_id
+}
 
-   state_producer() {
-     # Defer option processing to hs_persist_state for full API flexibility
-     hs_echo "Starting init"
-     local temp_file="/tmp/resource"
-     local resource_id="abc123"
-     hs_persist_state "$@" temp_file resource_id
-   }
+cleanup_function() {
+  local temp_file resource_id
+  hs_read_persisted_state "$@" -- temp_file resource_id
+  rm -f "$temp_file"
+  echo "Cleaned $resource_id"
+  hs_destroy_state "$@" -- temp_file resource_id
+}
 
-   state_consumer() {
-     local temp_file resource_id
-     eval "$1"
-     rm -f "$temp_file"
-     echo "Cleaned $resource_id"
-   }
+local state=""
+init_function -S state
+cleanup_function -S state
+init_function -S state
+```
 
-   local state
-   state_producer -S state
-   cleanup "$state"
+## API Guidance
 
-**API Documentation Note**: The `state_producer` function defers all option processing to `hs_persist_state`, providing the same flexibility and future enhancements to library users.
+- Public library functions should expose `-S` directly instead of hiding it.
+- Pass the full residual `"$@"` to `hs_persist_state_as_code`,
+  `hs_read_persisted_state`, and `hs_destroy_state`.
+- Put `--` before the list of local variable names.
+- The last `--` is the effective separator; earlier ones may belong to the
+  library's own API.
+- If a library function consumes some of its own arguments first, forward the
+  remaining parameter list unchanged and still use `--` before the local names.
 
-The same function can begin by consuming some state and terminate producing some other state. 
-If it uses the ``-s <$state>`` option to ``hs_persist_state``, that function can append to the
-supplied state vector rather than producing a new one. The benefits of either option depend on 
-the use case and must be decided by analysis, but in general a library should have only one
-state vector unless its purpose implies the production of several similar state vectors.
+## Reading State
 
-## Logging FIFO Guidance
-
-- `hs_setup_output_to_stdout` runs on source; it redirects `hs_echo` output to
-  the main stdout even when init runs inside `$(...)`.
-- Use `hs_echo` inside init functions when stdout is reserved for the state
-  snippet.
-- Do not write to stdout directly in init; it will corrupt the state string.
+- Prefer explicit restore lists:
+  `hs_read_persisted_state "$@" -- var1 var2`.
+- Avoid direct `eval` of the raw state object in new library code.
+- `hs_read_persisted_state` can emit a locally generated probe snippet when no
+  explicit variable list is provided, but this is best reserved for simple
+  cases.
+- An explicit `--` with no following variable names suppresses probe-snippet
+  output. This is useful when the list is generated by an expansion that can
+  result in zero variables, and we want the function to stay silent on stdout.
+- Missing requested variables are warnings, one per variable, unless `-q` is
+  supplied.
 
 ## Supported Variables
 
 - Only local scalar variables (strings or numbers) are reliably preserved.
-- Encode any other state variable as a string. Use appropriate template from [references/templates.md](references/templates.md)
-- Always re-declare the same locals in cleanup before `eval`.
+- Encode any other state variable as a string. See
+  `.github/skills/handle-state/references/templates.md`.
+- Re-declare the same locals in cleanup before calling
+  `hs_read_persisted_state`.
 
 ## Known Limitations (Tracked)
 
 The following behaviors are tracked in GitHub; avoid them or apply workarounds.
 
-- Unknown variable names are silently ignored:
-  `Issue #1 <https://github.com/CriticalOptimisation/bash-deploy-libs/issues/1>`_.
-- Function names are silently ignored:
-  `Issue #2 <https://github.com/CriticalOptimisation/bash-deploy-libs/issues/2>`_.
-- Indexed arrays only preserve the first element (major):
-  `Issue #3 <https://github.com/CriticalOptimisation/bash-deploy-libs/issues/3>`_.
-- Associative arrays are silently ignored:
-  `Issue #4 <https://github.com/CriticalOptimisation/bash-deploy-libs/issues/4>`_.
-- Namerefs are persisted as scalars (indirection is lost):
-  `Issue #5 <https://github.com/CriticalOptimisation/bash-deploy-libs/issues/5>`_.
+- Unknown variable names are silently ignored (Issue #1).
+- Function names are silently ignored (Issue #2).
+- Indexed arrays only preserve the first element (Issue #3).
+- Associative arrays are silently ignored (Issue #4).
+- Namerefs are persisted as scalars; indirection is lost (Issue #5).
 
 ## Workarounds
 
-- Represent associative arrays as two indexed arrays (keys and values).
-- Represent indexed arrays as a single scalar string (encode/decode) or as an
-  associative array if appropriate.
+- Represent associative arrays as two encoded scalar strings.
+- Represent indexed arrays as a single encoded scalar string.
 - Convert other complex constructs into strings and rebuild them in cleanup.
+- See `.github/skills/handle-state/references/templates.md` for examples.
 
 ## Safety Notes
 
-- `hs_persist_state` and `hs_read_persisted_state` rely on `eval`; treat state
-  strings as trusted input only.
-- Avoid name collisions when chaining state snippets; prefer separate state
-  strings if libraries overlap variable names.
+- `hs_persist_state_as_code` and `hs_read_persisted_state` still rely on
+  `eval` internally; treat state objects as trusted input only.
+- Avoid direct `eval "$state"` in new library code.
+- Avoid name collisions when chaining state through a shared state variable; if
+  libraries overlap variable names, prefer separate state variables or ensure
+  cleanup destroys each library's own entries.
+- Do not require stdout to carry state as part of a library API; reserve stdout
+  for normal user-visible output.

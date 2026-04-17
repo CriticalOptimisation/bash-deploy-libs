@@ -71,9 +71,15 @@ readonly HS_ERR_INVALID_ARGUMENT_TYPE=9
 #        Note that the value associated with the last given option will be mistaken
 #        for a variable unless `--` is used.
 # Errors:
-#   - Rejects a missing `-S` option.
-#   - Rejects an invalid variable name.
-#   - Rejects collisions with variables already present in the prior state.
+#   - `HS_ERR_STATE_VAR_UNINITIALIZED` if `-S <statevar>` is missing.
+#   - `HS_ERR_INVALID_VAR_NAME` if the state variable name or a requested
+#     persisted variable name is not a valid Bash identifier.
+#   - `HS_ERR_RESERVED_VAR_NAME` if a requested persisted variable name is one
+#     of the helper's reserved internal names.
+#   - `HS_ERR_VAR_NAME_COLLISION` if one or more requested variable names are
+#     already defined in the prior state object.
+#   - `HS_ERR_CORRUPT_STATE` if the prior state object cannot be evaluated
+#     safely during collision checking.
 # Usage examples:
 #   local state
 #   init() {
@@ -193,9 +199,13 @@ fi
 #        Note that the value associated with the last given option will be mistaken
 #        for a variable unless `--` is used.
 # Errors:
-#   - Rejects a missing `-S` option.
-#   - Rejects an invalid variable name.
-#   - Rejects destroy requests for variables not present in the state object.
+#   - `HS_ERR_STATE_VAR_UNINITIALIZED` if `-S <statevar>` is missing.
+#   - `HS_ERR_INVALID_VAR_NAME` if the state variable name or a requested
+#     destroy variable name is not a valid Bash identifier.
+#   - `HS_ERR_VAR_NAME_NOT_IN_STATE` if a requested destroy variable is not
+#     present in the input state object.
+#   - `HS_ERR_CORRUPT_STATE` if the input state object cannot be parsed or
+#     rebuilt safely.
 # Usage examples:
 #   cleanup_function() {
 #       hs_destroy_state "$@" -- mylib_statevar1 mylib_statevar2
@@ -327,9 +337,15 @@ hs_destroy_state() {
 #        Note that the detached value associated with the last given option will be mistaken
 #        for a variable unless that option is known or `--` is used.
 # Errors:
-#   - Rejects a missing `-S` option.
-#   - Rejects an invalid variable name.
-#   - Rejects a state variable that is missing, unset, or empty.
+#   - `HS_ERR_MISSING_ARGUMENT` if no state variable name is supplied at all.
+#   - `HS_ERR_INVALID_VAR_NAME` if the state variable name or a requested
+#     restore variable name is not a valid Bash identifier.
+#   - `HS_ERR_STATE_VAR_UNINITIALIZED` if `-S <statevar>` is missing, or if
+#     the named state variable is unset or empty.
+#   - `HS_ERR_CORRUPT_STATE` if the state object cannot be evaluated safely
+#     while restoring requested variables.
+#   - Missing requested variables are warnings, one per variable, unless `-q`
+#     is supplied.
 # Usage examples:
 #   cleanup() {
 #       local state_var="$1"
@@ -477,27 +493,39 @@ _hs_is_valid_variable_name() {
 # Function:
 #   _hs_resolve_state_inputs
 # Description:
-#   Parses the `-S <statevar>` option for state-oriented helpers and resolves
-#   the current state from the named variable. Parsed results are returned to
-#   the caller through variable names passed as parameters.
+#   Parses helper options for state-oriented functions. Parsed results are
+#   returned to the caller through the array variables named in `$2` and `$4`.
+#   The helper recognizes `-S <statevar>` when requested by `$3`, optional
+#   helper flags such as `-q`, unknown forwarded options, and an optional
+#   final `--` separator before an explicit variable-name list.
 # Arguments:
 #   $1 - caller function name, used in error messages; must be a valid Bash name
-#   $2 - name of the array variable that will receive the unprocessed arguments; must be a valid Bash name
-#   $3 - getopts format string of accepted parameters; e.g. qS::
-#   $4 - name of the associative array variable that will receive the processed arguments; must be a valid Bash name
-#   $5 - first forwarded argument option
-#   $6... - additional forwarded arguments; if `--` is present, its last
-#           occurrence marks the start of the explicit variable-name list
+#   $2 - name of the indexed array variable that will receive forwarded,
+#        unprocessed arguments; must be a valid Bash name
+#   $3 - `getopts` format string of accepted helper options; e.g. `qS:`
+#   $4 - name of the associative array variable that will receive processed
+#        arguments; must be a valid Bash name
+#   $5... - forwarded arguments from the public helper caller; if `--` is
+#           present, its last occurrence marks the start of the explicit
+#           variable-name list
 # Returns:
 #   0 on success.
-#   `HS_ERR_MISSING_ARGUMENT` if fewer than 6 arguments are provided.
-#   `HS_ERR_INVALID_ARGUMENT_TYPE` if the output containers do not have the
-#   expected array types.
+#   On success, `$4` may contain:
+#     - `state`: the validated state variable name from `-S`
+#     - `quiet`: `true` or `false`
+#     - `vars`: the validated explicit variable-name list as a space-separated string
+#     - `separator`: set when an explicit `--` was seen
+#   `HS_ERR_MISSING_ARGUMENT` if a required option parameter such as the value
+#   for `-S` is missing.
+#   `HS_ERR_INVALID_ARGUMENT_TYPE` if `$2` is not an indexed array variable or
+#   if `$4` is not an associative array variable.
+#   `HS_ERR_INVALID_VAR_NAME` if the state variable name or an explicit
+#   variable-name token is not a valid Bash identifier.
 #   `HS_ERR_STATE_VAR_UNINITIALIZED` if no `-S <statevar>` option is provided.
-#   `HS_ERR_INVALID_VAR_NAME` if `-S` is followed by an invalid variable name.
 # Usage:
-#   local existing_state="" output_state_var="" consumed_state_args=0
-#   _hs_resolve_state_inputs my_helper existing_state output_state_var consumed_state_args "$@" || return $?
+#   local -a remaining_args=()
+#   local -A processed_args=()
+#   _hs_resolve_state_inputs my_helper remaining_args qS: processed_args "$@" || return $?
 _hs_resolve_state_inputs() {
     if [ $# -lt 4 ]; then
         echo "[ERROR] $1: missing required arguments; expected at least 4 parameters." >&2

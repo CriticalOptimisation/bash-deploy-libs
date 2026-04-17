@@ -22,7 +22,6 @@ API, warnings, and limitations.
 - If the same state variable must be reused across several init/cleanup cycles,
   provide a matching state-destruction path that removes the library's vars
   from the state vector before the next init.
-- Call `hs_cleanup_output` when done to stop the logging reader.
 
 ## Standard Pattern
 
@@ -69,7 +68,7 @@ library's own API.
 - Only local scalar variables (strings or numbers) are reliably preserved.
 - Encode any other state variable as a string. See encoding templates in
   `.github/skills/handle-state/references/templates.md`.
-- Always re-declare the same locals in cleanup before `eval`.
+- Re-declare the same locals in cleanup before `hs_read_persisted_state`.
 
 ## Known Limitations (Tracked)
 
