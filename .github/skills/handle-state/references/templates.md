@@ -1,86 +1,84 @@
 # State encoding templates
 
-The handle state library works best with a fixed number of scalar variables. Anything else
-must be encoded as a string.
+The current `handle_state` API works best with a fixed set of local scalar
+variables. Anything else should be encoded into one or more scalars before
+calling `hs_persist_state_as_code`.
 
-## Array variables
+## Indexed arrays
 
 ```bash
-# In the state producer function
 producer() {
     local -a myarray=("value1" "value2" "value with spaces")
+    local encoded
     encoded=$(printf '%s\0' "${myarray[@]}" | base64 -w0)
-    hs_persist_state encoded
+    hs_persist_state_as_code "$@" -- encoded
 }
 
-# In a state consumer function
 consumer() {
     local encoded
-    eval "$(hs_read_persisted_state "$1")"
-    declare -a newarray
+    local -a newarray
+    hs_read_persisted_state "$@" -- encoded
     mapfile -d '' -t newarray < <(printf '%s' "$encoded" | base64 -d)
-    # Use newarray
     echo "${newarray[2]}"
 }
-# In the caller
-state=$(producer)
-consumer "$state"  # outputs yelvalue with spaces, the 3rd value
+
+local state=""
+producer -S state
+consumer -S state
 ```
 
 ## Associative arrays
 
 ```bash
-# In the state producer function
 producer() {
-    declare -A myarray=( [apple]="red" [banana]="yellow" [cherry]="dark red" )
+    local -A myarray=([apple]="red" [banana]="yellow" [cherry]="dark red")
     local array_keys array_values
     array_keys=$(printf '%s\0' "${!myarray[@]}" | base64 -w0)
     array_values=$(printf '%s\0' "${myarray[@]}" | base64 -w0)
-    hs_persist_state array_keys array_values
+    hs_persist_state_as_code "$@" -- array_keys array_values
 }
-# In a state consumer function
+
 consumer() {
     local array_keys array_values
-    eval "$(hs_read_persisted_state "$1")"
-    local -a keys
-    local -a values
+    local -a keys values
+    local -A newarray
+    local i
+    hs_read_persisted_state "$@" -- array_keys array_values
     mapfile -d '' -t keys < <(printf '%s' "$array_keys" | base64 -d)
     mapfile -d '' -t values < <(printf '%s' "$array_values" | base64 -d)
-    local -A newarray
     for i in "${!keys[@]}"; do
       newarray["${keys[i]}"]="${values[i]}"
     done
-    # Use newarray
     echo "${newarray[cherry]}"
 }
-# In the caller
-state=$(producer)
-consumer "$state"  # outputs dark red, the value associated with 'banana'.
+
+local state=""
+producer -S state
+consumer -S state
 ```
 
-## Name references
+## Namerefs
 
 ```bash
-# In the producer function
 producer() {
-    declare -n nameref
-    local target1 target2 encoding
-    target1=banana
-    target2=apple
-    nameref=target1
+    local target1=banana
+    local target2=apple
+    local -n nameref=target1
+    local encoding
     encoding="${!nameref}"
-    hs_persist_state encoding
+    hs_persist_state_as_code "$@" -- encoding
 }
-# In the consumer function
+
 consumer() {
     local encoding
-    eval "$(hs_read_persisted_state "$1")"
     local target1=yellow
     local target2=red
+    hs_read_persisted_state "$@" -- encoding
     local -n nameref=$encoding
-    echo $nameref
+    echo "$nameref"
 }
-# In the caller
-state=$(producer)
-consumer "$state"  # outputs yellow, the current value of target1.
+
+local state=""
+producer -S state
+consumer -S state
 ```

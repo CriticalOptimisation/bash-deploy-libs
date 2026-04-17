@@ -1,5 +1,5 @@
 ---
-description: Expert guidance for implementing and using the handle_state.sh Bash library to persist initialization state to cleanup functions, including hs_persist_state usage, logging FIFO setup, and limitations/workarounds for unsupported variable types. Triggers on requests like "pass information", "write initialization function" or "write cleanup function" while developing a library or code module.
+description: Expert guidance for implementing and using the handle_state.sh Bash library to persist initialization state to cleanup functions, centered on the -S state-variable pattern and limitations/workarounds for unsupported variable types. Triggers on requests like "pass information", "write initialization function" or "write cleanup function" while developing a library or code module.
 ---
 
 # Handle State Library Skill
@@ -13,56 +13,62 @@ API, warnings, and limitations.
 
 - Source `config/handle_state.sh` once in the main script or library entrypoint.
 - In init/setup or wherever the state information is created, define local scalar
-  variables holding the state, then call `hs_persist_state -S <var_name> <var_name> ...`.
-- The state snippet is assigned directly to the specified variable, avoiding stdout usage.
+  variables holding the state, then call
+  `hs_persist_state_as_code "$@" -- <local1> <local2> ...`.
+- Future libraries using `handle_state` are only required to support `-S`.
+- The state snippet is assigned directly to the specified variable; stdout-based state transport is obsolete and should not be supported in library APIs.
 - Pass the state variable to cleanup or any API function which needs state information.
-- In cleanup, declare locals with the same names, then `eval "$state"`.
-- Call `hs_cleanup_output` when done to stop the logging reader.
+- In cleanup, restore the needed locals with `hs_read_persisted_state "$@" -- <local1> <local2> ...`.
+- If the same state variable must be reused across several init/cleanup cycles,
+  provide a matching state-destruction path that removes the library's vars
+  from the state vector before the next init.
 
 ## Standard Pattern
 
 ```bash
 source "$(dirname "$0")/config/handle_state.sh"
 
-state_producer() {
-  # Defer option processing to hs_persist_state for full API flexibility
-  hs_echo "Starting init"
+init_function() {
   local temp_file="/tmp/resource"
   local resource_id="abc123"
-  hs_persist_state "$@" temp_file resource_id
+  hs_persist_state_as_code "$@" -- temp_file resource_id
 }
 
-state_consumer() {
+cleanup_function() {
   local temp_file resource_id
-  eval "$1"
+  hs_read_persisted_state "$@" -- temp_file resource_id
   rm -f "$temp_file"
   echo "Cleaned $resource_id"
+  hs_destroy_state "$@" -- temp_file resource_id
 }
 
 local state
-state_producer -S state
-cleanup "$state"
+init_function -S state
+cleanup_function -S state
+init_function -S state
 ```
 
-**API Documentation Note**: The `state_producer` function defers all option processing to `hs_persist_state`, providing the same flexibility and future enhancements to library users.
+**API Documentation Note**: New libraries should expose `-S` directly and should not preserve the older stdout-based calling convention. Pass the full parameter set to `hs_persist_state_as_code`, `hs_read_persisted_state`, and `hs_destroy_state`, then use `--` as the separator before the list of local variable names.
 
-The same function can begin by consuming some state and terminate producing some other state.
-If it uses the `-s <$state>` option to `hs_persist_state`, that function can append to the
-supplied state vector rather than producing a new one.
+When a library needs to reinitialize against the same state variable after
+cleanup, the cleanup function must call `hs_destroy_state` to remove the
+library's variables from the state vector before the next init call. This
+avoids collision errors from repeated `hs_persist_state_as_code` calls on the
+same state variable.
 
-## Logging FIFO Guidance
-
-- `hs_setup_output_to_stdout` runs on source; it redirects `hs_echo` output to
-  the main stdout even when init runs inside `$(...)`.
-- Use `hs_echo` inside init functions when stdout is reserved for the state snippet.
-- Do not write to stdout directly in init; it will corrupt the state string.
+If a library function consumes some of its own arguments before calling
+`handle_state`, preserve the remaining parameter list and still pass the full
+residual `"$@"` to the helper. Use `--` before the local variable list so
+future helper options cannot collide with local variable names or parameter
+values. The last `--` is the effective separator; earlier ones may belong to the
+library's own API.
 
 ## Supported Variables
 
 - Only local scalar variables (strings or numbers) are reliably preserved.
 - Encode any other state variable as a string. See encoding templates in
   `.github/skills/handle-state/references/templates.md`.
-- Always re-declare the same locals in cleanup before `eval`.
+- Re-declare the same locals in cleanup before `hs_read_persisted_state`.
 
 ## Known Limitations (Tracked)
 
@@ -84,7 +90,9 @@ The following behaviors are tracked in GitHub; avoid them or apply workarounds.
 
 ## Safety Notes
 
-- `hs_persist_state` and `hs_read_persisted_state` rely on `eval`; treat state
-  strings as trusted input only.
-- Avoid name collisions when chaining state snippets; prefer separate state
-  strings if libraries overlap variable names.
+- Avoid direct `eval` of the raw state string in new library code.
+- `hs_persist_state_as_code` and `hs_read_persisted_state` still rely on `eval`
+  internally; treat state strings as trusted input only.
+- Avoid name collisions when chaining state through a shared state variable; prefer separate state
+  variables if libraries overlap variable names.
+- Do not require stdout to carry state as part of a library API; reserve stdout for normal user-visible output.
