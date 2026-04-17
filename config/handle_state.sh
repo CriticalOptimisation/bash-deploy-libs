@@ -203,15 +203,14 @@ hs_destroy_state() {
 
     # Step 2: set up working variables.
     # __state_var_names will contain every variable name found in the incoming
-    # persisted state. __keep_state_names will contain only the survivors, i.e.
-    # variables that remain after removing the requested names.
+    # persisted state. __state_var_set mirrors that list as an associative set
+    # so destroy-name lookups and removals stay in Bash builtins instead of
+    # nested shell loops.
     local __output=""
     local __var_name
     local __state_var=""
-    local __state_var_found=false
-    local __keep_var=""
-    local __keep_state_names=""
     local -a __state_var_names=()
+    local -A __state_var_set=()
 
     # Step 3: scan the existing state snippet for persisted variable names.
     # We intentionally look only for the top-level headers emitted by
@@ -220,35 +219,21 @@ hs_destroy_state() {
     # surviving variables later.
     _hs_extract_persisted_state_var_names hs_destroy_state "$__existing_state" __state_var_names || return $?
     for __state_var in "${__state_var_names[@]}"; do
-        __state_var_found=false
-        for __var_name in "${__destroy_var_args[@]}"; do
-            if [[ "$__var_name" == "$__state_var" ]]; then
-                __state_var_found=true
-                break
-            fi
-        done
-        if [[ "$__state_var_found" == false ]]; then
-            __keep_state_names+="${__state_var}"$'\n'
-        fi
+        __state_var_set["$__state_var"]=1
     done
 
-    # Step 5: every requested variable must actually exist in the incoming
-    # state. If a requested name is absent, return HS_ERR_INVALID_VAR_NAME.
+    # Step 4: every requested variable must actually exist in the incoming
+    # state. If it does, remove it from the survivor set immediately so the
+    # final key list is exactly the set of variables to keep.
     for __var_name in "${__destroy_var_args[@]}"; do
-        __state_var_found=false
-        for __state_var in "${__state_var_names[@]}"; do
-            if [[ "$__state_var" == "$__var_name" ]]; then
-                __state_var_found=true
-                break
-            fi
-        done
-        if [[ "$__state_var_found" == false ]]; then
+        if [[ -z "${__state_var_set["$__var_name"]-}" ]]; then
             echo "[ERROR] hs_destroy_state: variable '$__var_name' is not defined in the state." >&2
             return "$HS_ERR_VAR_NAME_NOT_IN_STATE"
         fi
+        unset '__state_var_set[$__var_name]'
     done
 
-    # Step 6: rebuild the state from scratch using only the survivor names.
+    # Step 5: rebuild the state from scratch using only the survivor names.
     # Instead of editing the text blocks in place, run a fresh Bash subprocess
     # that:
     #   1. defines the minimal helpers needed (_hs_resolve_state_inputs and
@@ -260,12 +245,8 @@ hs_destroy_state() {
     # This avoids depending on BASH_SOURCE or on re-sourcing this file from a
     # filesystem path, which would break when handle_state.sh was obtained via
     # remote_run's virtual source mechanism.
-    if [[ -n "$__keep_state_names" ]]; then
-        local -a __keep_state_args=()
-        while IFS= read -r __keep_var || [[ -n "$__keep_var" ]]; do
-            [[ -z "$__keep_var" ]] && continue
-            __keep_state_args+=("$__keep_var")
-        done <<< "$__keep_state_names"
+    local -a __keep_state_args=("${!__state_var_set[@]}")
+    if (( ${#__keep_state_args[@]} > 0 )); then
 
         __output=$(timeout --preserve-status -k 2 1 "${BASH:-bash}" --noprofile -lc '
             readonly HS_ERR_RESERVED_VAR_NAME='"$HS_ERR_RESERVED_VAR_NAME"'
@@ -291,7 +272,7 @@ hs_destroy_state() {
             _hs_destroy_state_rebuild "$@"
         ' bash "$__existing_state" "${__keep_state_args[@]}")
         local __status=$?
-        # Step 7: map rebuild failures to the same "corrupt prior state"
+        # Step 6: map rebuild failures to the same "corrupt prior state"
         # category used elsewhere in handle_state when we cannot safely process
         # the supplied snippet.
         if [ $__status -eq 124 ] || [ $__status -eq 127 ] || [ $__status -eq 137 ] || [ $__status -eq 143 ]; then
@@ -303,7 +284,7 @@ hs_destroy_state() {
         fi
     fi
 
-    # Step 8: write the rebuilt state back into the named state variable.
+    # Step 7: write the rebuilt state back into the named state variable.
     printf -v "$__output_state_var" '%s' "$__output"
 }
 # --- hs_read_persisted_state --------------------------------------------------------
@@ -347,81 +328,26 @@ hs_destroy_state() {
 #       hs_read_persisted_state -q "$@" -- temp_file resource_id
 #   }
 hs_read_persisted_state() {
-    # Step 1: parse hs_read_persisted_state-specific flags before delegating
-    # the shared state-input handling to _hs_resolve_state_inputs.
-    local __quiet=false
+    # Step 1: normalize the convenience form `hs_read_persisted_state state`
+    # into the regular `-S state` form, then delegate all option parsing to
+    # _hs_resolve_state_inputs.
     if [ $# -eq 0 ]; then
         echo "[ERROR] hs_read_persisted_state: missing required state variable name." >&2
         return "$HS_ERR_MISSING_ARGUMENT"
     fi
 
-    local -a __args=("$@")
-    local -a __prefix_args=()
-    local -a __suffix_args=()
-    local -a __filtered_prefix_args=()
-    local __arg_count=${#__args[@]}
-    local __last_separator_index=-1
-    local __i=0
-
-    for ((__i = 0; __i < __arg_count; __i++)); do
-        if [[ "${__args[__i]}" == "--" ]]; then
-            __last_separator_index=$__i
-        fi
-    done
-
-    if (( __last_separator_index >= 0 )); then
-        __prefix_args=("${__args[@]:0:__last_separator_index}")
-        __suffix_args=("${__args[@]:__last_separator_index+1}")
-    else
-        __prefix_args=("${__args[@]}")
-    fi
-
-    set -- "${__prefix_args[@]}"
-    local OPTIND=1
-    local opt
-    while (( OPTIND <= $# )); do
-        if getopts ":qS:" opt; then
-            case "$opt" in
-                q)
-                    __quiet=true
-                    ;;
-                :)
-                    if [[ "$OPTARG" == "S" ]]; then
-                        echo "[ERROR] hs_read_persisted_state: missing required state variable name for -S option." >&2
-                        return "$HS_ERR_MISSING_ARGUMENT"
-                    fi
-                    ;;
-                \?)
-                    :
-                    ;;
-            esac
-        else
-            OPTIND=$((OPTIND + 1))
-        fi
-    done
-
-    local __prefix_arg=""
-    for __prefix_arg in "${__prefix_args[@]}"; do
-        if [[ "$__prefix_arg" != "-q" ]]; then
-            __filtered_prefix_args+=("$__prefix_arg")
-        fi
-    done
-
-    set -- "${__filtered_prefix_args[@]}"
-    if (( __last_separator_index >= 0 )); then
-        set -- "$@" -- "${__suffix_args[@]}"
-    fi
-    if [ "${1-}" != "-S" ]; then
+    if [[ "${1-}" != -* ]]; then
         set -- -S "$@"
     fi
     # Step 2: resolve the named state variable and capture its current payload.
     # The helper validates names, enforces the presence of -S, and returns:
-    #   - __existing_state: the current serialized state snippet
     #   - __output_state_var: the caller-visible variable name holding that state
-    #   - __consumed_state_args: how many leading arguments belong to state input
+    #   - __processed_args[quiet]: whether -q was provided
+    #   - __processed_args[vars]: the validated requested-variable list
     local -a __remaining_args=()
     local -A __processed_args=()
-    _hs_resolve_state_inputs hs_read_persisted_state __remaining_args S: __processed_args "$@" || return $?
+    _hs_resolve_state_inputs hs_read_persisted_state __remaining_args qS: __processed_args "$@" || return $?
+    local __quiet="${__processed_args[quiet]}"
     local __output_state_var="${__processed_args[state]}"
     local __existing_state="${!__output_state_var-}"
     local -a __requested_var_args=()
