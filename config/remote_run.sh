@@ -16,9 +16,6 @@ source "${BASH_SOURCE%/*}/command_guard.sh"
 # shellcheck source=config/handle_state.sh
 # shellcheck disable=SC1091
 source "${BASH_SOURCE%/*}/handle_state.sh"
-# handle_state.sh auto-starts the FIFO reader on source; terminate it
-# immediately so rr_init owns the start/stop lifecycle cleanly.
-hs_cleanup_output
 
 guard nc ssh base64 realpath mktemp dirname cat sleep
 
@@ -382,35 +379,27 @@ BOOTSTRAP
 # PUBLIC LOCAL API
 # ---------------------------------------------------------------------------
 
-# rr_init [-s <state>] [-S <var>] [--allow <path>] [--ssh-opt <opt>]
+# rr_init [-S <var>] [--allow <path>] [--ssh-opt <opt>]
 #
 # Optional.  Appends rr_init's own state (_rr_ssh_opts_str, _rr_whitelist_str)
-# to a shared application state vector managed by hs_persist_state.  Each
+# to a shared application state vector managed by hs_persist_state_as_code.  Each
 # library in a project appends its own variables to the same shared state;
-# hs_persist_state's collision detection prevents initialising the same library
+# hs_persist_state_as_code's collision detection prevents initialising the same library
 # twice on the same state variable (intentional error).
 #
-# -s <state>  Load a state string produced by previous library calls.  eval in
-#             rr_init only touches rr's own local vars (hs_persist_state emits
-#             `if local -p var` guards, so other libraries' variables are
-#             silently skipped).  Used to carry state from other libraries.
 # -S <var>    Read-modify-write: read the current value of <var> as the input
-#             state (if -s is not also given), append rr_init's vars, and write
-#             the combined result back.  Do NOT pass the same <var> to both -s
-#             and -S: that would make rr_init's own vars appear twice → collision.
+#             state, append rr_init's vars, and write the combined result back.
 #
 # Correct multi-library accumulation pattern:
 #   other_lib_init -S st [opts]   # st: other_lib's vars
 #   rr_init        -S st [opts]   # st: other_lib's vars + rr's vars (reads st first)
-#   rr_run         -s "$st" user@host script.sh
+#   rr_run         -S st user@host script.sh
 rr_init() {
-    hs_setup_output_to_stdout  # start FIFO reader; paired with rr_cleanup's hs_cleanup_output
     local _rr_ssh_opts_str="" _rr_whitelist_str=""
-    local _out_var="" _in_state=""
+    local _out_var=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -s) shift; _in_state=$1; shift ;;
             -S) shift; _out_var=$1; shift ;;
             --ssh-opt) shift
                 _rr_ssh_opts_str+="${_rr_ssh_opts_str:+$'\n'}$1"
@@ -425,19 +414,12 @@ rr_init() {
         esac
     done
 
-    # hs_persist_state -S <var> already reads the current value of <var> as the
-    # existing state for collision detection, appends our vars, and writes back —
-    # that is the correct read-modify-write path.  We never eval state here:
-    # either the state is empty (no-op) or it already contains our vars
-    # (collision → intentional double-init error from hs_persist_state).
     if [[ -n "$_out_var" ]]; then
-        hs_persist_state -S "$_out_var" _rr_ssh_opts_str _rr_whitelist_str || return $?
-    else
-        hs_persist_state -s "$_in_state" _rr_ssh_opts_str _rr_whitelist_str
+        hs_persist_state_as_code -S "$_out_var" -- _rr_ssh_opts_str _rr_whitelist_str || return $?
     fi
 }
 
-# rr_run [-s <state>] [-S <var>] [--allow <path>] [--ssh-opt <opt>] [--] \
+# rr_run [-S <var>] [--allow <path>] [--ssh-opt <opt>] [--] \
 #        <user@host> <script.sh|/dev/fd/N> [args...]
 #
 # Executes <script.sh> on <user@host> via SSH.  All `source' calls inside the
@@ -446,15 +428,12 @@ rr_init() {
 # hosts are supported.
 rr_run() {
     local _rr_ssh_opts_str="" _rr_whitelist_str=""
-    local _out_var=""
+    local _state_var=""
 
     # Parse options (merge any incoming state with per-call overrides)
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -s) shift
-                eval "$1"
-                shift ;;
-            -S) shift; _out_var=$1; shift ;;
+            -S) shift; _state_var=$1; shift ;;
             --ssh-opt) shift
                 _rr_ssh_opts_str+="${_rr_ssh_opts_str:+$'\n'}$1"
                 shift ;;
@@ -468,6 +447,10 @@ rr_run() {
             *) break ;;
         esac
     done
+
+    if [[ -n "$_state_var" ]]; then
+        hs_read_persisted_state -q -S "$_state_var" -- _rr_ssh_opts_str _rr_whitelist_str || return $?
+    fi
 
     local _host=$1 _script=$2
     shift 2
@@ -607,14 +590,14 @@ rr_run() {
     return $_rc
 }
 
-# rr_resolve [-s <state>] <file>
+# rr_resolve [-S <state>] <file>
 #
 # On the originating machine: returns <file> unchanged (no-op).
 # On a relay machine (bootstrap has set _rr_proto_fd): sends a RESOLVE request
 # and returns /dev/fd/N for the dedicated transfer channel.
 rr_resolve() {
-    # Consume optional -s state (ignored; rr_resolve needs no state here)
-    if [[ "${1:-}" == "-s" ]]; then shift 2; fi
+    # Consume optional -S state (ignored; rr_resolve needs no state here)
+    if [[ "${1:-}" == "-S" ]]; then shift 2; fi
 
     local _file=$1
 
@@ -633,50 +616,23 @@ rr_resolve() {
     _rr_do_resolve "$_rr_proto_fd" "$_file"
 }
 
-# rr_cleanup [-s <state>] [-S <var>]
+# rr_cleanup [-S <var>]
 #
-# Cleans up resources allocated by this library.  Must be called at the end of
-# any script that sourced remote_run.sh, to terminate the handle_state logging
-# FIFO reader started automatically when the library was sourced.  Omitting
-# this call leaves the background reader running for up to 5 seconds (its idle
-# timeout) before it self-terminates.
-#
+# Removes rr_init's variables from the named shared state vector so the same
+# state variable can be reused safely by a later rr_init call.
 # When ControlMaster relay support is added (issue #58), rr_cleanup will also
 # close the long-lived ControlMaster socket; the call site is already correct.
 rr_cleanup() {
-    local _in_state="" _out_var=""
+    local _out_var=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -s) shift; _in_state=$1; shift ;;
             -S) shift; _out_var=$1; shift ;;
             --) shift; break ;;
             *) echo "[ERROR] rr_cleanup: unknown option '$1'" >&2; return 1 ;;
         esac
     done
 
-    # When -S is given without -s, read the current value of the -S variable as
-    # the input state (read-modify-write semantics).
-    if [[ -n "$_out_var" && -z "$_in_state" ]]; then
-        _in_state="${!_out_var}"
+    if [[ -n "$_out_var" ]]; then
+        hs_destroy_state -S "$_out_var" -- _rr_ssh_opts_str _rr_whitelist_str || return $?
     fi
-
-    # Strip rr-managed variables from the shared state and write back to -S var.
-    # State format (one block per variable, produced by hs_persist_state):
-    #   if local -p VAR >/dev/null 2>&1; then\n  VAR=value\nfi\n
-    # The outer fi has no indentation (col 0); the inner fi has 2 spaces, so
-    # [[ "$_line" == "fi" ]] correctly identifies only the outer block terminator.
-    if [[ -n "$_out_var" && -n "$_in_state" ]]; then
-        local _stripped="" _skip=false _line
-        while IFS= read -r _line || [[ -n "$_line" ]]; do
-            if [[ "$_line" == "if local -p _rr_ssh_opts_str "* || \
-                  "$_line" == "if local -p _rr_whitelist_str "* ]]; then
-                _skip=true
-            fi
-            [[ "$_skip" == false ]] && _stripped+="${_line}"$'\n'
-            [[ "$_skip" == true && "$_line" == "fi" ]] && _skip=false
-        done <<< "$_in_state"
-        printf -v "$_out_var" '%s' "$_stripped"
-    fi
-
-    hs_cleanup_output
 }
