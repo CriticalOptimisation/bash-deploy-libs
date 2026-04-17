@@ -20,7 +20,7 @@ setup_file() {
             hs_persist_state_as_code hs_destroy_state hs_read_persisted_state
   export HS_ERR_RESERVED_VAR_NAME HS_ERR_VAR_NAME_COLLISION HS_ERR_VAR_NAME_NOT_IN_STATE
   export HS_ERR_MULTIPLE_STATE_INPUTS HS_ERR_CORRUPT_STATE HS_ERR_INVALID_VAR_NAME \
-         HS_ERR_STATE_VAR_UNINITIALIZED HS_ERR_MISSING_ARGUMENT
+         HS_ERR_STATE_VAR_UNINITIALIZED HS_ERR_MISSING_ARGUMENT HS_ERR_INVALID_ARGUMENT_TYPE
   # Accelerate test failure
   export BATS_TEST_TIMEOUT=30
 }
@@ -150,6 +150,34 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   '
   [ -z "$output" ]
   [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs rejects a non-array remaining_args container" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_INVALID_ARGUMENT_TYPE" --separate-stderr bash --noprofile -lc '
+    f() {
+      local remaining_args=""
+      local -A processed_args=()
+      _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state foo
+    }
+    f
+  '
+  [[ "$stderr" == *"'remaining_args' must name an indexed array variable"* ]]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs rejects a non-associative processed_args container" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_INVALID_ARGUMENT_TYPE" --separate-stderr bash --noprofile -lc '
+    f() {
+      local -a remaining_args=()
+      local -a processed_args=()
+      _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state foo
+    }
+    f
+  '
+  [[ "$stderr" == *"'processed_args' must name an associative array variable"* ]]
 }
 
 # bats test_tags=hs_resolve_state_inputs
@@ -346,8 +374,8 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     init state
     printf "%s" "$(hs_read_persisted_state -S state)"
   '
-  [[ "$output" == *'hs_read_persisted_state -S state'* ]]
-  [[ "$output" == *'if local -p foo >/dev/null 2>&1'* ]]
+  [[ "$output" == *'hs_read_persisted_state -q -S state'* ]]
+  [[ "$output" == *'done < <(local -p)'* ]]
   [ -z "$stderr" ]
 }
 
@@ -414,6 +442,26 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   '
   [[ "$stderr" == *"[WARNING] hs_read_persisted_state: variable 'bar' is not defined in the state."* ]]
   [ "$output" = "secret:" ]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state warns for each missing requested variable" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    init(){ local foo=secret; hs_persist_state_as_code -S "$1" foo; }
+    cleanup(){
+      local state_var="$1"
+      local foo="" bar="" baz=""
+      hs_read_persisted_state -S "$state_var" foo bar baz
+      printf "%s:%s:%s" "$foo" "${bar:-}" "${baz:-}"
+    }
+    state=""
+    init state
+    cleanup state
+  '
+  [[ "$stderr" == *"[WARNING] hs_read_persisted_state: variable 'bar' is not defined in the state."* ]]
+  [[ "$stderr" == *"[WARNING] hs_read_persisted_state: variable 'baz' is not defined in the state."* ]]
+  [ "$output" = "secret::" ]
 }
 
 # bats test_tags=hs_read_persisted_state
@@ -495,6 +543,26 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   init state;
   cleanup "$state"'
   [[ "$output" == *"local foo already defined; refusing to overwrite"* ]]
+}
+
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code reports all colliding variable names" {
+  # shellcheck disable=SC2016
+  run -"$HS_ERR_VAR_NAME_COLLISION" --separate-stderr bash --noprofile -lc '
+    init_existing() {
+      local foo=one bar=two
+      hs_persist_state_as_code -S "$1" foo bar
+    }
+    init_again() {
+      local foo=three bar=four baz=five
+      hs_persist_state_as_code -S "$1" foo bar baz
+    }
+    state=""
+    init_existing state
+    init_again state
+  '
+  [[ "$stderr" == *"variables already defined in the state: foo bar."* ]]
+  [ -z "$output" ]
 }
 
 # bats test_tags=hs_persist_state_as_code
