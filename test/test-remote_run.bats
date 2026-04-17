@@ -202,8 +202,9 @@ _rr_fixture() {
 @test "rr_init: -S reads existing state from var and appends rr state [no-setup]" {
     _rr_init_state_accumulates() {
         # Pre-load another library's state into the variable, then let rr_init
-        # read it via -S (read-modify-write).  hs_persist_state -S already reads
-        # the current value of the variable, so no -s is needed or allowed here.
+        # read it via -S (read-modify-write). hs_persist_state_as_code -S already
+        # reads the current value of the variable, so no pass-by-value state is
+        # needed or allowed here.
         local combined_state=""
         printf -v combined_state 'if local -p other_lib_var >/dev/null 2>&1; then\n  other_lib_var=%q\nfi\n' "kept"
 
@@ -233,7 +234,7 @@ _rr_fixture() {
     # must survive.
     #
     # Use a simplified state format (no inner overwrite-check block, no double
-    # quotes) so the hs_persist_state collision-check subshell can safely embed
+    # quotes) so the hs_persist_state_as_code collision-check subshell can safely embed
     # it in a double-quoted -c string.
     local combined_state=""
     printf -v combined_state 'if local -p other_lib_var >/dev/null 2>&1; then\n  other_lib_var=%q\nfi\n' "kept"

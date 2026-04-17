@@ -94,7 +94,7 @@ Quick Start
    local state
    rr_init -S state --ssh-opt "-i ~/.ssh/deploy_key" --allow /opt/shared/libs
    for host in "${servers[@]}"; do
-       rr_run -s "$state" "root@$host" deploy.sh --env production &
+       rr_run -S state "root@$host" deploy.sh --env production &
    done
    wait
 
@@ -111,7 +111,6 @@ locally:
 
    init_deployment() {
        local endpoint="$1"
-       hs_echo "Deploying to $endpoint"
        # ... deployment logic ...
    }
 
@@ -125,16 +124,11 @@ rr_init
 
 .. code-block:: text
 
-   rr_init [-s <state>] [-S <var>] [--allow <path>] [--ssh-opt <opt>]
+   rr_init [-S <var>] [--allow <path>] [--ssh-opt <opt>]
 
-Optional.  Captures default options into a ``handle_state`` vector.  Both
-``-s <state>`` (append to an existing state) and ``-S <var>`` (write state
-into a named variable) are supported, following the ``handle_state``
-convention.  Calling ``rr_run`` without a prior ``rr_init`` is valid;
+Optional. Captures default options into a ``handle_state`` vector by name.
+Calling ``rr_run`` without a prior ``rr_init`` is valid;
 built-in defaults are used.
-
-``-s <state>``
-    Existing state snippet to extend.
 
 ``-S <var>``
     Name of the caller-owned variable that will receive the updated state
@@ -151,14 +145,14 @@ rr_run
 
 .. code-block:: text
 
-   rr_run [-s <state>] [-S <var>] [--allow <path>] [--ssh-opt <opt>] [--] <user@host> <script.sh> [args...]
+   rr_run [-S <var>] [--allow <path>] [--ssh-opt <opt>] [--] <user@host> <script.sh> [args...]
 
 Executes ``<script.sh>`` on ``<user@host>`` via SSH.  All ``source`` calls
 inside the script resolve against the local filesystem.  Each call allocates
 its own fd and ``nc`` instance; multiple ``rr_run`` calls may run in parallel
 against different hosts.
 
-``-s <state>`` / ``-S <var>``
+``-S <var>``
     State vector produced by ``rr_init``.  Options in the vector are used as
     defaults and may be overridden by per-call ``--allow`` / ``--ssh-opt``.
 
@@ -207,7 +201,7 @@ rr_resolve
 
 .. code-block:: text
 
-   rr_resolve [-s <state>] <file>
+   rr_resolve [-S <state>] <file>
 
 Makes a local file available as a readable file descriptor and prints the
 corresponding ``/dev/fd/N`` path.  The behaviour depends on which machine
@@ -241,10 +235,11 @@ rr_cleanup
 
 .. code-block:: text
 
-   rr_cleanup [-s <state>] [-S <var>]
+   rr_cleanup [-S <var>]
 
-No-op in the current implementation (no persistent resources are held between
-``rr_run`` calls).  Reserved for a future ControlMaster mode.
+Removes rr-managed variables from the named shared state object so the same
+state variable can be reused safely by a later ``rr_init`` call.  Reserved for
+future ControlMaster teardown as well.
 
 Remote Script Categories
 ------------------------
