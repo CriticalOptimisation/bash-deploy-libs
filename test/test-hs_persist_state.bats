@@ -375,7 +375,8 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     printf "%s" "$(hs_read_persisted_state -S state)"
   '
   [[ "$output" == *'hs_read_persisted_state -q -S state'* ]]
-  [[ "$output" == *'done < <(local -p)'* ]]
+  [[ "$output" == *'local -p | while IFS= read -r __hs_local_decl; do'* ]]
+  [[ "$output" == *') >/dev/null'* ]]
   [ -z "$stderr" ]
 }
 
@@ -395,6 +396,19 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     cleanup state
   '
   [ "$output" = "secret::new" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state with explicit -- and no variable names emits no probe snippet" {
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile -lc '
+    init(){ local foo=secret; hs_persist_state_as_code -S "$1" foo; }
+    state=""
+    init state
+    hs_read_persisted_state -S state --
+  '
+  [ -z "$output" ]
   [ -z "$stderr" ]
 }
 

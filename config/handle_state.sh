@@ -364,6 +364,7 @@ hs_read_persisted_state() {
     local __quiet="${__processed_args[quiet]}"
     local __output_state_var="${__processed_args[state]}"
     local __existing_state="${!__output_state_var-}"
+    local __has_separator="${__processed_args[separator]-}"
     local -a __requested_var_args=()
     read -r -a __requested_var_args <<< "${__processed_args[vars]-}"
 
@@ -434,23 +435,27 @@ hs_read_persisted_state() {
         return 0
     fi
 
-    # Step 4: otherwise, generate a generic local-scope probe snippet instead
+    # Step 4: if the caller used an explicit `--` but provided no variable
+    # names after it, do not emit the auto-probe snippet. This lets callers
+    # disable the stdout/eval path intentionally.
+    if [[ -n "$__has_separator" ]]; then
+        return 0
+    fi
+
+    # Step 5: otherwise, generate a generic local-scope probe snippet instead
     # of returning the raw persisted code. The snippet inspects the current
     # function's locals with `local -p`, selects unset scalar locals, and
     # reenters hs_read_persisted_state with -q so unrelated locals stay quiet.
     IFS= read -r -d '' __probe_snippet <<EOF || true
-local -a __hs_read_requested_vars=()
-local __hs_local_decl="" __hs_local_name=""
-while IFS= read -r __hs_local_decl; do
-  [[ "\$__hs_local_decl" == *=* ]] && continue
-  [[ "\$__hs_local_decl" =~ ^declare\ -[^[:space:]]*[aA] ]] && continue
-  __hs_local_name=\${__hs_local_decl##* }
-  [[ "\$__hs_local_name" == __hs_* ]] && continue
-  __hs_read_requested_vars+=("\$__hs_local_name")
-done < <(local -p)
-if [ \${#__hs_read_requested_vars[@]} -gt 0 ]; then
-  hs_read_persisted_state -q -S $(printf '%q' "$__output_state_var") "\${__hs_read_requested_vars[@]}"
-fi
+hs_read_persisted_state -q -S $(printf '%q' "$__output_state_var") -- \$(
+  local -p | while IFS= read -r __hs_local_decl; do
+    [[ "\$__hs_local_decl" == *=* ]] && continue
+    [[ "\$__hs_local_decl" =~ ^declare\ -[^[:space:]]*[aA] ]] && continue
+    __hs_local_name=\${__hs_local_decl##* }
+    [[ "\$__hs_local_name" == __hs_* ]] && continue
+    printf '%s ' "\$__hs_local_name"
+  done
+) >/dev/null
 EOF
     printf '%s' "$__probe_snippet"
 }
@@ -506,8 +511,6 @@ _hs_resolve_state_inputs() {
         fi
     done
     local __caller_name=$1
-    local __remaining_args_name=$2
-    local __processed_args_name=$4
     local -n __remaining_args_ref=$2
     local __options=$3
     local -n __processed_args_ref=$4
@@ -515,11 +518,11 @@ _hs_resolve_state_inputs() {
 
     # Validate the types of passed arrays using ${...@a}
     if ! _hs_is_array __remaining_args_ref; then
-        echo "[ERROR] ${__caller_name}: '$__remaining_args_name' must name an indexed array variable." >&2
+        echo "[ERROR] ${__caller_name}: '${!__remaining_args_ref}' must name an indexed array variable." >&2
         return "$HS_ERR_INVALID_ARGUMENT_TYPE"
     fi
     if ! _hs_is_array -A __processed_args_ref; then
-        echo "[ERROR] ${__caller_name}: '$__processed_args_name' must name an associative array variable." >&2
+        echo "[ERROR] ${__caller_name}: '${!__processed_args_ref}' must name an associative array variable." >&2
         return "$HS_ERR_INVALID_ARGUMENT_TYPE"
     fi
 
