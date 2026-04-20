@@ -103,36 +103,35 @@ hs_persist_state_as_code() {
     fi
     local __var_name
     if [[ -n "$__existing_state" && ${#__persist_var_args[@]} -gt 0 ]]; then
+        # shellcheck disable=SC2016
         timeout --preserve-status -k 2 1 "${BASH:-bash}" --noprofile -lc '
+            # Normalize unknown commands reached via eval into a corrupt-state failure.
             command_not_found_handle() {
                 echo "[ERROR] hs_persist_state_as_code: command '"'"'$1'"'"' not found." >&2
                 exit 127
             }
             _hs_detect_state_collisions() {
-                local __state=$1
+                local __hs_state=$1
                 shift
-                local __name
-                local -a __collisions=()
 
-                # Declare every candidate as a local shell variable, but leave
-                # it uninitialized so a later [[ -v name ]] test only becomes
-                # true for variables that were actually restored from state.
-                for __name in "$@"; do
-                    local "$__name"
-                done
+                # Declare every candidate as an unset local scalar, then detect
+                # whether eval changed it into a set variable or a nonscalar.
+                local "$@"
 
-                eval "$__state" >/dev/null || return $?
+                eval "$__hs_state" >/dev/null || return $?
 
-                for __name in "$@"; do
-                    if [ "${!__name+x}" ]; then
-                        __collisions+=("$__name")
+                while [ $# -gt 0 ]; do
+                    # A touched variable either became set as a scalar
+                    # (`local -p name` prints an assignment) or changed type to
+                    # an array. If `local -p` itself fails here, treat that as
+                    # corruption propagated from eval.
+                    if [[ "$(local -p "$1" 2>/dev/null)" == *=* ]] || [[ ${!1@a} == *[aA]* ]]; then
+                        echo "[ERROR] hs_persist_state_as_code: variable already defined in the state: $1." >&2
+                        return 1
                     fi
+                    local -p "$1" >/dev/null 2>&1 || return $?
+                    shift
                 done
-
-                if (( ${#__collisions[@]} > 0 )); then
-                    echo "[ERROR] hs_persist_state_as_code: variables already defined in the state: ${__collisions[*]}." >&2
-                    return 1
-                fi
             }
             _hs_detect_state_collisions "$@"
         ' bash "$__existing_state" "${__persist_var_args[@]}"
@@ -260,41 +259,45 @@ hs_destroy_state() {
     # Step 5: rebuild the state from scratch using only the survivor names.
     # Instead of editing the text blocks in place, run a fresh Bash subprocess
     # that:
-    #   1. defines the minimal helpers needed (_hs_resolve_state_inputs and
-    #      hs_persist_state_as_code plus their error-code constants),
+    #   1. inherits the minimal exported helpers and error-code constants
+    #      required by _hs_resolve_state_inputs and hs_persist_state_as_code,
     #   2. declares every survivor variable local,
     #   3. evals the incoming state to restore those locals,
     #   4. calls the stdout form of hs_persist_state_as_code on the survivor list.
     #
-    # This avoids depending on BASH_SOURCE or on re-sourcing this file from a
-    # filesystem path, which would break when handle_state.sh was obtained via
-    # remote_run's virtual source mechanism.
+    # Exporting the needed helpers avoids embedding their full function bodies
+    # with declare -f while still keeping the subprocess independent from the
+    # caller's test harness or shell startup files.
     local -a __keep_state_args=("${!__state_var_set[@]}")
     if (( ${#__keep_state_args[@]} > 0 )); then
 
-        __output=$(timeout --preserve-status -k 2 1 "${BASH:-bash}" --noprofile -lc '
-            readonly HS_ERR_RESERVED_VAR_NAME='"$HS_ERR_RESERVED_VAR_NAME"'
-            readonly HS_ERR_VAR_NAME_COLLISION='"$HS_ERR_VAR_NAME_COLLISION"'
-            readonly HS_ERR_MULTIPLE_STATE_INPUTS='"$HS_ERR_MULTIPLE_STATE_INPUTS"'
-            readonly HS_ERR_CORRUPT_STATE='"$HS_ERR_CORRUPT_STATE"'
-            readonly HS_ERR_INVALID_VAR_NAME='"$HS_ERR_INVALID_VAR_NAME"'
-            '"$(declare -f _hs_is_valid_variable_name)"'
-            '"$(declare -f _hs_resolve_state_inputs)"'
-            '"$(declare -f hs_persist_state_as_code)"'
-            _hs_destroy_state_rebuild() {
-                local __rebuild_state=$1
-                shift
-                local __name
-                local __rebuilt_state=""
-                for __name in "$@"; do
-                    local "$__name"
-                done
-                eval "$__rebuild_state" >/dev/null
-                hs_persist_state_as_code -S __rebuilt_state "$@"
-                printf '%s' "$__rebuilt_state"
-            }
-            _hs_destroy_state_rebuild "$@"
-        ' bash "$__existing_state" "${__keep_state_args[@]}")
+        __output=$(
+            (
+                export HS_ERR_RESERVED_VAR_NAME HS_ERR_VAR_NAME_COLLISION \
+                    HS_ERR_MULTIPLE_STATE_INPUTS HS_ERR_CORRUPT_STATE \
+                    HS_ERR_INVALID_VAR_NAME HS_ERR_STATE_VAR_UNINITIALIZED \
+                    HS_ERR_INVALID_ARGUMENT_TYPE
+                declare -fx _hs_is_array _hs_is_valid_variable_name \
+                    _hs_resolve_state_inputs hs_persist_state_as_code
+
+                # shellcheck disable=SC2016
+                timeout --preserve-status -k 2 1 "${BASH:-bash}" --noprofile -lc '
+                    _hs_destroy_state_rebuild() {
+                        local __rebuild_state=$1
+                        shift
+                        local __name
+                        local __rebuilt_state=""
+                        for __name in "$@"; do
+                            local "$__name"
+                        done
+                        eval "$__rebuild_state" >/dev/null
+                        hs_persist_state_as_code -S __rebuilt_state "$@"
+                        printf "%s" "$__rebuilt_state"
+                    }
+                    _hs_destroy_state_rebuild "$@"
+                ' bash "$__existing_state" "${__keep_state_args[@]}"
+            )
+        )
         local __status=$?
         # Step 6: map rebuild failures to the same "corrupt prior state"
         # category used elsewhere in handle_state when we cannot safely process
@@ -400,6 +403,7 @@ hs_read_persisted_state() {
         # restore all requested variables there, and return one
         # associative-array initializer of restored string values. Missing
         # variables are reported directly on stderr from that subprocess.
+        # shellcheck disable=SC2016
         __restored_payload=$(timeout --preserve-status -k 2 1 "${BASH:-bash}" --noprofile -lc '
             _hs_read_requested_state_vars() {
                 local __state=$1
@@ -517,6 +521,8 @@ _hs_is_valid_variable_name() {
 #     - `separator`: set when an explicit `--` was seen
 #   `HS_ERR_MISSING_ARGUMENT` if a required option parameter such as the value
 #   for `-S` is missing.
+#   `HS_ERR_INVALID_VAR_NAME` if `$2` or `$4` collides with a local variable
+#   name in this helper.
 #   `HS_ERR_INVALID_ARGUMENT_TYPE` if `$2` is not an indexed array variable or
 #   if `$4` is not an associative array variable.
 #   `HS_ERR_INVALID_VAR_NAME` if the state variable name or an explicit
@@ -532,16 +538,32 @@ _hs_resolve_state_inputs() {
         return "$HS_ERR_MISSING_ARGUMENT"
     fi
     local __arg
+    local __caller_name=$1
+    local __options=$3
+    local __current_option
+    local -i OPTIND=1
+    local -i __last_separator_index
+    local -i __scan_index
+    local -a __trailing_vars=()
+    local -n __remaining_args_ref
+    local -n __processed_args_ref
     for __arg in "$1" "$2" "$4"; do
         if ! _hs_is_valid_variable_name "$__arg"; then
             echo "[ERROR] $1: invalid variable name '$__arg'." >&2
             return "$HS_ERR_INVALID_VAR_NAME"
         fi
     done
-    local __caller_name=$1
-    local -n __remaining_args_ref=$2
-    local __options=$3
-    local -n __processed_args_ref=$4
+    if local -p "$2" >/dev/null 2>&1; then
+        echo "[ERROR] ${__caller_name}: '$2' conflicts with a local variable name and cannot be used here." >&2
+        return "$HS_ERR_INVALID_VAR_NAME"
+    fi
+    if local -p "$4" >/dev/null 2>&1; then
+        echo "[ERROR] ${__caller_name}: '$4' conflicts with a local variable name and cannot be used here." >&2
+        return "$HS_ERR_INVALID_VAR_NAME"
+    fi
+
+    __remaining_args_ref=$2
+    __processed_args_ref=$4
     shift 4
 
     # Validate the types of passed arrays using ${...@a}
@@ -561,18 +583,15 @@ _hs_resolve_state_inputs() {
     # Process options
     # Increments OPTIND scanning for known options.
     __remaining_args_ref=()
-    local -i OPTIND=1
-    local opt
-    local -i index
     
     # Force a colon in front of $__options to record unknown options in $OPTARG
     while (( "$#" >= "$OPTIND" )); do
-        index=${OPTIND}
-        if getopts ":$__options" opt; then
+        __scan_index=${OPTIND}
+        if getopts ":$__options" __current_option; then
             # Returns OK if known or unknown option -X [val]
             # value is assigned to $OPTARG for known options
             # value can be attached -Svarname or detached -S varname
-            case "$opt" in
+            case "$__current_option" in
                 \?)
                     # Unknown option
                     __remaining_args_ref+=("-$OPTARG")
@@ -594,39 +613,57 @@ _hs_resolve_state_inputs() {
                     return "$HS_ERR_MISSING_ARGUMENT"
                     ;;
             esac
-        elif (( "$index" == "$OPTIND" )); then
+        elif (( "$__scan_index" == "$OPTIND" )); then
             # It was a word (parameter to some unknown option)
             __remaining_args_ref+=("${!OPTIND}")
             OPTIND=$(( OPTIND + 1 ))
         else
-            # Hit --. Stop decoding options.
+            # Hit --. Only the last separator counts. Preserve any earlier
+            # separator and the tokens up to the final separator as forwarded
+            # caller arguments, then treat only the suffix after the final
+            # separator as the explicit variable list.
             __processed_args_ref["separator"]=true
-            while (( "$#" >= "$OPTIND" )); do 
-                if ! _hs_is_valid_variable_name "${!OPTIND}"; then
-                    echo "[ERROR] ${__caller_name}: invalid variable name '${!OPTIND}'." >&2
-                    return "$HS_ERR_INVALID_VAR_NAME"
+            __last_separator_index=$((OPTIND - 1))
+            for ((__scan_index = OPTIND; __scan_index <= $#; __scan_index++)); do
+                if [[ "${!__scan_index}" == "--" ]]; then
+                    __last_separator_index=$__scan_index
                 fi
-                printf -v __processed_args_ref["vars"] "%s %s" "${!OPTIND}" "${__processed_args_ref['vars']}"
+            done
+            if (( __last_separator_index > OPTIND - 1 )); then
+                __remaining_args_ref+=("--")
+            fi
+            while (( OPTIND < __last_separator_index )); do
+                __remaining_args_ref+=("${!OPTIND}")
                 OPTIND=$(( OPTIND + 1 ))
             done
+            OPTIND=$(( __last_separator_index + 1 ))
+            break
         fi
     done
 
     # Pull variable names from the end
     : "${__processed_args_ref["vars"]:=}"
-    if [[ -z "${__processed_args_ref[separator]-}" ]]; then
-        while (( ${#__remaining_args_ref[@]} > 0 )) && _hs_is_valid_variable_name "${__remaining_args_ref[-1]}"; do
-            printf -v __processed_args_ref["vars"] "%s %s" "${__remaining_args_ref[-1]}" "${__processed_args_ref['vars']}"
-            unset "__remaining_args_ref[-1]"
-        done
-
-        local __remaining_arg
-        for __remaining_arg in "${__remaining_args_ref[@]}"; do
-            if [[ "$__remaining_arg" != -* ]]; then
-                echo "[ERROR] ${__caller_name}: invalid variable name '${__remaining_arg}'." >&2
+    if [[ -n "${__processed_args_ref[separator]-}" ]]; then
+        while (( "$#" >= "$OPTIND" )); do
+            if ! _hs_is_valid_variable_name "${!OPTIND}"; then
+                echo "[ERROR] ${__caller_name}: invalid variable name '${!OPTIND}'." >&2
                 return "$HS_ERR_INVALID_VAR_NAME"
             fi
+            printf -v __processed_args_ref["vars"] "%s%s " "${__processed_args_ref['vars']}" "${!OPTIND}"
+            OPTIND=$(( OPTIND + 1 ))
         done
+    else
+        # Without an explicit separator, treat the maximal suffix of valid
+        # variable names as the library-owned var list. We peel that suffix
+        # from the end, then rebuild it in original argument order.
+        while (( ${#__remaining_args_ref[@]} > 0 )) && _hs_is_valid_variable_name "${__remaining_args_ref[-1]}"; do
+            __trailing_vars=("${__remaining_args_ref[-1]}" "${__trailing_vars[@]}")
+            unset "__remaining_args_ref[-1]"
+        done
+        __processed_args_ref["vars"]="${__trailing_vars[@]}"
+        if [[ "${__processed_args_ref[quiet]}" == false ]] && ((${#__remaining_args_ref[@]} > 0)); then
+            echo "[WARNING] ${__caller_name}: forwarded arguments remain after implicit variable-list parsing; use -- before the variable names." >&2
+        fi
     fi
     
     if [[ -z "${__processed_args_ref[state]-}" ]]; then
