@@ -198,8 +198,92 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     printf "%s|%s|%s|%s" "${processed_args[state]}" "${processed_args[quiet]}" "${remaining_args[*]}" "${processed_args[vars]}"
   }
   run -0 --separate-stderr f
-  [ "$output" = "state|true|bad|bar foo " ]
+  [ "$output" = "state|true|bad|foo bar " ]
   [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs preserves explicit variable order in processed vars" {
+  # shellcheck disable=SC2329
+  f() {
+    local -a remaining_args=()
+    local -A processed_args=()
+    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state -- alpha beta gamma
+    printf "%s" "${processed_args[vars]}"
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "alpha beta gamma " ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs preserves trailing variable order without explicit separator" {
+  # shellcheck disable=SC2329
+  f() {
+    local -a remaining_args=()
+    local -A processed_args=()
+    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -q -S state alpha beta gamma
+    printf "%s|%s|%s" "${processed_args[state]}" "${processed_args[quiet]}" "${processed_args[vars]}"
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "state|true|alpha beta gamma" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs treats only the last separator as explicit variable-list start" {
+  # shellcheck disable=SC2329
+  f() {
+    local -a remaining_args=()
+    local -A processed_args=()
+    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state -- alpha -- beta
+    printf "%s|%s" "${remaining_args[*]}" "${processed_args[vars]}"
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "-- alpha|beta " ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs extracts explicit vars after a trailing separator even with prior words" {
+  # shellcheck disable=SC2329
+  f() {
+    local -a remaining_args=()
+    local -A processed_args=()
+    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state 1 -- alpha beta
+    printf "%s|%s" "${remaining_args[*]}" "${processed_args[vars]}"
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "1|alpha beta " ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs preserves trailing vars after unknown option and parameter" {
+  # shellcheck disable=SC2329
+  f() {
+    local -a remaining_args=()
+    local -A processed_args=()
+    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state -b alpha beta
+    printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "state|-b|alpha beta" ]
+  [[ "$stderr" == *"use -- before the variable names"* ]]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs allows forwarded unknown option parameters before trailing vars" {
+  # shellcheck disable=SC2329
+  f() {
+    local -a remaining_args=()
+    local -A processed_args=()
+    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state -c 1 -b beta gamma
+    printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "state|-c 1 -b|beta gamma" ]
+  [[ "$stderr" == *"use -- before the variable names"* ]]
 }
 
 # bats test_tags=hs_resolve_state_inputs
@@ -248,8 +332,8 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
   }
   run -0 --separate-stderr f
-  [ "$output" = "state|-a|foo " ]
-  [ -z "$stderr" ]
+  [ "$output" = "state|-a|foo" ]
+  [[ "$stderr" == *"use -- before the variable names"* ]]
 }
 
 # bats test_tags=hs_resolve_state_inputs
@@ -262,8 +346,8 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
   }
   run -0 --separate-stderr f
-  [ "$output" = "state|-b|toto foo " ]
-  [ -z "$stderr" ]
+  [ "$output" = "state|-b|toto foo" ]
+  [[ "$stderr" == *"use -- before the variable names"* ]]
 }
 
 # bats test_tags=hs_resolve_state_inputs
@@ -276,20 +360,46 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
   }
   run -0 --separate-stderr f
-  [ "$output" = "state|-b|toto foo bar " ]
-  [ -z "$stderr" ]
+  [ "$output" = "state|-b|toto foo bar" ]
+  [[ "$stderr" == *"use -- before the variable names"* ]]
 }
 
 # bats test_tags=hs_resolve_state_inputs
-@test "_hs_resolve_state_inputs rejects invalid bare words left outside the vars list" {
+@test "_hs_resolve_state_inputs preserves forwarded bare words outside the vars list" {
   # shellcheck disable=SC2329
   f() {
     local -a remaining_args=()
     local -A processed_args=()
     _hs_resolve_state_inputs my_helper remaining_args S: processed_args -S state 1invalid foo
+    printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "state|1invalid|foo" ]
+  [[ "$stderr" == *"use -- before the variable names"* ]]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs rejects a remaining_args name that collides with a local helper variable" {
+  # shellcheck disable=SC2329
+  f() {
+    local -a __trailing_vars=()
+    local -A processed_args=()
+    _hs_resolve_state_inputs my_helper __trailing_vars qS: processed_args -S state alpha beta gamma
   }
   run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr f
-  [[ "$stderr" == *"invalid variable name '1invalid'"* ]]
+  [[ "$stderr" == *"'__trailing_vars' conflicts with a local variable name"* ]]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs rejects a processed_args name that collides with a local helper variable" {
+  # shellcheck disable=SC2329
+  f() {
+    local -a remaining_args=()
+    local __options=""
+    _hs_resolve_state_inputs my_helper remaining_args qS: __options -S state alpha beta gamma
+  }
+  run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"'__options' conflicts with a local variable name"* ]]
 }
 
 # bats test_tags=hs_persist_state_as_code
@@ -505,6 +615,20 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [ -z "$stderr" ]
 }
 
+# bats test_tags=hs_read_persisted_state,known_issue
+@test "known issue nr.7: hs_read_persisted_state does not reject internal requested variable name __requested_var_ref explicitly" {
+  # shellcheck disable=SC2329
+  f() {
+    local state='if local -p foo >/dev/null 2>&1; then foo=ok; fi'
+    local __requested_var_ref=""
+    hs_read_persisted_state -S state __requested_var_ref
+    printf "%s" "$__requested_var_ref"
+  }
+  run -0 --separate-stderr f
+  [ -z "$output" ]
+  [[ "$stderr" == *"[WARNING] hs_read_persisted_state: variable '__requested_var_ref' is not defined in the state."* ]]
+}
+
 # bats test_tags=hs_read_persisted_state
 @test "hs_read_persisted_state rejects a missing state variable name" {
   # shellcheck disable=SC2329
@@ -550,7 +674,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
 }
 
 # bats test_tags=hs_persist_state_as_code
-@test "hs_persist_state_as_code reports all colliding variable names" {
+@test "hs_persist_state_as_code reports the first colliding variable name" {
   # shellcheck disable=SC2329
   f() {
     init_existing() {
@@ -566,7 +690,25 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     init_again state
   }
   run -"$HS_ERR_VAR_NAME_COLLISION" --separate-stderr f
-  [[ "$stderr" == *"variables already defined in the state: foo bar."* ]]
+  [[ "$stderr" == *"variable already defined in the state: foo."* ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code detects a collision when prior state initializes an empty array" {
+  # shellcheck disable=SC2329
+  f() {
+    local state='if local -p foo >/dev/null 2>&1; then
+  foo=([0]="")
+fi'
+    init_again() {
+      local foo=three
+      hs_persist_state_as_code -S "$1" foo
+    }
+    init_again state
+  }
+  run -"$HS_ERR_VAR_NAME_COLLISION" --separate-stderr f
+  [[ "$stderr" == *"variable already defined in the state: foo."* ]]
   [ -z "$output" ]
 }
 
@@ -735,7 +877,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     state=""
     init() {
       local foo=two
-      hs_persist_state_as_code -S "$1" "1invalid-var-name" foo
+      hs_persist_state_as_code -S "$1" -- "1invalid-var-name" foo
     }
     init state
   }
@@ -820,6 +962,29 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   }
   run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
   [[ "$stderr" == *"refusing to persist reserved variable name '__output'"* ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code rejects all current explicit reserved persisted variable names" {
+  # shellcheck disable=SC2329
+  f() {
+    local reserved
+    local state
+    init() {
+      local __var_name=bad
+      local __existing_state=bad
+      local __output_state_var=bad
+      local __output=bad
+      hs_persist_state_as_code -S "$1" "$2"
+    }
+    for reserved in __var_name __existing_state __output_state_var __output; do
+      state=""
+      init state "$reserved" || return $?
+    done
+  }
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"refusing to persist reserved variable name"* ]]
   [ -z "$output" ]
 }
 
@@ -920,7 +1085,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     state="if local -p foo >/dev/null 2>&1; then
   foo=one
 fi"
-    hs_destroy_state -S state "1invalid-var-name" >/dev/null
+    hs_destroy_state -S state -- "1invalid-var-name" >/dev/null
   }
   run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr f
   [[ "$stderr" == *"invalid variable name '1invalid-var-name'"* ]]
@@ -974,6 +1139,18 @@ fi"
     local state
     state="$(corrupt_state error)"
     hs_destroy_state -S state foo >/dev/null
+  }
+  run -"$HS_ERR_CORRUPT_STATE" --separate-stderr f
+  [[ "$stderr" == *"prior state is corrupted"* ]]
+  [ -z "$output" ]
+}
+
+# bats test_tags=hs_destroy_state,known_issue
+@test "known issue nr.6: hs_destroy_state does not reject internal state variable name __state_var_names explicitly" {
+  # shellcheck disable=SC2329
+  f() {
+    local __state_var_names='not a state snippet'
+    hs_destroy_state -S __state_var_names foo >/dev/null
   }
   run -"$HS_ERR_CORRUPT_STATE" --separate-stderr f
   [[ "$stderr" == *"prior state is corrupted"* ]]

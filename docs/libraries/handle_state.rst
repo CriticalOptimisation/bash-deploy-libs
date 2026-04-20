@@ -214,10 +214,11 @@ entry points.
 Errors:
 
 - ``HS_ERR_MISSING_ARGUMENT=8``: required option parameter missing.
+- ``HS_ERR_INVALID_VAR_NAME=5``: invalid state variable name, invalid
+  explicit variable-name token, or a collision where ``$2`` / ``$4`` matches
+  one of the helper's own local variable names.
 - ``HS_ERR_INVALID_ARGUMENT_TYPE=9``: output containers passed by name are not
   an indexed array and an associative array respectively.
-- ``HS_ERR_INVALID_VAR_NAME=5``: invalid state variable name or invalid
-  explicit variable-name token.
 - ``HS_ERR_STATE_VAR_UNINITIALIZED=7``: missing ``-S <statevar>``.
 
 Error Codes
