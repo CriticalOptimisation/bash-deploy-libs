@@ -153,7 +153,14 @@ Probe-snippet mode
 
 When no explicit variable names are supplied and no explicit ``--`` is present,
 ``hs_read_persisted_state`` emits a small locally generated probe snippet. The
-caller may ``eval`` that snippet.
+caller must ``eval`` the snippet using the forwarded-arguments form:
+
+.. code-block:: bash
+
+   cleanup_function() {
+       local temp_file resource_id
+       eval "$(hs_read_persisted_state "$@")"
+   }
 
 The generated snippet:
 
