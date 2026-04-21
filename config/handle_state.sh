@@ -7,8 +7,7 @@
 [[ -z ${__HANDLE_STATE_SH_INCLUDED:-} ]] && __HANDLE_STATE_SH_INCLUDED=1 || return 0
 
 # Source command guard for secure external command usage
-# shellcheck source=config/command_guard.sh
-# shellcheck disable=SC1091
+# shellcheck source=command_guard.sh
 source "${BASH_SOURCE%/*}/command_guard.sh"
 
 # Library usage:
@@ -18,21 +17,21 @@ source "${BASH_SOURCE%/*}/command_guard.sh"
 #   init_function() {
 #       local temp_file="/tmp/some_temp_file"
 #       local resource_id="resource_123"
-#       hs_persist_state_as_code "$@" temp_file resource_id
-#       return 0
+#       hs_persist_state_as_code "$@" -- temp_file resource_id
 #   }
 #   cleanup() {
 #       local temp_file
 #       local resource_id
-#       hs_read_persisted_state "$@" temp_file resource_id  # Recreate local variables from the state string
-#       # Now temp_file and resource_id are available for cleanup operations
+#       hs_read_persisted_state "$@" -- temp_file resource_id
 #       rm -f "$temp_file"
-#       echo "Cleaned up resource: $resource_id"
-#       hs_destroy_state "$@" -- temp_file resource_id  # Ensure the state variable can be reused.
+#       printf 'Cleaned up resource: %s\n' "$resource_id"
+#       hs_destroy_state "$@" -- temp_file resource_id
 #   }
 #
-# Upper level usage: state=$(init_function)
-#                    cleanup "$state"
+# Upper level usage:
+#   local _state=""
+#   init_function -S _state
+#   cleanup -S _state
 
 guard timeout
 
