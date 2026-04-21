@@ -11,10 +11,9 @@ Purpose
 
 ``handle_state.sh`` helps Bash libraries carry cleanup state by name.
 
-The current public API is built around a named state variable passed with
-``-S <statevar>``. The state value is opaque. The current implementation stores
-that value as guarded Bash code, but callers should not depend on that internal
-representation.
+The public API is built around a named state variable passed with
+``-S <statevar>``. The state value is an opaque internal token; callers should
+not inspect or modify its contents directly.
 
 Dependencies
 ------------
@@ -126,7 +125,7 @@ hs_read_persisted_state
 
 - Usage: ``hs_read_persisted_state [forwarded args] [-q] -S <statevar> [--] [var1 var2 ...]``
 - Convenience form: ``hs_read_persisted_state state ...`` is normalized to
-  ``-S state ...``.
+  ``-S state ...``. Not recommended in library code; prefer explicit ``-S``.
 - Preferred usage: ``hs_read_persisted_state "$@" -- var1 var2 ...``
 
 Explicit restore
