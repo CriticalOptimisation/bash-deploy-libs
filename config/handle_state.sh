@@ -50,12 +50,11 @@ readonly HS_ERR_INVALID_ARGUMENT_TYPE=9
 # Function:
 #   hs_persist_state_as_code [options] [--] [state_variable ...]
 # Description:
-#   Produces an opaque state object that preserves the current values of the
-#   specified local variables for later restoration via
-#   `hs_read_persisted_state`.
-#   The current implementation stores that state as guarded Bash code, but
-#   callers should treat the resulting value as internal transport data rather
-#   than as a public snippet format.
+#   Appends the current values of the specified local variables to the opaque
+#   state object held in the variable named by -S, for later consumption via
+#   `hs_read_persisted_state` in the receiving scope.
+#   The state format is internal; treat the named variable as an opaque token
+#   and do not inspect or modify its value directly.
 #   Restoration only initializes matching `local` variables in the receiving
 #   scope and skips variables that are already non-empty there.
 # Options:
@@ -330,7 +329,7 @@ hs_destroy_state() {
 #        state variable is not present in the state object.
 #   -S <state> - pass the state object by name, mandatory.
 #   Other options are ignored up to the last --, so this function is usually able
-#   to directly process its caller's argument list, future-prooving it against
+#   to directly process its caller's argument list, future-proofing it against
 #   new hs_read_persisted_state options.
 #   -- - marks the end of options and the beginning of the list of variable names.
 # Arguments:
