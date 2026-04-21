@@ -160,6 +160,8 @@ caller must ``eval`` the snippet using the forwarded-arguments form:
    cleanup_function() {
        local temp_file resource_id
        eval "$(hs_read_persisted_state "$@")"
+       rm -f "$temp_file"
+       printf 'Cleaned up resource: %s\n' "$resource_id"
    }
 
 The generated snippet:
