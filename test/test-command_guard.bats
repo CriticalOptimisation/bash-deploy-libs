@@ -10,7 +10,7 @@ setup_file() {
     echo "Missing library $LIB" >&2
     return 1
   fi
-  # shellcheck source=config/command_guard.sh
+  # shellcheck source=../config/command_guard.sh
   source "$LIB"
   export -f guard _cg_resolve_command_path
   export CG_ERR_INVALID_NAME CG_ERR_NOT_FOUND

@@ -104,7 +104,7 @@ guard() {
             else
                 echo "[ERROR] guard: unable to resolve full path for '$cmd'. Use the full path." >&2
             fi
-            [[ "$BASHPID" != "$$" ]] && exit $CG_ERR_NOT_FOUND || return $CG_ERR_NOT_FOUND
+            [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
         }
         valid_commands+=("$cmd")
         full_paths+=("$full_path")
