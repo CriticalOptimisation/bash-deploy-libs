@@ -659,7 +659,8 @@ _hs_resolve_state_inputs() {
             __trailing_vars=("${__remaining_args_ref[-1]}" "${__trailing_vars[@]}")
             unset "__remaining_args_ref[-1]"
         done
-        __processed_args_ref["vars"]="${__trailing_vars[@]}"
+        local IFS=' '
+        __processed_args_ref["vars"]="${__trailing_vars[*]}"
         if [[ "${__processed_args_ref[quiet]}" == false ]] && ((${#__remaining_args_ref[@]} > 0)); then
             echo "[WARNING] ${__caller_name}: forwarded arguments remain after implicit variable-list parsing; use -- before the variable names." >&2
         fi
