@@ -315,15 +315,18 @@ hs_destroy_state() {
 # --- hs_read_persisted_state --------------------------------------------------------
 # Function: 
 #   hs_read_persisted_state [options] [--] [state_variable ...]
-# Description: 
-#   Restores values from the opaque state object produced by
-#   `hs_persist_state_as_code`.
-#   For convenience, callers may pass either `state` or `-S state`.
-#   When explicit variable names are provided, those named locals are restored
-#   directly into the current caller scope.
-#   Without an explicit list, the function emits a safe, locally generated probe
-#   snippet that reenters `hs_read_persisted_state` with the names of matching
-#   empty locals found in the immediate caller scope.
+# Description:
+#   Restores the values of the specified local variables from the opaque state
+#   object held in the variable named by -S.
+#   With an explicit variable list: evaluates the state in an isolated
+#   subprocess, then writes each restored value back into the matching local
+#   in the caller's scope via nameref assignment.
+#   Without an explicit variable list (and no --): emits a probe snippet to
+#   stdout that the caller must eval; the snippet auto-discovers unset scalar
+#   locals in the immediate caller scope and reenters hs_read_persisted_state
+#   with those names explicitly.
+#   With -- and no variable names: returns 0 without restoring anything,
+#   disabling the auto-probe path.
 # Options:
 #   -q - suppresses the warning that is normally emitted when a requested
 #        state variable is not present in the state object.
@@ -335,7 +338,7 @@ hs_destroy_state() {
 # Arguments:
 #   $@ - names of local variables to restore. Without `--`, the trailing
 #        arguments that are valid Bash identifiers are treated as the variable list.
-#        Note that the detached value associated with the last given option will be mistaken
+#        Note that the value associated with the last given option will be mistaken
 #        for a variable unless that option is known or `--` is used.
 # Errors:
 #   - `HS_ERR_MISSING_ARGUMENT` if no state variable name is supplied at all.
