@@ -7,7 +7,6 @@
 [[ -z ${__COMMAND_GUARD_SH_INCLUDED:-} ]] && __COMMAND_GUARD_SH_INCLUDED=1 || return 0
 
 # --- Public error codes --------------------------------------------------------
-readonly CG_ERR_MISSING_COMMAND=1
 readonly CG_ERR_INVALID_NAME=2
 readonly CG_ERR_NOT_FOUND=3
 
