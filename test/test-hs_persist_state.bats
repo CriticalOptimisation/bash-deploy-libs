@@ -12,8 +12,7 @@ setup_file() {
     return 1
   fi
   export BATS_TEST_TMPDIR
-  # shellcheck source=config/handle_state.sh
-  # shellcheck disable=SC1091
+  # shellcheck source=../config/handle_state.sh
   #source "$LIB"
   #export -f _hs_is_valid_variable_name \
   #          _hs_resolve_state_inputs _hs_extract_persisted_state_var_names \
@@ -25,8 +24,7 @@ setup_file() {
   export BATS_TEST_TIMEOUT=30
 }
 setup() {
-  # shellcheck source=config/handle_state.sh
-  # shellcheck disable=SC1091
+  # shellcheck source=../config/handle_state.sh
   source "$LIB"
 }
 # Define a helper to create a fake simplified persisted state
