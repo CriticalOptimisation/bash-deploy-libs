@@ -52,7 +52,7 @@ _cg_resolve_command_path() {
 #   guard -q  # no warning
 #   guard -- uname -login  # Treats "-login" as a command name
 # Errors:
-#   CG_ERR_MISSING_COMMAND, CG_ERR_INVALID_NAME, CG_ERR_NOT_FOUND
+#   CG_ERR_INVALID_NAME, CG_ERR_NOT_FOUND
 # Notes:
 #   Uses a restricted PATH ("/usr/bin:/bin") in a subshell to resolve the command.
 #   This avoids resolving through user-controlled PATH entries.
