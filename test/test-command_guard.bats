@@ -16,6 +16,16 @@ setup_file() {
   export CG_ERR_MISSING_COMMAND CG_ERR_INVALID_NAME CG_ERR_NOT_FOUND
 }
 
+# bats test_tags=guard,issue-24
+# Expected to fail until CG_ERR_MISSING_COMMAND is removed from command_guard.sh
+@test "issue-24: CG_ERR_MISSING_COMMAND is not defined after sourcing" {
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile --norc -c '
+    source "$LIB"
+    [[ -z "${CG_ERR_MISSING_COMMAND+x}" ]]
+  '
+}
+
 # bats test_tags=guard
 @test "guard defines a function that shadows the command" {
   # shellcheck disable=SC2016
