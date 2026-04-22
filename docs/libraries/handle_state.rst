@@ -308,8 +308,6 @@ Caveats
 
 - Prefer explicit restore lists over implicit local restore.
 - Do not rely on the opaque state format being executable code forever.
-- Early unit tests still use raw ``eval`` against the current code-based state
-  representation, but library code should prefer ``hs_read_persisted_state``.
 - The current implementation uses ``eval`` internally; state should therefore
   be treated as trusted input.
 
