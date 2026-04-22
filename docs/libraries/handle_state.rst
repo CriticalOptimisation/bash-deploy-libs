@@ -68,7 +68,8 @@ variables to the opaque state object named by ``-S``.
 Behavior:
 
 - Requested variables that are unset are skipped.
-- Unknown names and function names are ignored.
+- Variable names not declared in the caller's scope are an error.
+- Function names passed as variable names are an error.
 - Indexed arrays currently persist only their first element.
 - Associative arrays are ignored.
 - Namerefs are persisted as scalar values.
@@ -86,6 +87,8 @@ Errors:
   the prior state.
 - ``HS_ERR_CORRUPT_STATE=4``: the prior state could not be evaluated safely
   during collision checking.
+- ``HS_ERR_UNKNOWN_VAR_NAME=10``: a requested variable name is not declared
+  in the caller's scope.
 
 hs_destroy_state
 ~~~~~~~~~~~~~~~~
@@ -243,14 +246,13 @@ Error Codes
 - ``HS_ERR_STATE_VAR_UNINITIALIZED=7``
 - ``HS_ERR_MISSING_ARGUMENT=8``
 - ``HS_ERR_INVALID_ARGUMENT_TYPE=9``
+- ``HS_ERR_UNKNOWN_VAR_NAME=10``
 
 Known Limitations
 -----------------
 
 The tests currently demonstrate these limitations:
 
-- unknown variable names passed to ``hs_persist_state_as_code`` are ignored
-- function names passed to ``hs_persist_state_as_code`` are ignored
 - indexed arrays preserve only their first element
 - associative arrays are ignored
 - namerefs are restored as scalar values
