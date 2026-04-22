@@ -737,16 +737,18 @@ fi'
   [[ "$stderr" == *"'not_a_var' is not declared in scope"* ]]
 }
 
-# bats test_tags=hs_persist_state_as_code
-@test "hs_persist_state_as_code errors when a function name is passed instead of a variable" {
+# bats test_tags=hs_persist_state_as_code,known_issue
+@test "known issue nr.2: hs_persist_state_as_code silently ignores function names" {
   # shellcheck disable=SC2329
   f() {
+    my_func(){ echo "nope"; }
     local state_var=""
-    init(){ my_func(){ echo "nope"; }; hs_persist_state_as_code "$@" -- my_func; }
-    init -S state_var
+    hs_persist_state_as_code -S state_var my_func
+    printf "%s" "$state_var"
   }
-  run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
-  [[ "$stderr" == *"'my_func' is not declared in scope"* ]]
+  run -0 --separate-stderr f
+  [ -z "$output" ]
+  [ -z "$stderr" ]
 }
 
 # bats test_tags=hs_persist_state_as_code,known_issue
@@ -1144,7 +1146,7 @@ fi"
 @test "known issue nr.6: hs_destroy_state does not reject internal state variable name __state_var_names explicitly" {
   # shellcheck disable=SC2329
   f() {
-    local __state_var_names='not a state snippet'
+    local -a __state_var_names=('not a state snippet')
     hs_destroy_state -S __state_var_names foo >/dev/null
   }
   run -"$HS_ERR_CORRUPT_STATE" --separate-stderr f

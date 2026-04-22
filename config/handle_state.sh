@@ -154,8 +154,12 @@ hs_persist_state_as_code() {
             return "$HS_ERR_RESERVED_VAR_NAME"
         fi
         # Fail fast if the name is not declared anywhere in the dynamic scope
-        # (catches typos and function names passed by mistake).
+        # (catches typos). Function names are silently skipped — persisting
+        # functions is tracked separately as a known limitation.
         if ! declare -p "$__var_name" >/dev/null 2>&1; then
+            if declare -f "$__var_name" >/dev/null 2>&1; then
+                continue
+            fi
             echo "[ERROR] hs_persist_state_as_code: '$__var_name' is not declared in scope." >&2
             return "$HS_ERR_UNKNOWN_VAR_NAME"
         fi

@@ -69,7 +69,7 @@ Behavior:
 
 - Requested variables that are unset are skipped.
 - Variable names not declared in the caller's scope are an error.
-- Function names passed as variable names are an error.
+- Function names are ignored.
 - Indexed arrays currently persist only their first element.
 - Associative arrays are ignored.
 - Namerefs are persisted as scalar values.
@@ -253,6 +253,7 @@ Known Limitations
 
 The tests currently demonstrate these limitations:
 
+- function names passed to ``hs_persist_state_as_code`` are ignored
 - indexed arrays preserve only their first element
 - associative arrays are ignored
 - namerefs are restored as scalar values
