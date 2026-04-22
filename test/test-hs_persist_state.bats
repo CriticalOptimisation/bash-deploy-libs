@@ -711,45 +711,42 @@ fi'
 }
 
 # bats test_tags=hs_persist_state_as_code
-@test "hs_persist_state_as_code does not include variables that were not set in init" {
+@test "hs_persist_state_as_code persists a set variable and skips a declared-but-unset one" {
   # shellcheck disable=SC2329
   f() {
-    init(){ local foo=one; hs_persist_state_as_code -S "$1" foo bar; }
-    cleanup(){ local foo bar; eval "$1"; printf "%s:%s" "$foo" "${bar:-}"; }
-    state=""
-    init state
-    cleanup "$state"
+    local state_var=""
+    init(){ local foo=one bar; hs_persist_state_as_code -S "$1" foo bar; }
+    cleanup(){ local foo bar; hs_read_persisted_state -S "$1" -- foo bar; printf "%s:%s" "$foo" "${bar:-}"; }
+    init -S state_var
+    cleanup -S state_var
   }
-  run -0 f
+  run -0 --separate-stderr f
   [ "$output" = "one:" ]
+  [ -z "$stderr" ]
 }
 
-# bats test_tags=hs_persist_state_as_code,known_issue
-@test "known issue nr.1: hs_persist_state_as_code silently ignores unknown variable names" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code errors on a variable name not declared in scope" {
   # shellcheck disable=SC2329
   f() {
-    state=""
+    local state_var=""
     init(){ hs_persist_state_as_code -S "$1" not_a_var; }
-    init state
-    printf "%s" "$state"
+    init -S state_var
   }
-  run -0 --separate-stderr f
-  [ -z "$output" ]
-  [ -z "$stderr" ]
+  run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"'not_a_var' is not declared in scope"* ]]
 }
 
-# bats test_tags=hs_persist_state_as_code,known_issue
-@test "known issue nr.2: hs_persist_state_as_code silently ignores function names" {
+# bats test_tags=hs_persist_state_as_code
+@test "hs_persist_state_as_code errors when a function name is passed instead of a variable" {
   # shellcheck disable=SC2329
   f() {
-    state=""
+    local state_var=""
     init(){ my_func(){ echo "nope"; }; hs_persist_state_as_code -S "$1" my_func; }
-    init state
-    printf "%s" "$state"
+    init -S state_var
   }
-  run -0 --separate-stderr f
-  [ -z "$output" ]
-  [ -z "$stderr" ]
+  run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"'my_func' is not declared in scope"* ]]
 }
 
 # bats test_tags=hs_persist_state_as_code,known_issue
