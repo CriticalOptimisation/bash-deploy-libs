@@ -152,7 +152,7 @@ Implicit local restore
 ^^^^^^^^^^^^^^^^^^^^^^
 
 When no explicit variable names are supplied and no explicit ``--`` is present,
-``hs_read_persisted_state`` emits a small locally generated implicit restore snippet. The
+``hs_read_persisted_state`` emits a small safe, locally generated implicit restore snippet. The
 caller must ``eval`` the snippet using the forwarded-arguments form:
 
 .. code-block:: bash
@@ -172,8 +172,9 @@ The generated snippet:
 - reenters ``hs_read_persisted_state -q -S <statevar> -- ...``,
 - redirects that reentrant call's stdout to ``/dev/null``.
 
-This is safer than directly evaluating the opaque state object because the
-caller only evaluates the locally generated implicit restore code.
+The emitted snippet is safe: the only elements derived from the transmitted
+state are valid Bash identifiers that are tested for existence as local
+variables in the caller's scope.
 
 .. warning::
 
