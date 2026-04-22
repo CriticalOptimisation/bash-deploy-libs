@@ -45,6 +45,7 @@ readonly HS_ERR_VAR_NAME_NOT_IN_STATE=6
 readonly HS_ERR_STATE_VAR_UNINITIALIZED=7
 readonly HS_ERR_MISSING_ARGUMENT=8
 readonly HS_ERR_INVALID_ARGUMENT_TYPE=9
+readonly HS_ERR_UNKNOWN_VAR_NAME=10
 
 # --- hs_persist_state_as_code ----------------------------------------------------------
 # Function:
@@ -78,6 +79,8 @@ readonly HS_ERR_INVALID_ARGUMENT_TYPE=9
 #     already defined in the prior state object.
 #   - `HS_ERR_CORRUPT_STATE` if the prior state object cannot be evaluated
 #     safely during collision checking.
+#   - `HS_ERR_UNKNOWN_VAR_NAME` if a requested variable name is not declared
+#     in the caller's scope (catches typos and function names).
 # Usage examples:
 #   local state_var
 #   init() {
@@ -150,11 +153,18 @@ hs_persist_state_as_code() {
             echo "[ERROR] hs_persist_state_as_code: refusing to persist reserved variable name '$__var_name'." >&2  
             return "$HS_ERR_RESERVED_VAR_NAME"
         fi
-        # Check if the variable exists in the caller (local or global). We avoid
-        # using `local -p` here because that only inspects locals of this
-        # function, not the caller's scope. If the variable exists, capture its
-        # value and emit a guarded assignment that will only set it in the
-        # receiving scope if that scope has declared it `local`.
+        # Fail fast if the name is not declared anywhere in the dynamic scope
+        # (catches typos). Function names are silently skipped — persisting
+        # functions is tracked separately as a known limitation.
+        if ! declare -p "$__var_name" >/dev/null 2>&1; then
+            if declare -f "$__var_name" >/dev/null 2>&1; then
+                continue
+            fi
+            echo "[ERROR] hs_persist_state_as_code: '$__var_name' is not declared in scope." >&2
+            return "$HS_ERR_UNKNOWN_VAR_NAME"
+        fi
+        # The variable is declared. If it is set, persist it; if unset, skip
+        # silently — an unset local is a legitimate intentional omission.
         if [ "${!__var_name+x}" ]; then
             # Get the value of the variable
             local var_value
@@ -405,8 +415,7 @@ hs_read_persisted_state() {
             _hs_read_requested_state_vars() {
                 local __state=$1
                 local __quiet_mode=$2
-                shift
-                shift
+                shift 2
                 local __requested_var
                 local __restored_entries=""
 

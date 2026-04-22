@@ -15,5 +15,6 @@
         "release/*"
     ],
     "git.branchProtectionPrompt": "always",
-    "files.readonlyFromPermissions": true
+    "files.readonlyFromPermissions": true,
+    "shellcheck.useWorkspaceRootAsCwd": false
 }
