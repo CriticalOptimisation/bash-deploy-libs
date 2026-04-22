@@ -174,7 +174,8 @@ The generated snippet:
 
 The emitted snippet is safe: the only elements derived from the transmitted
 state are valid Bash identifiers that are tested for existence as local
-variables in the caller's scope.
+variables in the caller's scope. The caller evaluates safe probing code, not
+the persisted state transmitted by the caller directly.
 
 .. warning::
 
