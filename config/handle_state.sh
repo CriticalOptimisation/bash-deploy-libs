@@ -459,10 +459,10 @@ hs_read_persisted_state() {
         return 0
     fi
 
-    # Step 5: otherwise, generate an implicit restore snippet instead of
-    # returning the raw persisted code. The snippet inspects the current
-    # function's locals with `local -p`, selects unset scalar locals, and
-    # reenters hs_read_persisted_state with -q so unrelated locals stay quiet.
+    # Step 5: otherwise, generate an implicit restore snippet. The snippet
+    # inspects the current function's locals with `local -p`, selects unset
+    # scalar locals, and reenters hs_read_persisted_state with -q so unrelated
+    # locals stay quiet.
     IFS= read -r -d '' __probe_snippet <<EOF || true
 hs_read_persisted_state -q -S $(printf '%q' "$__output_state_var") -- \$(
   local -p | while IFS= read -r __hs_local_decl; do
