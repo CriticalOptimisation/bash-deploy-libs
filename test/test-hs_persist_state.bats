@@ -715,8 +715,8 @@ fi'
   # shellcheck disable=SC2329
   f() {
     local state_var=""
-    init(){ local foo=one bar; hs_persist_state_as_code -S "$1" foo bar; }
-    cleanup(){ local foo bar; hs_read_persisted_state -S "$1" -- foo bar; printf "%s:%s" "$foo" "${bar:-}"; }
+    init(){ local foo=one bar; hs_persist_state_as_code "$@" -- foo bar; }
+    cleanup(){ local foo bar; hs_read_persisted_state -q "$@" -- foo bar; printf "%s:%s" "$foo" "${bar:-}"; }
     init -S state_var
     cleanup -S state_var
   }
@@ -730,7 +730,7 @@ fi'
   # shellcheck disable=SC2329
   f() {
     local state_var=""
-    init(){ hs_persist_state_as_code -S "$1" not_a_var; }
+    init(){ hs_persist_state_as_code "$@" -- not_a_var; }
     init -S state_var
   }
   run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
@@ -742,7 +742,7 @@ fi'
   # shellcheck disable=SC2329
   f() {
     local state_var=""
-    init(){ my_func(){ echo "nope"; }; hs_persist_state_as_code -S "$1" my_func; }
+    init(){ my_func(){ echo "nope"; }; hs_persist_state_as_code "$@" -- my_func; }
     init -S state_var
   }
   run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
