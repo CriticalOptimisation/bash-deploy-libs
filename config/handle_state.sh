@@ -352,14 +352,10 @@ hs_destroy_state() {
 #     is supplied.
 # Usage examples:
 #   cleanup() {
-#       local state_var="$1"
 #       local temp_file resource_id
-#       hs_read_persisted_state -S "$state_var" -- temp_file resource_id
-#   }
-#   # Better: keeps -S convention for cleanup().
-#   cleanup() {
-#       local temp_file resource_id
-#       hs_read_persisted_state -q "$@" -- temp_file resource_id
+#       hs_read_persisted_state "$@" -- temp_file resource_id
+#       rm -f "$temp_file"
+#       printf 'Cleaned up resource: %s\n' "$resource_id"
 #   }
 hs_read_persisted_state() {
     # Step 1: normalize the convenience form `hs_read_persisted_state state`
