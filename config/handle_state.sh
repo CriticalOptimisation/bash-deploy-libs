@@ -415,8 +415,7 @@ hs_read_persisted_state() {
             _hs_read_requested_state_vars() {
                 local __state=$1
                 local __quiet_mode=$2
-                shift
-                shift
+                shift 2
                 local __requested_var
                 local __restored_entries=""
 

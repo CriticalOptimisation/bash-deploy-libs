@@ -715,8 +715,8 @@ fi'
   # shellcheck disable=SC2329
   f() {
     local state_var=""
-    init(){ local foo=one bar; hs_persist_state_as_code "$@" -- foo bar; }
-    cleanup(){ local foo bar; hs_read_persisted_state -q "$@" -- foo bar; printf "%s:%s" "$foo" "${bar:-}"; }
+    init(){ local foo=one unset_var; hs_persist_state_as_code "$@" -- foo unset_var; }
+    cleanup(){ local foo unset_var; hs_read_persisted_state -q "$@" -- foo unset_var; printf "%s:%s" "$foo" "${unset_var:-}"; }
     init -S state_var
     cleanup -S state_var
   }
@@ -826,11 +826,11 @@ fi'
 @test "preserve special characters in persisted values" {
   # shellcheck disable=SC2329
   f() {
-    init(){ local foo='a b "c" $d'; hs_persist_state_as_code -S "$1" foo; }
-    cleanup(){ local foo; eval "$1"; printf "%s" "$foo"; }
-    state=""
-    init state
-    cleanup "$state"
+    init(){ local foo="a b \"c\" \$d"; hs_persist_state_as_code "$@" -- foo; }
+    cleanup(){ local foo; hs_read_persisted_state "$@" -- foo; printf "%s" "$foo"; }
+    local state=""
+    init -S state
+    cleanup -S state
   }
   run -0 f
   [ "$output" = "a b \"c\" \$d" ]
@@ -853,17 +853,14 @@ fi'
       local foo=two
       hs_persist_state_as_code bad -S "$1" -- foo
     }
-    cleanup() {
-      local foo=""
-      eval "$state"
-      printf "%s" "$foo"
-    }
-    state=""
+    local state=""
     init state
-    cleanup
+    local -a names=()
+    _hs_extract_persisted_state_var_names f "$state" names
+    [[ " ${names[*]} " != *" bad "* ]]
+    [[ " ${names[*]} " == *" foo "* ]]
   }
   run -0 --separate-stderr f
-  [ "$output" = "two" ]
   [ -z "$stderr" ]
 }
 
@@ -989,16 +986,17 @@ fi'
 @test "hs_persist_state_as_code with -S var_name assigns to variable" {
   # shellcheck disable=SC2329
   f() {
+    local encoded=""
     init() {
       local bar=two
       hs_persist_state_as_code -S "$1" bar
     }
     cleanup(){
       local bar
-      eval "$state"
+      eval "$encoded"
       printf "%s" "$bar"
     }
-    init state
+    init encoded
     cleanup
   }
   run -0 f
@@ -1025,18 +1023,18 @@ fi'
 @test "hs_destroy_state with -S rewrites the named variable in place" {
   # shellcheck disable=SC2329
   f() {
+    local rewritten=""
     init() {
       local foo=one bar=two
       hs_persist_state_as_code -S "$1" foo bar
     }
     cleanup() {
       local foo="" bar=""
-      eval "$state"
+      eval "$rewritten"
       printf "%s:%s" "${foo:-}" "${bar:-}"
     }
-    state=""
-    init state
-    hs_destroy_state -S state foo
+    init rewritten
+    hs_destroy_state -S rewritten foo
     cleanup
   }
   run -0 --separate-stderr f
@@ -1046,6 +1044,7 @@ fi'
 
 # bats test_tags=hs_destroy_state
 @test "hs_destroy_state rebuild works in a clean shell without exported helper functions" {
+  # shellcheck disable=SC2016
   run -0 --separate-stderr env -i PATH="$PATH" LIB="$LIB" bash --noprofile -lc '
     source "$LIB"
     init() {
@@ -1093,18 +1092,18 @@ fi"
 @test "hs_destroy_state ignores forwarded args before final --" {
   # shellcheck disable=SC2329
   f() {
+    local trimmed=""
     init() {
       local foo=one bar=two
       hs_persist_state_as_code -S "$1" foo bar
     }
     cleanup() {
       local foo="" bar=""
-      eval "$state"
+      eval "$trimmed"
       printf "%s:%s" "${foo:-}" "${bar:-}"
     }
-    state=""
-    init state
-    hs_destroy_state bad -S state -- foo
+    init trimmed
+    hs_destroy_state bad -S trimmed -- foo
     cleanup
   }
   run -0 --separate-stderr f
