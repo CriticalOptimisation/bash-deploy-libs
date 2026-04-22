@@ -43,9 +43,9 @@ Quick Start
        hs_destroy_state "$@" -- temp_file resource_id
    }
 
-   local state=""
-   init_function -S state
-   cleanup_function -S state
+   local state_var=""
+   init_function -S state_var
+   cleanup_function -S state_var
 
 Public API
 ----------
@@ -124,8 +124,8 @@ hs_read_persisted_state
 ``hs_read_persisted_state`` restores values from a named opaque state object.
 
 - Usage: ``hs_read_persisted_state [forwarded args] [-q] -S <statevar> [--] [var1 var2 ...]``
-- Convenience form: ``hs_read_persisted_state state ...`` is normalized to
-  ``-S state ...``. Not recommended in library code; prefer explicit ``-S``.
+- Convenience form: ``hs_read_persisted_state state_var ...`` is normalized to
+  ``-S state_var ...``. Not recommended in library code; prefer explicit ``-S``.
 - Preferred usage: ``hs_read_persisted_state "$@" -- var1 var2 ...``
 
 Explicit restore
@@ -148,11 +148,11 @@ Behavior:
 - ``-q`` suppresses those warnings.
 - The current implementation restores scalar string values only.
 
-Probe-snippet mode
-^^^^^^^^^^^^^^^^^^
+Implicit local restore
+^^^^^^^^^^^^^^^^^^^^^^
 
 When no explicit variable names are supplied and no explicit ``--`` is present,
-``hs_read_persisted_state`` emits a small locally generated probe snippet. The
+``hs_read_persisted_state`` emits a small locally generated implicit restore snippet. The
 caller must ``eval`` the snippet using the forwarded-arguments form:
 
 .. code-block:: bash
@@ -173,7 +173,7 @@ The generated snippet:
 - redirects that reentrant call's stdout to ``/dev/null``.
 
 This is safer than directly evaluating the opaque state object because the
-caller only evaluates the locally generated probe code.
+caller only evaluates the locally generated implicit restore code.
 
 .. warning::
 
@@ -181,7 +181,7 @@ caller only evaluates the locally generated probe code.
    caller scope may be considered for restoration. This can be the wrong
    behavior if the caller manages several unrelated state variables or reuses
    common local names. Prefer explicit variable lists in non-trivial cleanup
-   paths.
+   paths rather than relying on implicit local restore.
 
 .. warning::
 
@@ -190,7 +190,7 @@ caller only evaluates the locally generated probe code.
    if an intermediate function names them explicitly.
 
 If ``--`` is present and no variable names follow it, the function emits no
-probe snippet and returns success.
+implicit restore snippet and returns success.
 
 Errors:
 
@@ -292,7 +292,7 @@ Representing an array manually through a scalar encoding:
 Caveats
 -------
 
-- Prefer explicit restore lists over probe-snippet mode.
+- Prefer explicit restore lists over implicit local restore.
 - Do not rely on the opaque state format being executable code forever.
 - Early unit tests still use raw ``eval`` against the current code-based state
   representation, but library code should prefer ``hs_read_persisted_state``.

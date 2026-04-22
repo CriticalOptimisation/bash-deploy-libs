@@ -79,13 +79,13 @@ readonly HS_ERR_INVALID_ARGUMENT_TYPE=9
 #   - `HS_ERR_CORRUPT_STATE` if the prior state object cannot be evaluated
 #     safely during collision checking.
 # Usage examples:
-#   local state
+#   local state_var
 #   init() {
 #       local var1 var2
 #       hs_persist_state_as_code "$@" -- var1 var2
 #   }
 #
-#   init -S state
+#   init -S state_var
 hs_persist_state_as_code() {
     local -a __remaining_args=()
     local -A __processed_args=()
@@ -321,10 +321,10 @@ hs_destroy_state() {
 #   With an explicit variable list: evaluates the state in an isolated
 #   subprocess, then writes each restored value back into the matching local
 #   in the caller's scope via nameref assignment.
-#   Without an explicit variable list (and no --): emits a probe snippet to
-#   stdout that the caller must eval; the snippet auto-discovers unset scalar
-#   locals in the immediate caller scope and reenters hs_read_persisted_state
-#   with those names explicitly.
+#   Without an explicit variable list (and no --): emits an implicit restore
+#   snippet to stdout that the caller must eval; the snippet auto-discovers
+#   unset scalar locals in the immediate caller scope and reenters
+#   hs_read_persisted_state with those names explicitly.
 #   With -- and no variable names: returns 0 without restoring anything,
 #   disabling the auto-probe path.
 # Options:
@@ -453,16 +453,19 @@ hs_read_persisted_state() {
     fi
 
     # Step 4: if the caller used an explicit `--` but provided no variable
-    # names after it, do not emit the auto-probe snippet. This lets callers
-    # disable the stdout/eval path intentionally.
+    # names after it, do not emit the implicit restore snippet. This lets
+    # callers disable the stdout/eval path intentionally.
     if [[ -n "$__has_separator" ]]; then
         return 0
     fi
 
-    # Step 5: otherwise, generate a generic local-scope probe snippet instead
-    # of returning the raw persisted code. The snippet inspects the current
-    # function's locals with `local -p`, selects unset scalar locals, and
-    # reenters hs_read_persisted_state with -q so unrelated locals stay quiet.
+    # Step 5: otherwise, generate an implicit restore snippet. The snippet
+    # inspects the current function's locals with `local -p`, selects unset
+    # scalar locals, and reenters hs_read_persisted_state with -q so unrelated
+    # locals stay quiet.
+    # The reentrant call below must forward all parameters decoded by
+    # _hs_resolve_state_inputs (state var, quiet flag, etc.). -q is added here
+    # automatically; -S carries the already-validated state variable name.
     IFS= read -r -d '' __probe_snippet <<EOF || true
 hs_read_persisted_state -q -S $(printf '%q' "$__output_state_var") -- \$(
   local -p | while IFS= read -r __hs_local_decl; do
