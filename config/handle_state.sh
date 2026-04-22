@@ -463,6 +463,9 @@ hs_read_persisted_state() {
     # inspects the current function's locals with `local -p`, selects unset
     # scalar locals, and reenters hs_read_persisted_state with -q so unrelated
     # locals stay quiet.
+    # The reentrant call below must forward all parameters decoded by
+    # _hs_resolve_state_inputs (state var, quiet flag, etc.). -q is added here
+    # automatically; -S carries the already-validated state variable name.
     IFS= read -r -d '' __probe_snippet <<EOF || true
 hs_read_persisted_state -q -S $(printf '%q' "$__output_state_var") -- \$(
   local -p | while IFS= read -r __hs_local_decl; do
