@@ -273,6 +273,12 @@ Persisting and restoring a scalar:
        printf '%s\n' "$token"
    }
 
+.. code-block:: bash
+
+   local state_var=""
+   init_function -S state_var
+   cleanup_function -S state_var
+
 Representing an array manually through a scalar encoding:
 
 .. code-block:: bash
@@ -290,6 +296,12 @@ Representing an array manually through a scalar encoding:
        hs_read_persisted_state "$@" -- encoded
        mapfile -d '' -t items < <(printf '%s' "$encoded" | base64 -d)
    }
+
+.. code-block:: bash
+
+   local state_var=""
+   init_function -S state_var
+   cleanup_function -S state_var
 
 Caveats
 -------
