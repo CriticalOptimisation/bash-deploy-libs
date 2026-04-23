@@ -400,43 +400,108 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [[ "$stderr" == *"'__options' conflicts with a local variable name"* ]]
 }
 
-# bats test_tags=hs_persist_state_as_code
-@test "eval without local should succeed and leave globals unchanged" {
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state errors on undeclared restore target" {
   # shellcheck disable=SC2329
   f() {
-    init() { local bar=v2; local baz=new; hs_persist_state_as_code -S "$1" bar baz; }
-    state=""
-    init state
-    baz=old
-    eval "$state"
-    printf "%s:%s" "$bar" "$baz"
+    init() { local bar=v2; hs_persist_state_as_code -S "$1" bar || return $?; }
+    local state=""
+    init state || return $?
+    # bar is not declared as local in f — must error, not silently create a global
+    hs_read_persisted_state -S state -- bar
   }
-  run -0 f
-  # Succeeds but does not set variables
-  [[ "$output" == ":old" ]]
-  g() {
-    init(){ local bar=v2; local baz=new; hs_persist_state_as_code -S "$1" bar baz; }
-    state=""
-    init state
-    baz=old
-    eval "$state" 2>/dev/null || true
-    [ -z "${bar+set}" ] && [ "${baz}" = "old" ]
-  }
-  run -0 g
+  run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"is not declared in scope"* ]]
 }
 
-# bats test_tags=hs_persist_state_as_code
-@test "cleanup declares local and eval restores values onto new locals" {
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state errors on pre-set restore target" {
   # shellcheck disable=SC2329
   f() {
-    init(){ local foo=secret; local bar=v2; local baz=new; hs_persist_state_as_code -S "$1" foo bar baz; }
-    cleanup(){ local -n state_ref="$1"; local foo bar baz; eval "$state_ref"; printf "%s:%s:%s" "$foo" "$bar" "$baz"; }
-    state=""
-    init state
+    init() { local baz=new; hs_persist_state_as_code -S "$1" baz || return $?; }
+    local state=""
+    init state || return $?
+    local baz=old
+    # baz is declared local and set — must error, not silently overwrite
+    hs_read_persisted_state -S state -- baz
+  }
+  run -"$HS_ERR_VAR_ALREADY_SET" --separate-stderr f
+  [[ "$stderr" == *"is already set"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state errors on empty-string restore target" {
+  # shellcheck disable=SC2329
+  f() {
+    init() { local baz=new; hs_persist_state_as_code -S "$1" baz || return $?; }
+    local state=""
+    init state || return $?
+    local baz=""
+    # baz is set to empty string — still set, must error
+    hs_read_persisted_state -S state -- baz
+  }
+  run -"$HS_ERR_VAR_ALREADY_SET" --separate-stderr f
+  [[ "$stderr" == *"is already set"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state restores explicitly listed unset locals" {
+  # shellcheck disable=SC2329
+  f() {
+    init()    { local foo=secret bar=v2 baz=new; hs_persist_state_as_code -S "$1" foo bar baz || return $?; }
+    cleanup() { local foo bar baz; hs_read_persisted_state -S "$1" -- foo bar baz || return $?; printf "%s:%s:%s" "$foo" "$bar" "$baz"; }
+    local state=""
+    init state || return $?
     cleanup state
   }
   run -0 f
   [ "$output" = "secret:v2:new" ]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state -q does not suppress guard errors" {
+  # shellcheck disable=SC2329
+  f() {
+    init() { local bar=v2; hs_persist_state_as_code -S "$1" bar || return $?; }
+    local state=""
+    init state || return $?
+    # -q suppresses missing-variable warnings but must not suppress guard errors
+    hs_read_persisted_state -q -S state -- bar
+  }
+  run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"is not declared in scope"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state stops at first bad var in multi-var restore" {
+  # shellcheck disable=SC2329
+  f() {
+    init() { local foo=a bar=b; hs_persist_state_as_code -S "$1" foo bar || return $?; }
+    local state=""
+    init state || return $?
+    local foo
+    # only bar is not declared — must error on bar
+    hs_read_persisted_state -S state -- foo bar || return $?
+  }
+  run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"'bar' is not declared in scope"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state explicit form targets unset var in grandparent scope" {
+  # shellcheck disable=SC2329
+  init()  { local outer_var=from_init; hs_persist_state_as_code -S "$1" outer_var || return $?; }
+  inner() { hs_read_persisted_state -S "$1" -- outer_var || return $?; }
+  middle() { inner "$1" || return $?; }
+  f() {
+    local outer_var
+    local state=""
+    init state || return $?
+    middle state || return $?
+    printf "%s" "$outer_var"
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "from_init" ]
 }
 
 # bats test_tags=hs_read_persisted_state
@@ -477,7 +542,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     init(){ local foo=secret; local bar=v2; local baz=new; hs_persist_state_as_code -S "$1" foo bar baz; }
     cleanup(){
       local state_var="$1"
-      local foo="" bar="" baz=""
+      local foo bar baz
       hs_read_persisted_state -S "$state_var" foo baz
       printf "%s:%s:%s" "$foo" "${bar:-}" "$baz"
     }
@@ -510,10 +575,10 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   f() {
     init(){ local foo=secret; hs_persist_state_as_code -S "$1" foo; }
     outer(){
-      local foo=""
+      local foo
       inner_auto
       printf "%s:" "$foo"
-      foo=""
+      unset foo
       inner_explicit
       printf "%s" "$foo"
     }
@@ -539,7 +604,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     init(){ local foo=secret; hs_persist_state_as_code -S "$1" foo; }
     cleanup(){
       local state_var="$1"
-      local foo="" bar=""
+      local foo bar
       hs_read_persisted_state -S "$state_var" foo bar
       printf "%s:%s" "$foo" "${bar:-}"
     }
@@ -559,7 +624,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     init(){ local foo=secret; hs_persist_state_as_code -S "$1" foo; }
     cleanup(){
       local state_var="$1"
-      local foo="" bar="" baz=""
+      local foo bar baz
       hs_read_persisted_state -S "$state_var" foo bar baz
       printf "%s:%s:%s" "$foo" "${bar:-}" "${baz:-}"
     }
@@ -580,7 +645,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     init(){ local foo=secret; hs_persist_state_as_code -S "$1" foo; }
     cleanup(){
       local state_var="$1"
-      local foo="" bar=""
+      local foo bar
       hs_read_persisted_state -q -S "$state_var" foo bar
       printf "%s:%s" "$foo" "${bar:-}"
     }
@@ -600,7 +665,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     init(){ local foo=secret; hs_persist_state_as_code -S "$1" foo; }
     cleanup(){
       local state_var="$1"
-      local foo="" bar=""
+      local foo bar
       hs_read_persisted_state -S "$state_var" -q foo bar
       printf "%s:%s" "$foo" "${bar:-}"
     }

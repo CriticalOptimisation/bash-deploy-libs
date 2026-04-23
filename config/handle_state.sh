@@ -46,6 +46,7 @@ readonly HS_ERR_STATE_VAR_UNINITIALIZED=7
 readonly HS_ERR_MISSING_ARGUMENT=8
 readonly HS_ERR_INVALID_ARGUMENT_TYPE=9
 readonly HS_ERR_UNKNOWN_VAR_NAME=10
+readonly HS_ERR_VAR_ALREADY_SET=11
 
 # --- hs_persist_state_as_code ----------------------------------------------------------
 # Function:
@@ -284,7 +285,7 @@ hs_destroy_state() {
                 export HS_ERR_RESERVED_VAR_NAME HS_ERR_VAR_NAME_COLLISION \
                     HS_ERR_MULTIPLE_STATE_INPUTS HS_ERR_CORRUPT_STATE \
                     HS_ERR_INVALID_VAR_NAME HS_ERR_STATE_VAR_UNINITIALIZED \
-                    HS_ERR_INVALID_ARGUMENT_TYPE
+                    HS_ERR_INVALID_ARGUMENT_TYPE HS_ERR_VAR_ALREADY_SET
                 declare -fx _hs_is_array _hs_is_valid_variable_name \
                     _hs_resolve_state_inputs hs_persist_state_as_code
 
@@ -323,33 +324,35 @@ hs_destroy_state() {
     printf -v "$__output_state_var" '%s' "$__output"
 }
 # --- hs_read_persisted_state --------------------------------------------------------
-# Function: 
+# Function:
 #   hs_read_persisted_state [options] [--] [state_variable ...]
 # Description:
 #   Restores the values of the specified local variables from the opaque state
 #   object held in the variable named by -S.
-#   With an explicit variable list: evaluates the state in an isolated
-#   subprocess, then writes each restored value back into the matching local
-#   in the caller's scope via nameref assignment.
-#   Without an explicit variable list (and no --): emits an implicit restore
-#   snippet to stdout that the caller must eval; the snippet auto-discovers
-#   unset scalar locals in the immediate caller scope and reenters
-#   hs_read_persisted_state with those names explicitly.
+#   Preferred (implicit) form — no -- and no variable names: emits a restore
+#   snippet to stdout that the caller must eval; the snippet uses local -p in
+#   the caller's scope so it can only target unset scalar locals of the
+#   immediate caller, making it provably free of global scope pollution.
+#   Explicit form — variable names supplied after --: restores each name by
+#   traversing the full dynamic scope (caller chain and globals). Use when
+#   targeting a variable in a higher-level caller or a declared global.
 #   With -- and no variable names: returns 0 without restoring anything,
-#   disabling the auto-probe path.
+#   disabling the implicit-probe path.
 # Options:
 #   -q - suppresses the warning that is normally emitted when a requested
-#        state variable is not present in the state object.
+#        state variable is not present in the state object. Does not suppress
+#        errors.
 #   -S <state> - pass the state object by name, mandatory.
 #   Other options are ignored up to the last --, so this function is usually able
 #   to directly process its caller's argument list, future-proofing it against
 #   new hs_read_persisted_state options.
 #   -- - marks the end of options and the beginning of the list of variable names.
 # Arguments:
-#   $@ - names of local variables to restore. Without `--`, the trailing
-#        arguments that are valid Bash identifiers are treated as the variable list.
-#        Note that the value associated with the last given option will be mistaken
-#        for a variable unless that option is known or `--` is used.
+#   $@ - names of variables to restore (explicit form). Without `--`, the
+#        trailing arguments that are valid Bash identifiers are treated as the
+#        variable list. Note that the value associated with the last given
+#        option will be mistaken for a variable unless that option is known or
+#        `--` is used.
 # Errors:
 #   - `HS_ERR_MISSING_ARGUMENT` if no state variable name is supplied at all.
 #   - `HS_ERR_INVALID_VAR_NAME` if the state variable name or a requested
@@ -358,12 +361,24 @@ hs_destroy_state() {
 #     the named state variable is unset or empty.
 #   - `HS_ERR_CORRUPT_STATE` if the state object cannot be evaluated safely
 #     while restoring requested variables.
+#   - `HS_ERR_UNKNOWN_VAR_NAME` if a requested variable name (explicit form)
+#     is not declared anywhere in the dynamic scope.
+#   - `HS_ERR_VAR_ALREADY_SET` if a requested variable name (explicit form)
+#     is set (including empty string); unset it first if an overwrite is intended.
 #   - Missing requested variables are warnings, one per variable, unless `-q`
 #     is supplied.
 # Usage examples:
+#   # Preferred: implicit form, targets only the caller's own unset locals.
 #   cleanup() {
 #       local temp_file resource_id
-#       hs_read_persisted_state "$@" -- temp_file resource_id
+#       eval "$(hs_read_persisted_state "$@")" || return $?
+#       rm -f "$temp_file"
+#       printf 'Cleaned up resource: %s\n' "$resource_id"
+#   }
+#   # Explicit form: use when targeting a specific subset or higher-scope vars.
+#   cleanup() {
+#       local temp_file resource_id
+#       hs_read_persisted_state "$@" -- temp_file resource_id || return $?
 #       rm -f "$temp_file"
 #       printf 'Cleaned up resource: %s\n' "$resource_id"
 #   }
@@ -455,6 +470,14 @@ hs_read_persisted_state() {
         fi
 
         for __requested_var in "${!__restored_map[@]}"; do
+            if ! declare -p "$__requested_var" >/dev/null 2>&1; then
+                echo "[ERROR] hs_read_persisted_state: '$__requested_var' is not declared in scope." >&2
+                return "$HS_ERR_UNKNOWN_VAR_NAME"
+            fi
+            if [[ "${!__requested_var+x}" ]]; then
+                echo "[ERROR] hs_read_persisted_state: '$__requested_var' is already set; refusing to overwrite." >&2
+                return "$HS_ERR_VAR_ALREADY_SET"
+            fi
             local -n __requested_var_ref="$__requested_var"
             __requested_var_ref="${__restored_map[$__requested_var]}"
         done

@@ -32,20 +32,20 @@ Quick Start
    init_function() {
        local temp_file="/tmp/some_temp_file"
        local resource_id="resource_123"
-       hs_persist_state_as_code "$@" -- temp_file resource_id
+       hs_persist_state_as_code "$@" -- temp_file resource_id || return $?
    }
 
    cleanup_function() {
        local temp_file resource_id
-       hs_read_persisted_state "$@" -- temp_file resource_id
+       eval "$(hs_read_persisted_state "$@")" || return $?
        rm -f "$temp_file"
        printf 'Cleaned up resource: %s\n' "$resource_id"
-       hs_destroy_state "$@" -- temp_file resource_id
+       hs_destroy_state "$@" -- temp_file resource_id || return $?
    }
 
    local state_var=""
-   init_function -S state_var
-   cleanup_function -S state_var
+   init_function -S state_var || return $?
+   cleanup_function -S state_var || return $?
 
 Public API
 ----------
@@ -129,25 +129,52 @@ hs_read_persisted_state
 - Usage: ``hs_read_persisted_state [forwarded args] [-q] -S <statevar> [--] [var1 var2 ...]``
 - Convenience form: ``hs_read_persisted_state state_var ...`` is normalized to
   ``-S state_var ...``. Not recommended in library code; prefer explicit ``-S``.
-- Preferred usage: ``hs_read_persisted_state "$@" -- var1 var2 ...``
+
+Restore form selection
+^^^^^^^^^^^^^^^^^^^^^^
+
+Two restore forms are available. Choose based on where the target variables live:
+
+- **Implicit form** (preferred for the common case): no ``--`` and no variable
+  names are passed. The function emits a snippet that the caller ``eval``\s.
+  Because the snippet runs ``local -p`` directly in the caller's scope, it can
+  only target variables that are declared local *and* unset in the immediate
+  caller. This form is provably free of global scope pollution.
+
+  .. code-block:: bash
+
+     cleanup_function() {
+         local temp_file resource_id
+         eval "$(hs_read_persisted_state "$@")" || return $?
+         rm -f "$temp_file"
+         printf 'Cleaned up resource: %s\n' "$resource_id"
+     }
+
+- **Explicit form**: variable names are supplied after ``--``. The function
+  restores each name by traversing the full dynamic scope (caller chain and
+  globals). Use this form when targeting a variable declared in a higher-level
+  caller, or an explicitly declared but unset global. It is also appropriate
+  when only a named subset of the state is needed.
+
+  .. code-block:: bash
+
+     cleanup_function() {
+         local temp_file resource_id
+         hs_read_persisted_state "$@" -- temp_file resource_id || return $?
+         rm -f "$temp_file"
+         printf 'Cleaned up resource: %s\n' "$resource_id"
+     }
 
 Explicit restore
 ^^^^^^^^^^^^^^^^
 
-When variable names are supplied, the function restores only those names into
-the current caller scope.
-
-.. code-block:: bash
-
-   cleanup_function() {
-       local temp_file resource_id
-       hs_read_persisted_state "$@" -- temp_file resource_id
-   }
-
 Behavior:
 
-- Restoration is by name into already-declared locals in the caller scope.
-- Requested names missing from the state are warnings, one per variable.
+- Each requested name is looked up by traversing the full dynamic scope.
+- A name not declared anywhere in the dynamic scope is an error.
+- A name that is set (including an empty-string value) is an error; ``unset``
+  the variable explicitly before calling if an overwrite is intended.
+- Requested names missing from the state object are warnings, one per variable.
 - ``-q`` suppresses those warnings.
 - The current implementation restores scalar string values only.
 
@@ -155,14 +182,15 @@ Implicit local restore
 ^^^^^^^^^^^^^^^^^^^^^^
 
 When no explicit variable names are supplied and no explicit ``--`` is present,
-``hs_read_persisted_state`` emits a small safe, locally generated implicit restore snippet. The
-caller must ``eval`` the snippet using the forwarded-arguments form:
+``hs_read_persisted_state`` emits a small safe, locally generated implicit
+restore snippet. The caller must ``eval`` the snippet using the
+forwarded-arguments form:
 
 .. code-block:: bash
 
    cleanup_function() {
        local temp_file resource_id
-       eval "$(hs_read_persisted_state "$@")"
+       eval "$(hs_read_persisted_state "$@")" || return $?
        rm -f "$temp_file"
        printf 'Cleaned up resource: %s\n' "$resource_id"
    }
@@ -206,6 +234,11 @@ Errors:
   state variable is unset or empty.
 - ``HS_ERR_CORRUPT_STATE=4``: the state cannot be evaluated safely while
   restoring explicitly requested variables.
+- ``HS_ERR_UNKNOWN_VAR_NAME=10``: a requested variable name (explicit form) is
+  not declared anywhere in the dynamic scope.
+- ``HS_ERR_VAR_ALREADY_SET=11``: a requested variable name (explicit form) is
+  set (including empty string); ``unset`` the variable first if an overwrite
+  is intended.
 
 Helper API
 ----------
@@ -247,6 +280,7 @@ Error Codes
 - ``HS_ERR_MISSING_ARGUMENT=8``
 - ``HS_ERR_INVALID_ARGUMENT_TYPE=9``
 - ``HS_ERR_UNKNOWN_VAR_NAME=10``
+- ``HS_ERR_VAR_ALREADY_SET=11``
 
 Known Limitations
 -----------------
@@ -267,20 +301,20 @@ Persisting and restoring a scalar:
 
    init_function() {
        local token='a b "c" $d'
-       hs_persist_state_as_code "$@" -- token
+       hs_persist_state_as_code "$@" -- token || return $?
    }
 
    cleanup_function() {
        local token
-       hs_read_persisted_state "$@" -- token
+       hs_read_persisted_state "$@" -- token || return $?
        printf '%s\n' "$token"
    }
 
 .. code-block:: bash
 
    local state_var=""
-   init_function -S state_var
-   cleanup_function -S state_var
+   init_function -S state_var || return $?
+   cleanup_function -S state_var || return $?
 
 Representing an array manually through a scalar encoding:
 
@@ -290,26 +324,29 @@ Representing an array manually through a scalar encoding:
        local -a items=("value1" "value2" "value with spaces")
        local encoded
        encoded=$(printf '%s\0' "${items[@]}" | base64 -w0)
-       hs_persist_state_as_code "$@" -- encoded
+       hs_persist_state_as_code "$@" -- encoded || return $?
    }
 
    cleanup_function() {
        local encoded
        local -a items
-       hs_read_persisted_state "$@" -- encoded
+       hs_read_persisted_state "$@" -- encoded || return $?
        mapfile -d '' -t items < <(printf '%s' "$encoded" | base64 -d)
    }
 
 .. code-block:: bash
 
    local state_var=""
-   init_function -S state_var
-   cleanup_function -S state_var
+   init_function -S state_var || return $?
+   cleanup_function -S state_var || return $?
 
 Caveats
 -------
 
-- Prefer explicit restore lists over implicit local restore.
+- Prefer the implicit restore form (``eval "$(hs_read_persisted_state "$@")"``
+  ``|| return $?``) for cleanup functions that restore into their own locals.
+  Use the explicit form only when targeting variables in a higher-level caller
+  or declared globals.
 - Do not rely on the opaque state format being executable code forever.
 - The current implementation uses ``eval`` internally; state should therefore
   be treated as trusted input.
