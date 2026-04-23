@@ -400,39 +400,43 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [[ "$stderr" == *"'__options' conflicts with a local variable name"* ]]
 }
 
-# bats test_tags=hs_persist_state_as_code
-@test "eval without local should succeed and leave globals unchanged" {
+# bats test_tags=xfail,hs_read_persisted_state
+@test "hs_read_persisted_state errors on undeclared restore target" {
   # shellcheck disable=SC2329
   f() {
-    init() { local bar=v2; local baz=new; hs_persist_state_as_code -S "$1" bar baz; }
-    state=""
-    init state
-    baz=old
-    eval "$state"
-    printf "%s:%s" "$bar" "$baz"
+    init() { local bar=v2; hs_persist_state_as_code -S "$1" bar || return $?; }
+    local state=""
+    init state || return $?
+    # bar is not declared as local in f — must error, not silently create a global
+    hs_read_persisted_state -S state -- bar
   }
-  run -0 f
-  # Succeeds but does not set variables
-  [[ "$output" == ":old" ]]
-  g() {
-    init(){ local bar=v2; local baz=new; hs_persist_state_as_code -S "$1" bar baz; }
-    state=""
-    init state
-    baz=old
-    eval "$state" 2>/dev/null || true
-    [ -z "${bar+set}" ] && [ "${baz}" = "old" ]
-  }
-  run -0 g
+  run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"is not declared in scope"* ]]
 }
 
-# bats test_tags=hs_persist_state_as_code
-@test "cleanup declares local and eval restores values onto new locals" {
+# bats test_tags=xfail,hs_read_persisted_state
+@test "hs_read_persisted_state errors on pre-set restore target" {
   # shellcheck disable=SC2329
   f() {
-    init(){ local foo=secret; local bar=v2; local baz=new; hs_persist_state_as_code -S "$1" foo bar baz; }
-    cleanup(){ local -n state_ref="$1"; local foo bar baz; eval "$state_ref"; printf "%s:%s:%s" "$foo" "$bar" "$baz"; }
-    state=""
-    init state
+    init() { local baz=new; hs_persist_state_as_code -S "$1" baz || return $?; }
+    local state=""
+    init state || return $?
+    local baz=old
+    # baz is declared local and already set — must error, not silently overwrite
+    hs_read_persisted_state -S state -- baz
+  }
+  run -"$HS_ERR_VAR_ALREADY_SET" --separate-stderr f
+  [[ "$stderr" == *"is already set"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state restores explicitly listed unset locals" {
+  # shellcheck disable=SC2329
+  f() {
+    init()    { local foo=secret bar=v2 baz=new; hs_persist_state_as_code -S "$1" foo bar baz || return $?; }
+    cleanup() { local foo bar baz; hs_read_persisted_state -S "$1" -- foo bar baz || return $?; printf "%s:%s:%s" "$foo" "$bar" "$baz"; }
+    local state=""
+    init state || return $?
     cleanup state
   }
   run -0 f
