@@ -480,7 +480,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     local state=""
     init state || return $?
     local foo
-    # foo is declared; bar is not — must error on bar or foo (iteration order undefined)
+    # only bar is not declared — must error on bar
     hs_read_persisted_state -S state -- foo bar || return $?
   }
   run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
@@ -490,13 +490,11 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
 # bats test_tags=hs_read_persisted_state
 @test "hs_read_persisted_state explicit form targets unset var in grandparent scope" {
   # shellcheck disable=SC2329
+  init()  { local outer_var=from_init; hs_persist_state_as_code -S "$1" outer_var || return $?; }
+  inner() { hs_read_persisted_state -S "$1" -- outer_var || return $?; }
+  middle() { inner "$1" || return $?; }
   f() {
     local outer_var
-    middle() {
-      inner() { hs_read_persisted_state -S "$1" -- outer_var || return $?; }
-      inner "$1" || return $?
-    }
-    init() { local outer_var=from_init; hs_persist_state_as_code -S "$1" outer_var || return $?; }
     local state=""
     init state || return $?
     middle state || return $?
