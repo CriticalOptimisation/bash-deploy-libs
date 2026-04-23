@@ -422,7 +422,22 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     local state=""
     init state || return $?
     local baz=old
-    # baz is declared local and non-empty — must error, not silently overwrite
+    # baz is declared local and set — must error, not silently overwrite
+    hs_read_persisted_state -S state -- baz
+  }
+  run -"$HS_ERR_VAR_ALREADY_SET" --separate-stderr f
+  [[ "$stderr" == *"is already set"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state errors on empty-string restore target" {
+  # shellcheck disable=SC2329
+  f() {
+    init() { local baz=new; hs_persist_state_as_code -S "$1" baz || return $?; }
+    local state=""
+    init state || return $?
+    local baz=""
+    # baz is set to empty string — still set, must error
     hs_read_persisted_state -S state -- baz
   }
   run -"$HS_ERR_VAR_ALREADY_SET" --separate-stderr f
@@ -529,7 +544,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     init(){ local foo=secret; local bar=v2; local baz=new; hs_persist_state_as_code -S "$1" foo bar baz; }
     cleanup(){
       local state_var="$1"
-      local foo="" bar="" baz=""
+      local foo bar baz
       hs_read_persisted_state -S "$state_var" foo baz
       printf "%s:%s:%s" "$foo" "${bar:-}" "$baz"
     }
@@ -562,10 +577,10 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   f() {
     init(){ local foo=secret; hs_persist_state_as_code -S "$1" foo; }
     outer(){
-      local foo=""
+      local foo
       inner_auto
       printf "%s:" "$foo"
-      foo=""
+      unset foo
       inner_explicit
       printf "%s" "$foo"
     }
@@ -591,7 +606,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     init(){ local foo=secret; hs_persist_state_as_code -S "$1" foo; }
     cleanup(){
       local state_var="$1"
-      local foo="" bar=""
+      local foo bar
       hs_read_persisted_state -S "$state_var" foo bar
       printf "%s:%s" "$foo" "${bar:-}"
     }
@@ -611,7 +626,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     init(){ local foo=secret; hs_persist_state_as_code -S "$1" foo; }
     cleanup(){
       local state_var="$1"
-      local foo="" bar="" baz=""
+      local foo bar baz
       hs_read_persisted_state -S "$state_var" foo bar baz
       printf "%s:%s:%s" "$foo" "${bar:-}" "${baz:-}"
     }
@@ -632,7 +647,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     init(){ local foo=secret; hs_persist_state_as_code -S "$1" foo; }
     cleanup(){
       local state_var="$1"
-      local foo="" bar=""
+      local foo bar
       hs_read_persisted_state -q -S "$state_var" foo bar
       printf "%s:%s" "$foo" "${bar:-}"
     }
@@ -652,7 +667,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     init(){ local foo=secret; hs_persist_state_as_code -S "$1" foo; }
     cleanup(){
       local state_var="$1"
-      local foo="" bar=""
+      local foo bar
       hs_read_persisted_state -S "$state_var" -q foo bar
       printf "%s:%s" "$foo" "${bar:-}"
     }
