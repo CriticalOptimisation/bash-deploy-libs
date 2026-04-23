@@ -46,6 +46,7 @@ readonly HS_ERR_STATE_VAR_UNINITIALIZED=7
 readonly HS_ERR_MISSING_ARGUMENT=8
 readonly HS_ERR_INVALID_ARGUMENT_TYPE=9
 readonly HS_ERR_UNKNOWN_VAR_NAME=10
+readonly HS_ERR_VAR_ALREADY_SET=11
 
 # --- hs_persist_state_as_code ----------------------------------------------------------
 # Function:
@@ -284,7 +285,7 @@ hs_destroy_state() {
                 export HS_ERR_RESERVED_VAR_NAME HS_ERR_VAR_NAME_COLLISION \
                     HS_ERR_MULTIPLE_STATE_INPUTS HS_ERR_CORRUPT_STATE \
                     HS_ERR_INVALID_VAR_NAME HS_ERR_STATE_VAR_UNINITIALIZED \
-                    HS_ERR_INVALID_ARGUMENT_TYPE
+                    HS_ERR_INVALID_ARGUMENT_TYPE HS_ERR_VAR_ALREADY_SET
                 declare -fx _hs_is_array _hs_is_valid_variable_name \
                     _hs_resolve_state_inputs hs_persist_state_as_code
 
@@ -469,6 +470,14 @@ hs_read_persisted_state() {
         fi
 
         for __requested_var in "${!__restored_map[@]}"; do
+            if ! declare -p "$__requested_var" >/dev/null 2>&1; then
+                echo "[ERROR] hs_read_persisted_state: '$__requested_var' is not declared in scope." >&2
+                return "$HS_ERR_UNKNOWN_VAR_NAME"
+            fi
+            if [[ "${!__requested_var+x}" ]]; then
+                echo "[ERROR] hs_read_persisted_state: '$__requested_var' is already set; refusing to overwrite." >&2
+                return "$HS_ERR_VAR_ALREADY_SET"
+            fi
             local -n __requested_var_ref="$__requested_var"
             __requested_var_ref="${__restored_map[$__requested_var]}"
         done
