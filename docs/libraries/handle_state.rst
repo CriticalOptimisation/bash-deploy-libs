@@ -172,8 +172,9 @@ Behavior:
 
 - Each requested name is looked up by traversing the full dynamic scope.
 - A name not declared anywhere in the dynamic scope is an error.
-- A name that already holds a value (set, whether local or global) is an error;
-  unset the variable explicitly before calling if an overwrite is intended.
+- A name that is non-empty is an error; unset or empty the variable explicitly
+  before calling if an overwrite is intended. An empty-string value (``local
+  foo=""``) is treated the same as an unset local and is a valid restore target.
 - Requested names missing from the state object are warnings, one per variable.
 - ``-q`` suppresses those warnings.
 - The current implementation restores scalar string values only.
@@ -236,8 +237,9 @@ Errors:
   restoring explicitly requested variables.
 - ``HS_ERR_UNKNOWN_VAR_NAME=10``: a requested variable name (explicit form) is
   not declared anywhere in the dynamic scope.
-- ``HS_ERR_VAR_ALREADY_SET=11``: a requested variable name (explicit form)
-  already holds a value; the function refuses to overwrite it.
+- ``HS_ERR_VAR_ALREADY_SET=11``: a requested variable name (explicit form) is
+  non-empty; the function refuses to overwrite it. An empty-string value is
+  treated the same as an unset local and is a valid restore target.
 
 Helper API
 ----------

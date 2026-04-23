@@ -364,7 +364,7 @@ hs_destroy_state() {
 #   - `HS_ERR_UNKNOWN_VAR_NAME` if a requested variable name (explicit form)
 #     is not declared anywhere in the dynamic scope.
 #   - `HS_ERR_VAR_ALREADY_SET` if a requested variable name (explicit form)
-#     already holds a value; unset it first if an overwrite is intended.
+#     is non-empty; unset or empty it first if an overwrite is intended.
 #   - Missing requested variables are warnings, one per variable, unless `-q`
 #     is supplied.
 # Usage examples:
@@ -474,7 +474,7 @@ hs_read_persisted_state() {
                 echo "[ERROR] hs_read_persisted_state: '$__requested_var' is not declared in scope." >&2
                 return "$HS_ERR_UNKNOWN_VAR_NAME"
             fi
-            if [[ "${!__requested_var+x}" ]]; then
+            if [[ -n "${!__requested_var}" ]]; then
                 echo "[ERROR] hs_read_persisted_state: '$__requested_var' is already set; refusing to overwrite." >&2
                 return "$HS_ERR_VAR_ALREADY_SET"
             fi

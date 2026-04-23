@@ -400,7 +400,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [[ "$stderr" == *"'__options' conflicts with a local variable name"* ]]
 }
 
-# bats test_tags=xfail,hs_read_persisted_state
+# bats test_tags=hs_read_persisted_state
 @test "hs_read_persisted_state errors on undeclared restore target" {
   # shellcheck disable=SC2329
   f() {
@@ -414,7 +414,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   [[ "$stderr" == *"is not declared in scope"* ]]
 }
 
-# bats test_tags=xfail,hs_read_persisted_state
+# bats test_tags=hs_read_persisted_state
 @test "hs_read_persisted_state errors on pre-set restore target" {
   # shellcheck disable=SC2329
   f() {
@@ -422,7 +422,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     local state=""
     init state || return $?
     local baz=old
-    # baz is declared local and already set — must error, not silently overwrite
+    # baz is declared local and non-empty — must error, not silently overwrite
     hs_read_persisted_state -S state -- baz
   }
   run -"$HS_ERR_VAR_ALREADY_SET" --separate-stderr f
@@ -441,6 +441,54 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
   }
   run -0 f
   [ "$output" = "secret:v2:new" ]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state -q does not suppress guard errors" {
+  # shellcheck disable=SC2329
+  f() {
+    init() { local bar=v2; hs_persist_state_as_code -S "$1" bar || return $?; }
+    local state=""
+    init state || return $?
+    # -q suppresses missing-variable warnings but must not suppress guard errors
+    hs_read_persisted_state -q -S state -- bar
+  }
+  run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"is not declared in scope"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state stops at first bad var in multi-var restore" {
+  # shellcheck disable=SC2329
+  f() {
+    init() { local foo=a bar=b; hs_persist_state_as_code -S "$1" foo bar || return $?; }
+    local state=""
+    init state || return $?
+    local foo
+    # foo is declared; bar is not — must error on bar or foo (iteration order undefined)
+    hs_read_persisted_state -S state -- foo bar || return $?
+  }
+  run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"is not declared in scope"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state explicit form targets unset var in grandparent scope" {
+  # shellcheck disable=SC2329
+  f() {
+    local outer_var
+    middle() {
+      inner() { hs_read_persisted_state -S "$1" -- outer_var || return $?; }
+      inner "$1" || return $?
+    }
+    init() { local outer_var=from_init; hs_persist_state_as_code -S "$1" outer_var || return $?; }
+    local state=""
+    init state || return $?
+    middle state || return $?
+    printf "%s" "$outer_var"
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "from_init" ]
 }
 
 # bats test_tags=hs_read_persisted_state
