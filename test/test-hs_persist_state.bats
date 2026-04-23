@@ -484,7 +484,7 @@ export -f make_state corrupt_state # makes it available in bash --noprofile -lc 
     hs_read_persisted_state -S state -- foo bar || return $?
   }
   run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
-  [[ "$stderr" == *"is not declared in scope"* ]]
+  [[ "$stderr" == *"'bar' is not declared in scope"* ]]
 }
 
 # bats test_tags=hs_read_persisted_state
