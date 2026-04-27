@@ -874,6 +874,95 @@ fi'
   [ "$output" = "secret:secret" ]
 }
 
+# ---------------------------------------------------------------------------
+# Preliminary tests for the HS2 format redesign (issue #3).
+# All tagged xfail: they document the expected new behavior and will be
+# promoted to passing regression tests once the implementation lands.
+# ---------------------------------------------------------------------------
+
+# bats test_tags=hs_persist_state,xfail
+@test "hs_persist_state produces an HS2-format state string" {
+  # shellcheck disable=SC2329
+  f() {
+    local state=""
+    local scalar="value"
+    hs_persist_state -S state -- scalar || return $?
+    [[ "$state" == HS2:* ]] || { printf "state does not start with HS2: got '%s'\n" "$state" >&2; return 1; }
+  }
+  run -0 --separate-stderr f
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_persist_state,xfail
+@test "hs_persist_state round-trips an indexed array via explicit restore" {
+  # shellcheck disable=SC2329
+  f() {
+    init()    { local -a items=(one two "three four"); hs_persist_state -S "$1" -- items || return $?; }
+    cleanup() { local -a items; hs_read_persisted_state -S "$1" -- items || return $?
+                printf "%s:%s:%s" "${items[0]-}" "${items[1]-}" "${items[2]-}"; }
+    local state=""
+    init state || return $?
+    cleanup state
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "one:two:three four" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_persist_state,xfail
+@test "hs_persist_state round-trips an associative array via explicit restore" {
+  # shellcheck disable=SC2329
+  f() {
+    init()    { local -A amap=([key]=value [other]="spaced value"); hs_persist_state -S "$1" -- amap || return $?; }
+    cleanup() { local -A amap; hs_read_persisted_state -S "$1" -- amap || return $?
+                printf "%s:%s" "${amap[key]-}" "${amap[other]-}"; }
+    local state=""
+    init state || return $?
+    cleanup state
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "value:spaced value" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_persist_state,xfail
+@test "hs_persist_state round-trips a nameref with co-persisted target via eval restore" {
+  # shellcheck disable=SC2329
+  f() {
+    init() {
+      local -A commander=([hp]=100 [name]="Shepard")
+      local -n active=commander
+      hs_persist_state -S "$1" -- commander active || return $?
+    }
+    cleanup() {
+      local -A commander
+      eval "$(hs_read_persisted_state -S "$1")" || return $?
+      printf "%s:%s" "${active[name]-}" "${active[hp]-}"
+    }
+    local state=""
+    init state || return $?
+    cleanup state
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "Shepard:100" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_persist_state,xfail
+@test "hs_persist_state rejects a nameref whose target is not being persisted" {
+  # shellcheck disable=SC2329
+  f() {
+    local target="value"
+    local -n ref=target
+    local state=""
+    hs_persist_state -S state -- ref || return $?
+  }
+  run -"$HS_ERR_NAMEREF_TARGET_NOT_PERSISTED" --separate-stderr f
+  [ -z "$output" ]
+  [[ "$stderr" == *"ref"* ]]
+  [[ "$stderr" == *"target"* ]]
+}
+
 # bats test_tags=hs_persist_state_as_code
 @test "restore empty value" {
   # shellcheck disable=SC2329

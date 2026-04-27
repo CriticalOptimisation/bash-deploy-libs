@@ -47,6 +47,7 @@ readonly HS_ERR_MISSING_ARGUMENT=8
 readonly HS_ERR_INVALID_ARGUMENT_TYPE=9
 readonly HS_ERR_UNKNOWN_VAR_NAME=10
 readonly HS_ERR_VAR_ALREADY_SET=11
+readonly HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12
 
 # --- hs_persist_state_as_code ----------------------------------------------------------
 # Function:
