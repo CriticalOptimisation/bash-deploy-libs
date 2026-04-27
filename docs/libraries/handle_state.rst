@@ -287,7 +287,6 @@ Known Limitations
 
 The tests currently demonstrate these limitations:
 
-- function names passed to ``hs_persist_state_as_code`` are ignored
 - indexed arrays preserve only their first element
 - associative arrays are ignored
 - namerefs are restored as scalar values
