@@ -32,7 +32,7 @@ Quick Start
    init_function() {
        local temp_file="/tmp/some_temp_file"
        local resource_id="resource_123"
-       hs_persist_state_as_code "$@" -- temp_file resource_id || return $?
+       hs_persist_state "$@" -- temp_file resource_id || return $?
    }
 
    cleanup_function() {
@@ -50,14 +50,14 @@ Quick Start
 Public API
 ----------
 
-hs_persist_state_as_code
-~~~~~~~~~~~~~~~~~~~~~~~~
+hs_persist_state
+~~~~~~~~~~~~~~~~
 
-``hs_persist_state_as_code`` appends the current values of selected local
+``hs_persist_state`` appends the current values of selected local
 variables to the opaque state object named by ``-S``.
 
-- Usage: ``hs_persist_state_as_code [forwarded args] -S <statevar> [--] var1 var2 ...``
-- Preferred usage: ``hs_persist_state_as_code "$@" -- var1 var2 ...``
+- Usage: ``hs_persist_state [forwarded args] -S <statevar> [--] var1 var2 ...``
+- Preferred usage: ``hs_persist_state "$@" -- var1 var2 ...``
 - State transport is by name only. Stdout is not part of this API.
 - If ``--`` is present, its last occurrence starts the explicit variable list.
 - Without ``--``, the trailing valid Bash identifiers are treated as the
@@ -67,14 +67,14 @@ variables to the opaque state object named by ``-S``.
 
 Behavior:
 
-- Requested variables that are unset are skipped.
-- Variable names not declared in the caller's scope are an error.
-- Function names are ignored.
-- Indexed arrays currently persist only their first element.
-- Associative arrays are ignored.
-- Namerefs are persisted as scalar values.
-- If the destination state already contains persisted variables with the same
-  names, the function fails before writing anything.
+- Requested variables that are unset are skipped silently.
+- Scalars, indexed arrays, and associative arrays are all persisted natively.
+- Namerefs are persisted only when their target variable is also being
+  persisted in the same call or already present in the prior state. Nameref
+  records are always stored after their targets so restoration order is valid.
+- Function names and undeclared names are errors.
+- If the destination state already contains variables with the same names, the
+  function fails before writing anything.
 
 Errors:
 
@@ -85,10 +85,11 @@ Errors:
   helper variable name.
 - ``HS_ERR_VAR_NAME_COLLISION=2``: one or more requested names already exist in
   the prior state.
-- ``HS_ERR_CORRUPT_STATE=4``: the prior state could not be evaluated safely
-  during collision checking.
+- ``HS_ERR_CORRUPT_STATE=4``: the prior state is not a valid HS2 object.
 - ``HS_ERR_UNKNOWN_VAR_NAME=10``: a requested variable name is not declared
-  in the caller's scope.
+  in the caller's scope, or is a function name.
+- ``HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12``: a nameref's target variable is
+  not being persisted in the same call and is not already in the prior state.
 
 hs_destroy_state
 ~~~~~~~~~~~~~~~~
@@ -109,7 +110,7 @@ Behavior:
   the original text in place.
 - After cleanup has destroyed a library's own entries, the same named state
   variable can be reused by a later init call without tripping the collision
-  checks in ``hs_persist_state_as_code``.
+  checks in ``hs_persist_state``.
 
 Errors:
 
@@ -176,7 +177,9 @@ Behavior:
   the variable explicitly before calling if an overwrite is intended.
 - Requested names missing from the state object are warnings, one per variable.
 - ``-q`` suppresses those warnings.
-- The current implementation restores scalar string values only.
+- Scalars, indexed arrays, and associative arrays are all restored natively.
+- Namerefs cannot be restored via the explicit form; use the eval/stdout form
+  instead (see nameref example in the Examples section).
 
 Implicit local restore
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -281,15 +284,17 @@ Error Codes
 - ``HS_ERR_INVALID_ARGUMENT_TYPE=9``
 - ``HS_ERR_UNKNOWN_VAR_NAME=10``
 - ``HS_ERR_VAR_ALREADY_SET=11``
+- ``HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12``
 
 Known Limitations
 -----------------
 
-The tests currently demonstrate these limitations:
-
-- indexed arrays preserve only their first element
-- associative arrays are ignored
-- namerefs are restored as scalar values
+- Namerefs cannot be restored via the explicit restore form of
+  ``hs_read_persisted_state``; use the eval/stdout form
+  (``eval "$(hs_read_persisted_state "$@")"``).
+- The HS2 cksum detects accidental corruption but does not authenticate the
+  state against intentional tampering; treat the state variable as trusted
+  within the process.
 
 Examples
 --------
@@ -300,7 +305,7 @@ Persisting and restoring a scalar:
 
    init_function() {
        local token='a b "c" $d'
-       hs_persist_state_as_code "$@" -- token || return $?
+       hs_persist_state "$@" -- token || return $?
    }
 
    cleanup_function() {
@@ -315,22 +320,42 @@ Persisting and restoring a scalar:
    init_function -S state_var || return $?
    cleanup_function -S state_var || return $?
 
-Representing an array manually through a scalar encoding:
+Persisting and restoring an indexed array:
 
 .. code-block:: bash
 
    init_function() {
        local -a items=("value1" "value2" "value with spaces")
-       local encoded
-       encoded=$(printf '%s\0' "${items[@]}" | base64 -w0)
-       hs_persist_state_as_code "$@" -- encoded || return $?
+       hs_persist_state "$@" -- items || return $?
    }
 
    cleanup_function() {
-       local encoded
        local -a items
-       hs_read_persisted_state "$@" -- encoded || return $?
-       mapfile -d '' -t items < <(printf '%s' "$encoded" | base64 -d)
+       hs_read_persisted_state "$@" -- items || return $?
+       printf '%s\n' "${items[@]}"
+   }
+
+.. code-block:: bash
+
+   local state_var=""
+   init_function -S state_var || return $?
+   cleanup_function -S state_var || return $?
+
+Persisting a nameref alongside its target (active-character pattern):
+
+.. code-block:: bash
+
+   init_function() {
+       local -A commander=([hp]=100 [name]="Shepard")
+       local -A wrex=([hp]=200 [name]="Wrex")
+       local -n active=commander
+       hs_persist_state "$@" -- commander wrex active || return $?
+   }
+
+   cleanup_function() {
+       local -A commander wrex
+       eval "$(hs_read_persisted_state "$@")" || return $?
+       printf 'Active: %s (HP: %s)\n' "${active[name]}" "${active[hp]}"
    }
 
 .. code-block:: bash
@@ -344,11 +369,15 @@ Caveats
 
 - Prefer the implicit restore form (``eval "$(hs_read_persisted_state "$@")"``
   ``|| return $?``) for cleanup functions that restore into their own locals.
-  Use the explicit form only when targeting variables in a higher-level caller
-  or declared globals.
-- Do not rely on the opaque state format being executable code forever.
-- The current implementation uses ``eval`` internally; state should therefore
-  be treated as trusted input.
+  Use the explicit form only when targeting variables in a higher-level caller,
+  declared globals, or a named subset of the state.
+- The state format (HS2) is a structured data format, not executable code.
+  Calling ``eval "$state_var"`` directly will fail; always restore via
+  ``hs_read_persisted_state``.
+- The state variable is opaque: do not inspect, modify, or concatenate its
+  value outside the public API.
+- ``eval`` is used per-record internally (on ``declare`` statements only);
+  the state is never evaluated as an arbitrary code block.
 
 Source Listing
 --------------
