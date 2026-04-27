@@ -802,18 +802,18 @@ fi'
   [[ "$stderr" == *"'not_a_var' is not declared in scope"* ]]
 }
 
-# bats test_tags=hs_persist_state_as_code,known_issue
-@test "known issue nr.2: hs_persist_state_as_code silently ignores function names" {
+# bats test_tags=hs_persist_state_as_code,xfail
+@test "hs_persist_state_as_code rejects a function name with HS_ERR_UNKNOWN_VAR_NAME" {
   # shellcheck disable=SC2329
   f() {
     my_func(){ echo "nope"; }
     local state_var=""
-    hs_persist_state_as_code -S state_var my_func
+    hs_persist_state_as_code -S state_var my_func || return $?
     printf "%s" "$state_var"
   }
-  run -0 --separate-stderr f
+  run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
   [ -z "$output" ]
-  [ -z "$stderr" ]
+  [[ "$stderr" == *"is a function, not a variable"* ]]
 }
 
 # bats test_tags=hs_persist_state_as_code,known_issue
