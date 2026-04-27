@@ -936,6 +936,7 @@ fi'
     }
     cleanup() {
       local -A commander
+      local -n active
       eval "$(hs_read_persisted_state -S "$1")" || return $?
       printf "%s:%s" "${active[name]-}" "${active[hp]-}"
     }

@@ -354,6 +354,7 @@ Persisting a nameref alongside its target (active-character pattern):
 
    cleanup_function() {
        local -A commander wrex
+       local -n active
        eval "$(hs_read_persisted_state "$@")" || return $?
        printf 'Active: %s (HP: %s)\n' "${active[name]}" "${active[hp]}"
    }
