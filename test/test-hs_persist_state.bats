@@ -875,12 +875,12 @@ fi'
 }
 
 # ---------------------------------------------------------------------------
-# Preliminary tests for the HS2 format redesign (issue #3).
-# All tagged xfail: they document the expected new behavior and will be
-# promoted to passing regression tests once the implementation lands.
+# Regression tests for the HS2 format redesign (issue #3).
+
+
 # ---------------------------------------------------------------------------
 
-# bats test_tags=hs_persist_state,xfail
+# bats test_tags=hs_persist_state
 @test "hs_persist_state produces an HS2-format state string" {
   # shellcheck disable=SC2329
   f() {
@@ -893,7 +893,7 @@ fi'
   [ -z "$stderr" ]
 }
 
-# bats test_tags=hs_persist_state,xfail
+# bats test_tags=hs_persist_state
 @test "hs_persist_state round-trips an indexed array via explicit restore" {
   # shellcheck disable=SC2329
   f() {
@@ -909,7 +909,7 @@ fi'
   [ -z "$stderr" ]
 }
 
-# bats test_tags=hs_persist_state,xfail
+# bats test_tags=hs_persist_state
 @test "hs_persist_state round-trips an associative array via explicit restore" {
   # shellcheck disable=SC2329
   f() {
@@ -925,7 +925,7 @@ fi'
   [ -z "$stderr" ]
 }
 
-# bats test_tags=hs_persist_state,xfail
+# bats test_tags=hs_persist_state
 @test "hs_persist_state round-trips a nameref with co-persisted target via eval restore" {
   # shellcheck disable=SC2329
   f() {
@@ -949,7 +949,7 @@ fi'
   [ -z "$stderr" ]
 }
 
-# bats test_tags=hs_persist_state,xfail
+# bats test_tags=hs_persist_state
 @test "hs_persist_state rejects a nameref whose target is not being persisted" {
   # shellcheck disable=SC2329
   f() {

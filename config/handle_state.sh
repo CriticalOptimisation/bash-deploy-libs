@@ -34,6 +34,7 @@ source "${BASH_SOURCE%/*}/command_guard.sh"
 #   cleanup -S _state
 
 guard timeout
+guard cksum
 
 # --- Public error codes --------------------------------------------------------
 readonly HS_ERR_RESERVED_VAR_NAME=1
@@ -189,6 +190,111 @@ fi
     printf -v "$__output_state_var" '%s' "$__output"
 }
 
+# --- hs_persist_state ----------------------------------------------------------
+# Function:
+#   hs_persist_state [options] [--] [state_variable ...]
+# Description:
+#   Appends the current values of the specified local variables to an HS2-format
+#   opaque state object held in the variable named by -S. Supports scalars,
+#   indexed arrays, associative arrays, and namerefs (when the nameref target is
+#   also being persisted or is already in the state).
+# Options:
+#   -S <state> - pass the state object by name, mandatory.
+#   -- - marks the end of options and the beginning of the list of variable names.
+# Errors:
+#   See hs_persist_state_as_code for the full error code list; additionally:
+#   - `HS_ERR_NAMEREF_TARGET_NOT_PERSISTED` if a nameref's target is not being
+#     persisted in the same call and is not already present in the prior state.
+hs_persist_state() {
+    local -a __hsp_remaining=()
+    local -A __hsp_processed=()
+    _hs_resolve_state_inputs hs_persist_state __hsp_remaining S: __hsp_processed "$@" || return $?
+    local __hsp_out_var="${__hsp_processed[state]}"
+    local __hsp_existing="${!__hsp_out_var-}"
+    local -a __hsp_vars=()
+    read -r -a __hsp_vars <<< "${__hsp_processed[vars]-}"
+
+    # Parse existing state (must be empty or HS2).
+    local __hsp_existing_payload=""
+    local -a __hsp_existing_recs=()
+    local -A __hsp_existing_names=()
+    if [[ -n "$__hsp_existing" ]]; then
+        if [[ "$__hsp_existing" != HS2:* ]]; then
+            echo "[ERROR] hs_persist_state: existing state is not in HS2 format." >&2
+            return "$HS_ERR_CORRUPT_STATE"
+        fi
+        _hs_hs2_parse hs_persist_state "$__hsp_existing" __hsp_existing_recs || return $?
+        local __hsp_tmp="${__hsp_existing#HS2:}"
+        __hsp_existing_payload="${__hsp_tmp#*:}"
+        local __hsp_er
+        for __hsp_er in "${__hsp_existing_recs[@]}"; do
+            __hsp_existing_names["$(_hs_hs2_record_name "$__hsp_er")"]=1
+        done
+    fi
+
+    # Reserved names that must not be persisted.
+    local -A __hsp_reserved=(
+        [__hsp_remaining]=1 [__hsp_processed]=1 [__hsp_out_var]=1
+        [__hsp_existing]=1 [__hsp_vars]=1 [__hsp_existing_payload]=1
+        [__hsp_existing_recs]=1 [__hsp_existing_names]=1 [__hsp_reserved]=1
+        [__hsp_non_namerefs]=1 [__hsp_namerefs]=1 [__hsp_this_call]=1
+        [__hsp_var]=1 [__hsp_decl]=1 [__hsp_flags]=1 [__hsp_target]=1
+        [__hsp_er]=1 [__hsp_tmp]=1
+    )
+
+    # Phase 1: validate all names; separate non-namerefs from namerefs.
+    local -a __hsp_non_namerefs=()
+    local -a __hsp_namerefs=()
+    local -A __hsp_this_call=()   # name -> "nameref" or "1"
+    local __hsp_var __hsp_decl __hsp_flags
+    for __hsp_var in "${__hsp_vars[@]}"; do
+        if [[ -n "${__hsp_reserved[$__hsp_var]-}" ]]; then
+            echo "[ERROR] hs_persist_state: refusing to persist reserved variable name '$__hsp_var'." >&2
+            return "$HS_ERR_RESERVED_VAR_NAME"
+        fi
+        if [[ -n "${__hsp_existing_names[$__hsp_var]-}" ]]; then
+            echo "[ERROR] hs_persist_state: variable '$__hsp_var' already exists in the state." >&2
+            return "$HS_ERR_VAR_NAME_COLLISION"
+        fi
+        if ! __hsp_decl=$(declare -p "$__hsp_var" 2>/dev/null); then
+            if declare -f "$__hsp_var" >/dev/null 2>&1; then
+                echo "[ERROR] hs_persist_state: '$__hsp_var' is a function, not a variable." >&2
+            else
+                echo "[ERROR] hs_persist_state: '$__hsp_var' is not declared in scope." >&2
+            fi
+            return "$HS_ERR_UNKNOWN_VAR_NAME"
+        fi
+        __hsp_flags="${__hsp_decl#declare }"
+        __hsp_flags="${__hsp_flags%% *}"
+        if [[ "$__hsp_flags" == *n* ]]; then
+            __hsp_this_call["$__hsp_var"]=nameref
+        else
+            __hsp_non_namerefs+=("$(_hs_strip_export "$__hsp_decl")")
+            __hsp_this_call["$__hsp_var"]=1
+        fi
+    done
+
+    # Phase 2: validate nameref targets and build nameref records (after targets).
+    local __hsp_target
+    for __hsp_var in "${__hsp_vars[@]}"; do
+        [[ "${__hsp_this_call[$__hsp_var]-}" == nameref ]] || continue
+        __hsp_decl=$(declare -p "$__hsp_var" 2>/dev/null)
+        # Extract target: declare -n name="target" → value part between quotes.
+        __hsp_target="${__hsp_decl#*\"}"
+        __hsp_target="${__hsp_target%\"}"
+        if [[ -z "${__hsp_existing_names[$__hsp_target]-}" && \
+              -z "${__hsp_this_call[$__hsp_target]-}" ]]; then
+            echo "[ERROR] hs_persist_state: nameref '$__hsp_var' target '$__hsp_target' is not being persisted." >&2
+            return "$HS_ERR_NAMEREF_TARGET_NOT_PERSISTED"
+        fi
+        __hsp_namerefs+=("$(_hs_strip_export "$__hsp_decl")")
+    done
+
+    # Build HS2 state: existing payload + non-nameref records + nameref records.
+    _hs_hs2_build "$__hsp_out_var" "$__hsp_existing_payload" \
+        "${__hsp_non_namerefs[@]}" "${__hsp_namerefs[@]}"
+}
+
 # --- hs_destroy_state ---------------------------------------------------------------
 # Function:
 #   hs_destroy_state [options] [--] [state_variable ...]
@@ -233,6 +339,39 @@ hs_destroy_state() {
     local __existing_state="${!__output_state_var-}"
     local -a __destroy_var_args=()
     read -r -a __destroy_var_args <<< "${__processed_args[vars]-}"
+
+    # HS2 fast path: pure-Bash, no subprocess.
+    if [[ "$__existing_state" == HS2:* ]]; then
+        local -a __hsd2_recs=()
+        _hs_hs2_parse hs_destroy_state "$__existing_state" __hsd2_recs || return $?
+        local -A __hsd2_present=()
+        local __hsd2_rec
+        for __hsd2_rec in "${__hsd2_recs[@]}"; do
+            __hsd2_present["$(_hs_hs2_record_name "$__hsd2_rec")"]=1
+        done
+        for __var_name in "${__destroy_var_args[@]}"; do
+            if [[ -z "${__hsd2_present[$__var_name]-}" ]]; then
+                echo "[ERROR] hs_destroy_state: variable '$__var_name' is not defined in the state." >&2
+                return "$HS_ERR_VAR_NAME_NOT_IN_STATE"
+            fi
+        done
+        local -A __hsd2_destroy_set=()
+        for __var_name in "${__destroy_var_args[@]}"; do
+            __hsd2_destroy_set["$__var_name"]=1
+        done
+        local -a __hsd2_survivors=()
+        for __hsd2_rec in "${__hsd2_recs[@]}"; do
+            local __hsd2_rname
+            __hsd2_rname=$(_hs_hs2_record_name "$__hsd2_rec")
+            [[ -z "${__hsd2_destroy_set[$__hsd2_rname]-}" ]] && __hsd2_survivors+=("$__hsd2_rec")
+        done
+        if (( ${#__hsd2_survivors[@]} > 0 )); then
+            _hs_hs2_build "$__output_state_var" "" "${__hsd2_survivors[@]}"
+        else
+            printf -v "$__output_state_var" '%s' ""
+        fi
+        return 0
+    fi
 
     # Step 2: set up working variables.
     # __state_var_names will contain every variable name found in the incoming
@@ -419,6 +558,51 @@ hs_read_persisted_state() {
     # only those variables directly into the caller scope. This is the explicit
     # selective-restore API.
     if [ ${#__requested_var_args[@]} -gt 0 ]; then
+        # HS2 fast path: pure-Bash, no subprocess.
+        if [[ "$__existing_state" == HS2:* ]]; then
+            local -a __hsrr_recs=()
+            _hs_hs2_parse hs_read_persisted_state "$__existing_state" __hsrr_recs || return $?
+            local -A __hsrr_map=()
+            local __hsrr_r
+            for __hsrr_r in "${__hsrr_recs[@]}"; do
+                __hsrr_map["$(_hs_hs2_record_name "$__hsrr_r")"]="$__hsrr_r"
+            done
+            local __requested_var
+            for __requested_var in "${__requested_var_args[@]}"; do
+                if [[ -z "${__hsrr_map[$__requested_var]+x}" ]]; then
+                    [[ "$__quiet" == "false" ]] && \
+                        echo "[WARNING] hs_read_persisted_state: variable '$__requested_var' is not defined in the state." >&2
+                    continue
+                fi
+                local __hsrr_rec="${__hsrr_map[$__requested_var]}"
+                local __hsrr_flags="${__hsrr_rec#declare }"
+                __hsrr_flags="${__hsrr_flags%% *}"
+                if [[ "$__hsrr_flags" == *n* ]]; then
+                    echo "[ERROR] hs_read_persisted_state: '$__requested_var' is a nameref; use the eval form to restore namerefs." >&2
+                    return "$HS_ERR_CORRUPT_STATE"
+                fi
+                local __hsrr_caller_decl
+                if ! __hsrr_caller_decl=$(declare -p "$__requested_var" 2>/dev/null); then
+                    echo "[ERROR] hs_read_persisted_state: '$__requested_var' is not declared in scope." >&2
+                    return "$HS_ERR_UNKNOWN_VAR_NAME"
+                fi
+                if [[ "$__hsrr_caller_decl" == *=* ]]; then
+                    echo "[ERROR] hs_read_persisted_state: '$__requested_var' is already set; refusing to overwrite." >&2
+                    return "$HS_ERR_VAR_ALREADY_SET"
+                fi
+                if [[ "$__hsrr_rec" == *=* ]]; then
+                    local __hsrr_valpart="${__hsrr_rec#*=}"
+                    local -n __hsrr_ref="$__requested_var"
+                    eval "__hsrr_ref=${__hsrr_valpart}" || {
+                        echo "[ERROR] hs_read_persisted_state: failed to restore '$__requested_var'." >&2
+                        return "$HS_ERR_CORRUPT_STATE"
+                    }
+                    unset -n __hsrr_ref
+                fi
+            done
+            return 0
+        fi
+
         local __requested_var
         local __restored_payload=""
         local __restore_status=0
@@ -494,13 +678,53 @@ hs_read_persisted_state() {
 
     # Step 5: otherwise, generate an implicit restore snippet. The snippet
     # inspects the current function's locals with `local -p`, selects unset
-    # scalar locals, and reenters hs_read_persisted_state with -q so unrelated
-    # locals stay quiet.
-    # The reentrant call below must forward all parameters decoded by
-    # _hs_resolve_state_inputs (state var, quiet flag, etc.). -q is added here
-    # automatically; -S carries the already-validated state variable name.
-    IFS= read -r -d '' __probe_snippet <<EOF || true
-hs_read_persisted_state -q -S $(printf '%q' "$__output_state_var") -- \$(
+    # locals, and reenters hs_read_persisted_state with -q so unrelated
+    # locals stay quiet. For HS2 state, namerefs are restored inline.
+    local __probe_snippet=""
+    local __hsi_sv
+    __hsi_sv=$(printf '%q' "$__output_state_var")
+
+    if [[ "$__existing_state" == HS2:* ]]; then
+        # Parse state to discover nameref records for inline restoration.
+        local -a __hsi_recs=()
+        _hs_hs2_parse hs_read_persisted_state "$__existing_state" __hsi_recs || return $?
+        local -A __hsi_nr_targets=()
+        local __hsi_r
+        for __hsi_r in "${__hsi_recs[@]}"; do
+            local __hsi_rf="${__hsi_r#declare }"
+            __hsi_rf="${__hsi_rf%% *}"
+            if [[ "$__hsi_rf" == *n* && "$__hsi_r" == *=* ]]; then
+                local __hsi_rn
+                __hsi_rn=$(_hs_hs2_record_name "$__hsi_r")
+                local __hsi_rt="${__hsi_r#*\"}"
+                __hsi_rt="${__hsi_rt%\"}"
+                __hsi_nr_targets["$__hsi_rn"]="$__hsi_rt"
+            fi
+        done
+
+        # Part 1: explicit restore for non-nameref unset locals (scalars + arrays).
+        IFS= read -r -d '' __probe_snippet <<EOF || true
+hs_read_persisted_state -q -S ${__hsi_sv} -- \$(
+  local -p | while IFS= read -r __hs_local_decl; do
+    [[ "\$__hs_local_decl" == *=* ]] && continue
+    [[ "\$__hs_local_decl" =~ ^declare\ -[^[:space:]]*n ]] && continue
+    __hs_local_name=\${__hs_local_decl##* }
+    [[ "\$__hs_local_name" == __hs_* ]] && continue
+    printf '%s ' "\$__hs_local_name"
+  done
+) >/dev/null
+EOF
+        # Part 2: inline nameref restores guarded by caller's local -n declaration.
+        local __hsi_nrn __hsi_nrt __hsi_qn __hsi_qt
+        for __hsi_nrn in "${!__hsi_nr_targets[@]}"; do
+            __hsi_nrt="${__hsi_nr_targets[$__hsi_nrn]}"
+            __hsi_qn=$(printf '%q' "$__hsi_nrn")
+            __hsi_qt=$(printf '%q' "$__hsi_nrt")
+            __probe_snippet+="[[ \"\$(declare -p ${__hsi_qn} 2>/dev/null)\" == 'declare -'*n*' ${__hsi_qn}' ]] && declare -n ${__hsi_qn}=${__hsi_qt}"$'\n'
+        done
+    else
+        IFS= read -r -d '' __probe_snippet <<EOF || true
+hs_read_persisted_state -q -S ${__hsi_sv} -- \$(
   local -p | while IFS= read -r __hs_local_decl; do
     [[ "\$__hs_local_decl" == *=* ]] && continue
     [[ "\$__hs_local_decl" =~ ^declare\ -[^[:space:]]*[aA] ]] && continue
@@ -510,6 +734,7 @@ hs_read_persisted_state -q -S $(printf '%q' "$__output_state_var") -- \$(
   done
 ) >/dev/null
 EOF
+    fi
     printf '%s' "$__probe_snippet"
 }
 
@@ -766,8 +991,85 @@ _hs_is_array() {
         arraytypes="A"
         shift
     fi
-    local -n vname=$1 
+    local -n vname=$1
     local attrs
     attrs=${vname@a}
     [[ "$attrs" == *[$arraytypes]* ]]
+}
+
+# --- HS2 helper functions -------------------------------------------------------
+
+# _hs_strip_export <decl>
+# Prints a declare -p record with the export flag (-x) removed.
+_hs_strip_export() {
+    local __decl="$1"
+    if [[ "$__decl" != "declare -"*x* ]]; then
+        printf '%s' "$__decl"
+        return 0
+    fi
+    local __rest="${__decl#declare }"
+    local __attrs="${__rest%% *}"
+    local __nameandval="${__rest#* }"
+    __attrs="${__attrs//x/}"
+    [[ "$__attrs" == "-" ]] && __attrs="--"
+    printf 'declare %s %s' "$__attrs" "$__nameandval"
+}
+
+# _hs_hs2_record_name <record>
+# Prints the variable name from a declare -p record.
+_hs_hs2_record_name() {
+    local __rest="${1#declare }"
+    __rest="${__rest#* }"
+    printf '%s' "${__rest%%=*}"
+}
+
+# _hs_hs2_build <out_var> <existing_payload> [record ...]
+# Builds an HS2 state string from existing payload and new records and writes
+# it to the variable named by <out_var>.
+_hs_hs2_build() {
+    local __hs2b_out="$1"
+    local __hs2b_payload="$2"
+    shift 2
+    local __hs2b_rec
+    for __hs2b_rec in "$@"; do
+        if [[ -n "$__hs2b_payload" ]]; then
+            __hs2b_payload+=$'\001'
+        fi
+        __hs2b_payload+="$__hs2b_rec"
+    done
+    local __hs2b_cksum
+    __hs2b_cksum=$(printf '%s' "$__hs2b_payload" | cksum)
+    __hs2b_cksum="${__hs2b_cksum%% *}"
+    printf -v "$__hs2b_out" 'HS2:%s:%s' "$__hs2b_cksum" "$__hs2b_payload"
+}
+
+# _hs_hs2_parse <caller> <state> <out_array>
+# Verifies an HS2 state string and splits its records (SOH-delimited) into the
+# indexed array named by <out_array>.
+_hs_hs2_parse() {
+    local __hs2p_caller="$1"
+    local __hs2p_state="$2"
+    local -n __hs2p_out="$3"
+
+    if [[ "$__hs2p_state" != HS2:* ]]; then
+        echo "[ERROR] ${__hs2p_caller}: state is not in HS2 format." >&2
+        return "$HS_ERR_CORRUPT_STATE"
+    fi
+    local __hs2p_rest="${__hs2p_state#HS2:}"
+    local __hs2p_stored="${__hs2p_rest%%:*}"
+    local __hs2p_payload="${__hs2p_rest#*:}"
+
+    local __hs2p_computed
+    __hs2p_computed=$(printf '%s' "$__hs2p_payload" | cksum)
+    __hs2p_computed="${__hs2p_computed%% *}"
+    if [[ "$__hs2p_stored" != "$__hs2p_computed" ]]; then
+        echo "[ERROR] ${__hs2p_caller}: HS2 state checksum mismatch." >&2
+        return "$HS_ERR_CORRUPT_STATE"
+    fi
+
+    __hs2p_out=()
+    [[ -z "$__hs2p_payload" ]] && return 0
+    local __hs2p_old_ifs="$IFS"
+    IFS=$'\001' read -ra __hs2p_out <<< "$__hs2p_payload"
+    IFS="$__hs2p_old_ifs"
 }
