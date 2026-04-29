@@ -175,6 +175,9 @@ Behavior:
 - A name not declared anywhere in the dynamic scope is an error.
 - A name that is set (including an empty-string value) is an error; ``unset``
   the variable explicitly before calling if an overwrite is intended.
+- Validation is **all-or-nothing**: all guard conditions (declared, unset) are
+  checked for every requested name before any restoration occurs. If any check
+  fails, no variable is restored.
 - Requested names missing from the state object are warnings, one per variable.
 - ``-q`` suppresses those warnings.
 - Scalars, indexed arrays, and associative arrays are all restored natively.
@@ -264,8 +267,8 @@ Errors:
 
 - ``HS_ERR_MISSING_ARGUMENT=8``: required option parameter missing.
 - ``HS_ERR_INVALID_VAR_NAME=5``: invalid state variable name, invalid
-  explicit variable-name token, or a collision where ``$2`` / ``$4`` matches
-  one of the helper's own local variable names.
+  explicit variable-name token, or ``$2`` is a name reserved by the helper's
+  own local variables.
 - ``HS_ERR_INVALID_ARGUMENT_TYPE=9``: output containers passed by name are not
   an indexed array and an associative array respectively.
 - ``HS_ERR_STATE_VAR_UNINITIALIZED=7``: missing ``-S <statevar>``.

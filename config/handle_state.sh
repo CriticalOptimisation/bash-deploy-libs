@@ -316,15 +316,10 @@ hs_read_persisted_state() {
         for __hsrr_r in "${__hsrr_recs[@]}"; do
             __hsrr_map["$(_hs_hs2_record_name "$__hsrr_r")"]="$__hsrr_r"
         done
-        local __requested_var
+        # Phase 1: validate all guard conditions before restoring anything (all-or-nothing).
+        local __requested_var __hsrr_caller_decl
         for __requested_var in "${__requested_var_args[@]}"; do
-            if [[ -z "${__hsrr_map[$__requested_var]+x}" ]]; then
-                [[ "$__quiet" == "false" ]] && \
-                    echo "[WARNING] hs_read_persisted_state: variable '$__requested_var' is not defined in the state." >&2
-                continue
-            fi
-            local __hsrr_rec="${__hsrr_map[$__requested_var]}"
-            local __hsrr_caller_decl
+            [[ -z "${__hsrr_map[$__requested_var]+x}" ]] && continue
             if ! __hsrr_caller_decl=$(declare -p "$__requested_var" 2>/dev/null); then
                 echo "[ERROR] hs_read_persisted_state: '$__requested_var' is not declared in scope." >&2
                 return "$HS_ERR_UNKNOWN_VAR_NAME"
@@ -333,8 +328,18 @@ hs_read_persisted_state() {
                 echo "[ERROR] hs_read_persisted_state: '$__requested_var' is already set; refusing to overwrite." >&2
                 return "$HS_ERR_VAR_ALREADY_SET"
             fi
+        done
+        # Phase 2: restore — only reached when all guards passed.
+        local __hsrr_rec __hsrr_valpart
+        for __requested_var in "${__requested_var_args[@]}"; do
+            if [[ -z "${__hsrr_map[$__requested_var]+x}" ]]; then
+                [[ "$__quiet" == "false" ]] && \
+                    echo "[WARNING] hs_read_persisted_state: variable '$__requested_var' is not defined in the state." >&2
+                continue
+            fi
+            __hsrr_rec="${__hsrr_map[$__requested_var]}"
             if [[ "$__hsrr_rec" == *=* ]]; then
-                local __hsrr_valpart="${__hsrr_rec#*=}"
+                __hsrr_valpart="${__hsrr_rec#*=}"
                 eval "$__requested_var=${__hsrr_valpart}" || {
                     echo "[ERROR] hs_read_persisted_state: failed to restore '$__requested_var'." >&2
                     return "$HS_ERR_CORRUPT_STATE"
@@ -468,6 +473,7 @@ _hs_resolve_state_inputs() {
     local -i OPTIND=1
     local -i __last_separator_index
     local -i __scan_index
+    local -i __last_opt_remaining_size=0
     local -a __trailing_vars=()
     local -n __remaining_args_ref
     local -n __processed_args_ref
@@ -478,11 +484,7 @@ _hs_resolve_state_inputs() {
         fi
     done
     if local -p "$2" >/dev/null 2>&1; then
-        echo "[ERROR] ${__caller_name}: '$2' conflicts with a local variable name and cannot be used here." >&2
-        return "$HS_ERR_INVALID_VAR_NAME"
-    fi
-    if local -p "$4" >/dev/null 2>&1; then
-        echo "[ERROR] ${__caller_name}: '$4' conflicts with a local variable name and cannot be used here." >&2
+        echo "[ERROR] ${__caller_name}: '$2' is a reserved internal name used by _hs_resolve_state_inputs; choose a different variable name." >&2
         return "$HS_ERR_INVALID_VAR_NAME"
     fi
 
@@ -526,9 +528,11 @@ _hs_resolve_state_inputs() {
                         return "$HS_ERR_INVALID_VAR_NAME"
                     fi
                     __processed_args_ref["state"]="$OPTARG"
+                    __last_opt_remaining_size=${#__remaining_args_ref[@]}
                     ;;
                 q)
                     __processed_args_ref["quiet"]=true
+                    __last_opt_remaining_size=${#__remaining_args_ref[@]}
                     ;;
                 :)
                     # Only triggered by -S in the last position since getopts accepts
@@ -580,7 +584,7 @@ _hs_resolve_state_inputs() {
         # Without an explicit separator, treat the maximal suffix of valid
         # variable names as the library-owned var list. We peel that suffix
         # from the end, then rebuild it in original argument order.
-        while (( ${#__remaining_args_ref[@]} > 0 )) && _hs_is_valid_variable_name "${__remaining_args_ref[-1]}"; do
+        while (( ${#__remaining_args_ref[@]} > __last_opt_remaining_size )) && _hs_is_valid_variable_name "${__remaining_args_ref[-1]}"; do
             __trailing_vars=("${__remaining_args_ref[-1]}" "${__trailing_vars[@]}")
             unset "__remaining_args_ref[-1]"
         done

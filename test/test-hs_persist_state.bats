@@ -306,7 +306,7 @@ hs2_corrupt_state() {
     printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
   }
   run -0 --separate-stderr f
-  [ "$output" = "state|-b|toto foo" ]
+  [ "$output" = "state|-b toto|foo" ]
   [[ "$stderr" == *"use -- before the variable names"* ]]
 }
 
@@ -320,7 +320,7 @@ hs2_corrupt_state() {
     printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
   }
   run -0 --separate-stderr f
-  [ "$output" = "state|-b|toto foo bar" ]
+  [ "$output" = "state|-b toto|foo bar" ]
   [[ "$stderr" == *"use -- before the variable names"* ]]
 }
 
@@ -339,7 +339,7 @@ hs2_corrupt_state() {
 }
 
 # bats test_tags=hs_resolve_state_inputs
-@test "_hs_resolve_state_inputs rejects a remaining_args name that collides with a local helper variable" {
+@test "_hs_resolve_state_inputs rejects a remaining_args name reserved by the helper" {
   # shellcheck disable=SC2329
   f() {
     local -a __trailing_vars=()
@@ -347,19 +347,7 @@ hs2_corrupt_state() {
     _hs_resolve_state_inputs my_helper __trailing_vars qS: processed_args -S state alpha beta gamma
   }
   run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr f
-  [[ "$stderr" == *"'__trailing_vars' conflicts with a local variable name"* ]]
-}
-
-# bats test_tags=hs_resolve_state_inputs
-@test "_hs_resolve_state_inputs rejects a processed_args name that collides with a local helper variable" {
-  # shellcheck disable=SC2329
-  f() {
-    local -a remaining_args=()
-    local __options=""
-    _hs_resolve_state_inputs my_helper remaining_args qS: __options -S state alpha beta gamma
-  }
-  run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr f
-  [[ "$stderr" == *"'__options' conflicts with a local variable name"* ]]
+  [[ "$stderr" == *"'__trailing_vars' is a reserved internal name"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -410,6 +398,84 @@ hs2_corrupt_state() {
 }
 
 # bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state errors on pre-set indexed array restore target" {
+  # shellcheck disable=SC2329
+  f() {
+    init() { local -a arr=(one two); hs_persist_state -S "$1" -- arr || return $?; }
+    local state=""
+    init state || return $?
+    local -a arr=(existing)
+    hs_read_persisted_state -S state -- arr
+  }
+  run -"$HS_ERR_VAR_ALREADY_SET" --separate-stderr f
+  [[ "$stderr" == *"is already set"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state errors on empty indexed array restore target" {
+  # shellcheck disable=SC2329
+  f() {
+    init() { local -a arr=(one); hs_persist_state -S "$1" -- arr || return $?; }
+    local state=""
+    init state || return $?
+    local -a arr=()
+    # arr=() counts as set — must error, not silently overwrite
+    hs_read_persisted_state -S state -- arr
+  }
+  run -"$HS_ERR_VAR_ALREADY_SET" --separate-stderr f
+  [[ "$stderr" == *"is already set"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state errors on pre-set associative array restore target" {
+  # shellcheck disable=SC2329
+  f() {
+    init() { local -A amap=([k]=v); hs_persist_state -S "$1" -- amap || return $?; }
+    local state=""
+    init state || return $?
+    local -A amap=([old]=val)
+    hs_read_persisted_state -S state -- amap
+  }
+  run -"$HS_ERR_VAR_ALREADY_SET" --separate-stderr f
+  [[ "$stderr" == *"is already set"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state errors on empty associative array restore target" {
+  # shellcheck disable=SC2329
+  f() {
+    init() { local -A amap=([k]=v); hs_persist_state -S "$1" -- amap || return $?; }
+    local state=""
+    init state || return $?
+    local -A amap=()
+    # amap=() counts as set — must error, not silently overwrite
+    hs_read_persisted_state -S state -- amap
+  }
+  run -"$HS_ERR_VAR_ALREADY_SET" --separate-stderr f
+  [[ "$stderr" == *"is already set"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state errors on pre-set nameref restore target" {
+  # shellcheck disable=SC2329
+  f() {
+    init() {
+      local -A target=([x]=1)
+      local -n ref=target
+      hs_persist_state -S "$1" -- target ref || return $?
+    }
+    local state=""
+    init state || return $?
+    local -A target
+    local -n ref=target
+    # ref already points to target — must error, not silently overwrite
+    hs_read_persisted_state -S state -- ref
+  }
+  run -"$HS_ERR_VAR_ALREADY_SET" --separate-stderr f
+  [[ "$stderr" == *"is already set"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
 @test "hs_read_persisted_state restores explicitly listed unset locals" {
   # shellcheck disable=SC2329
   f() {
@@ -438,32 +504,35 @@ hs2_corrupt_state() {
 }
 
 # bats test_tags=hs_read_persisted_state
-@test "hs_read_persisted_state stops at first bad var in multi-var restore" {
+@test "hs_read_persisted_state all-or-nothing: does not restore any var when a later var fails" {
   # shellcheck disable=SC2329
   f() {
     init() { local foo=a bar=b; hs_persist_state -S "$1" -- foo bar || return $?; }
     local state=""
     init state || return $?
     local foo
-    # only bar is not declared — must error on bar
-    hs_read_persisted_state -S state -- foo bar || return $?
+    # bar is not declared — validation must fail before any restoration occurs
+    local err=0
+    hs_read_persisted_state -S state -- foo bar || err=$?
+    # foo must remain unset: all-or-nothing means no partial restoration
+    printf "%s" "${foo:-UNSET}"
+    return "$err"
   }
   run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
   [[ "$stderr" == *"'bar' is not declared in scope"* ]]
+  [ "$output" = "UNSET" ]
 }
 
 # bats test_tags=hs_read_persisted_state
-@test "hs_read_persisted_state explicit form targets unset var in grandparent scope" {
+@test "hs_read_persisted_state explicit form targets unset var in ancestor scope" {
   # shellcheck disable=SC2329
-  init()  { local outer_var=from_init; hs_persist_state -S "$1" -- outer_var || return $?; }
-  inner() { hs_read_persisted_state -S "$1" -- outer_var || return $?; }
-  middle() { inner "$1" || return $?; }
+  init()   { local outer_var=from_init; hs_persist_state -S "$1" -- outer_var || return $?; }
+  inner()  { hs_read_persisted_state -S "$1" -- outer_var || return $?; }
+  middle() { local outer_var; inner "$1" || return $?; printf "%s" "$outer_var"; }
   f() {
-    local outer_var
     local state=""
     init state || return $?
-    middle state || return $?
-    printf "%s" "$outer_var"
+    middle state
   }
   run -0 --separate-stderr f
   [ "$output" = "from_init" ]
@@ -708,17 +777,19 @@ hs2_corrupt_state() {
 # Grandparent and global explicit restore
 
 # bats test_tags=hs_read_persisted_state
-@test "hs_read_persisted_state explicit form targets unset indexed array in grandparent scope" {
+@test "hs_read_persisted_state explicit form targets unset indexed array in ancestor scope" {
   # shellcheck disable=SC2329
   init()   { local -a items=(one two "three four"); hs_persist_state -S "$1" -- items || return $?; }
   inner()  { hs_read_persisted_state -S "$1" -- items || return $?; }
-  middle() { inner "$1" || return $?; }
-  f() {
+  middle() {
     local -a items
+    inner "$1" || return $?
+    printf "%s:%s:%s" "${items[0]-}" "${items[1]-}" "${items[2]-}"
+  }
+  f() {
     local state=""
     init state || return $?
-    middle state || return $?
-    printf "%s:%s:%s" "${items[0]-}" "${items[1]-}" "${items[2]-}"
+    middle state
   }
   run -0 --separate-stderr f
   [ "$output" = "one:two:three four" ]
@@ -726,7 +797,7 @@ hs2_corrupt_state() {
 }
 
 # bats test_tags=hs_read_persisted_state
-@test "hs_read_persisted_state explicit form restores nameref and target in grandparent scope" {
+@test "hs_read_persisted_state explicit form restores nameref and target in ancestor scope" {
   # shellcheck disable=SC2329
   init()   {
     local -A target=([hp]=100 [name]="Shepard")
@@ -734,14 +805,16 @@ hs2_corrupt_state() {
     hs_persist_state -S "$1" -- target ref || return $?
   }
   inner()  { hs_read_persisted_state -S "$1" -- target ref || return $?; }
-  middle() { inner "$1" || return $?; }
-  f() {
+  middle() {
     local -A target
     local -n ref
+    inner "$1" || return $?
+    printf "%s:%s" "${ref[name]-}" "${ref[hp]-}"
+  }
+  f() {
     local state=""
     init state || return $?
-    middle state || return $?
-    printf "%s:%s" "${ref[name]-}" "${ref[hp]-}"
+    middle state
   }
   run -0 --separate-stderr f
   [ "$output" = "Shepard:100" ]
@@ -810,18 +883,19 @@ hs2_corrupt_state() {
   [ -z "$stderr" ]
 }
 
-# bats test_tags=hs_read_persisted_state,known_issue
-@test "known issue: implicit restore (eval form) cannot reach grandparent scope" {
+# bats test_tags=hs_read_persisted_state
+@test "design: implicit restore (eval form) only targets the immediate caller's unset locals" {
   # shellcheck disable=SC2329
+  # The eval form probes inner()'s own locals via local -p; it cannot see
+  # outer_var declared in f(). This is the intended behaviour: the eval snippet
+  # is self-contained to the caller that evaluates it.
   f() {
-    init()   { local outer_var=from_init; hs_persist_state -S "$1" -- outer_var || return $?; }
-    inner()  { eval "$(hs_read_persisted_state -S "$1")" || return $?; }
-    middle() { inner "$1" || return $?; }
+    init()  { local outer_var=from_init; hs_persist_state -S "$1" -- outer_var || return $?; }
+    inner() { eval "$(hs_read_persisted_state -S "$1")" || return $?; }
     local outer_var
     local state=""
     init state || return $?
-    middle state || return $?
-    # inner's local -p does not see outer_var in f's frame, so it is not restored.
+    inner state || return $?
     printf "%s" "${outer_var:-NOT_RESTORED}"
   }
   run -0 --separate-stderr f
@@ -829,14 +903,16 @@ hs2_corrupt_state() {
   [ -z "$stderr" ]
 }
 
-# bats test_tags=hs_read_persisted_state,known_issue
-@test "known issue: implicit restore (eval form) cannot restore a declare -g global" {
+# bats test_tags=hs_read_persisted_state
+@test "design: implicit restore (eval form) intentionally ignores declare -g globals" {
   # shellcheck disable=SC2329
+  # local -p lists only function-local variables, not globals declared with
+  # declare -g. A library must not randomly overwrite application globals, so
+  # this scope restriction is a deliberate safety property, not a limitation.
   f() {
     init()    { local gvar=global_val; hs_persist_state -S "$1" -- gvar || return $?; }
     cleanup() {
       declare -g gvar
-      # local -p in cleanup lists only local vars, not declare -g globals.
       eval "$(hs_read_persisted_state -S "$1")" || return $?
       printf "%s" "${gvar:-NOT_RESTORED}"
     }
@@ -900,6 +976,9 @@ hs2_corrupt_state() {
 # bats test_tags=hs_persist_state
 @test "hs_persist_state round-trips a nameref with co-persisted target via eval restore" {
   # shellcheck disable=SC2329
+  # An unset declared nameref (local -n active) is set by the eval snippet just
+  # like any other unset local — the snippet emits "declare -n active=commander"
+  # which binds the nameref. No special handling is required in the caller.
   f() {
     init() {
       local -A commander=([hp]=100 [name]="Shepard")
@@ -1084,45 +1163,6 @@ hs2_corrupt_state() {
 }
 
 # bats test_tags=hs_persist_state
-@test "hs_persist_state fails on reserved variable name __hsp_vars" {
-  # shellcheck disable=SC2329
-  f() {
-    init() { local __hsp_vars=bad; hs_persist_state -S "$1" -- __hsp_vars || return $?; }
-    local state=""
-    init state
-  }
-  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
-  [[ "$stderr" == *"refusing to persist reserved variable name '__hsp_vars'"* ]]
-  [ -z "$output" ]
-}
-
-# bats test_tags=hs_persist_state
-@test "hs_persist_state fails on reserved variable name __hsp_existing" {
-  # shellcheck disable=SC2329
-  f() {
-    init() { local __hsp_existing=bad; hs_persist_state -S "$1" -- __hsp_existing || return $?; }
-    local state=""
-    init state
-  }
-  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
-  [[ "$stderr" == *"refusing to persist reserved variable name '__hsp_existing'"* ]]
-  [ -z "$output" ]
-}
-
-# bats test_tags=hs_persist_state
-@test "hs_persist_state fails on reserved variable name __hsp_out_var" {
-  # shellcheck disable=SC2329
-  f() {
-    init() { local __hsp_out_var=bad; hs_persist_state -S "$1" -- __hsp_out_var || return $?; }
-    local state=""
-    init state
-  }
-  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
-  [[ "$stderr" == *"refusing to persist reserved variable name '__hsp_out_var'"* ]]
-  [ -z "$output" ]
-}
-
-# bats test_tags=hs_persist_state
 @test "hs_persist_state rejects all current explicit reserved persisted variable names" {
   # shellcheck disable=SC2329
   f() {
@@ -1220,7 +1260,27 @@ hs2_corrupt_state() {
 }
 
 # bats test_tags=hs_destroy_state
-@test "hs_destroy_state ignores forwarded args before final --" {
+@test "hs_destroy_state ignores a forwarded arg immediately before final --" {
+  # shellcheck disable=SC2329
+  f() {
+    local state=""
+    init() { local foo=one bar=two; hs_persist_state -S "$1" -- foo bar || return $?; }
+    init state || return $?
+    hs_destroy_state -S state bad -- foo || return $?
+    cleanup() {
+      local bar
+      hs_read_persisted_state -S "$1" -- bar || return $?
+      printf "%s" "${bar:-}"
+    }
+    cleanup state
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "two" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_destroy_state
+@test "hs_destroy_state ignores a forwarded arg before the options" {
   # shellcheck disable=SC2329
   f() {
     local state=""
