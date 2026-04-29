@@ -180,9 +180,8 @@ Behavior:
   fails, no variable is restored.
 - Requested names missing from the state object are warnings, one per variable.
 - ``-q`` suppresses those warnings.
-- Scalars, indexed arrays, and associative arrays are all restored natively.
-- Namerefs cannot be restored via the explicit form; use the eval/stdout form
-  instead (see nameref example in the Examples section).
+- Scalars, indexed arrays, associative arrays, and namerefs are all restored
+  natively.
 
 Implicit local restore
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -292,9 +291,6 @@ Error Codes
 Known Limitations
 -----------------
 
-- Namerefs cannot be restored via the explicit restore form of
-  ``hs_read_persisted_state``; use the eval/stdout form
-  (``eval "$(hs_read_persisted_state "$@")"``).
 - The HS2 cksum detects accidental corruption but does not authenticate the
   state against intentional tampering; treat the state variable as trusted
   within the process.

@@ -35,15 +35,43 @@ readonly HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12
 # Description:
 #   Appends the current values of the specified local variables to an HS2-format
 #   opaque state object held in the variable named by -S. Supports scalars,
-#   indexed arrays, associative arrays, and namerefs (when the nameref target is
-#   also being persisted or is already in the state).
+#   indexed arrays, associative arrays, and namerefs (nameref target must also
+#   be persisted in the same call or already present in the prior state).
 # Options:
 #   -S <state> - pass the state object by name, mandatory.
+#   Other options are ignored up to the last --, so this function is usually able
+#   to directly process its caller's argument list, future-proofing it against
+#   new hs_persist_state options.
 #   -- - marks the end of options and the beginning of the list of variable names.
+# Arguments:
+#   $@ - names of local variables to persist. Without `--`, the trailing
+#        arguments that are valid Bash identifiers are treated as the variable
+#        list. Note that the value associated with the last given option will be
+#        mistaken for a variable unless `--` is used.
 # Errors:
-#   See hs_persist_state_as_code for the full error code list; additionally:
+#   - `HS_ERR_MISSING_ARGUMENT` if no state variable name is supplied at all.
+#   - `HS_ERR_INVALID_VAR_NAME` if the state variable name or a requested
+#     persist variable name is not a valid Bash identifier.
+#   - `HS_ERR_STATE_VAR_UNINITIALIZED` if `-S <statevar>` is missing.
+#   - `HS_ERR_CORRUPT_STATE` if the existing state is not in HS2 format or
+#     the rebuilt state cannot be verified.
+#   - `HS_ERR_RESERVED_VAR_NAME` if a requested name collides with an internal
+#     library variable.
+#   - `HS_ERR_VAR_NAME_COLLISION` if a requested name is already present in
+#     the existing state object.
+#   - `HS_ERR_UNKNOWN_VAR_NAME` if a requested name is not declared in scope,
+#     or is a function name rather than a variable.
 #   - `HS_ERR_NAMEREF_TARGET_NOT_PERSISTED` if a nameref's target is not being
 #     persisted in the same call and is not already present in the prior state.
+# Usage examples:
+#   init_function() {
+#       local token="abc" count=3
+#       hs_persist_state "$@" -- token count || return $?
+#   }
+#   init_with_array() {
+#       local -a items=(one two three)
+#       hs_persist_state -S "$1" -- items || return $?
+#   }
 hs_persist_state() {
     local -a __hsp_remaining=()
     local -A __hsp_processed=()
@@ -175,6 +203,8 @@ hs_destroy_state() {
     local __var_name
 
     if [[ "$__existing_state" == HS2:* ]]; then
+        # Phase 1: parse existing state into an array of records and build a
+        # name-keyed presence map for O(1) membership checks.
         local -a __hsd2_recs=()
         _hs_hs2_parse hs_destroy_state "$__existing_state" __hsd2_recs || return $?
         local -A __hsd2_present=()
@@ -182,12 +212,16 @@ hs_destroy_state() {
         for __hsd2_rec in "${__hsd2_recs[@]}"; do
             __hsd2_present["$(_hs_hs2_record_name "$__hsd2_rec")"]=1
         done
+
+        # Phase 2: validate — every requested name must exist in the state.
         for __var_name in "${__destroy_var_args[@]}"; do
             if [[ -z "${__hsd2_present[$__var_name]-}" ]]; then
                 echo "[ERROR] hs_destroy_state: variable '$__var_name' is not defined in the state." >&2
                 return "$HS_ERR_VAR_NAME_NOT_IN_STATE"
             fi
         done
+
+        # Phase 3: collect survivors — records not named in the destroy list.
         local -A __hsd2_destroy_set=()
         for __var_name in "${__destroy_var_args[@]}"; do
             __hsd2_destroy_set["$__var_name"]=1
@@ -198,6 +232,8 @@ hs_destroy_state() {
             __hsd2_rname=$(_hs_hs2_record_name "$__hsd2_rec")
             [[ -z "${__hsd2_destroy_set[$__hsd2_rname]-}" ]] && __hsd2_survivors+=("$__hsd2_rec")
         done
+
+        # Phase 4: write back — rebuild HS2 state from survivors, or clear if empty.
         if (( ${#__hsd2_survivors[@]} > 0 )); then
             _hs_hs2_build "$__output_state_var" "" "${__hsd2_survivors[@]}"
         else
