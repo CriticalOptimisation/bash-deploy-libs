@@ -357,11 +357,11 @@ hs2_corrupt_state() {
 @test "hs_read_persisted_state errors on undeclared restore target" {
   # shellcheck disable=SC2329
   f() {
-    init() { local bar=v2; hs_persist_state -S "$1" -- bar || return $?; }
+    init() { local abar=v2; hs_persist_state -S "$1" -- abar || return $?; }
     local state=""
     init state || return $?
     # bar is not declared as local in f — must error, not silently create a global
-    hs_read_persisted_state -S state -- bar
+    hs_read_persisted_state -S state -- abar
   }
   run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
   [[ "$stderr" == *"is not declared in scope"* ]]
@@ -419,6 +419,7 @@ hs2_corrupt_state() {
     local state=""
     init state || return $?
     local -a arr=()
+    : "${arr[@]}"  # avoids 'variable appears unused' linter error
     # arr=() counts as set — must error, not silently overwrite
     hs_read_persisted_state -S state -- arr
   }
@@ -479,8 +480,8 @@ hs2_corrupt_state() {
 @test "hs_read_persisted_state restores explicitly listed unset locals" {
   # shellcheck disable=SC2329
   f() {
-    init()    { local foo=secret bar=v2 baz=new; hs_persist_state -S "$1" -- foo bar baz || return $?; }
-    cleanup() { local foo bar baz; hs_read_persisted_state -S "$1" -- foo bar baz || return $?; printf "%s:%s:%s" "$foo" "$bar" "$baz"; }
+    init()    { local foo=secret ebar=v2 baz=new; : "$ebar"; hs_persist_state -S "$1" -- foo ebar baz || return $?; }
+    cleanup() { local foo ebar baz; hs_read_persisted_state -S "$1" -- foo ebar baz || return $?; printf "%s:%s:%s" "$foo" "$ebar" "$baz"; }
     local state=""
     init state || return $?
     cleanup state
@@ -493,11 +494,11 @@ hs2_corrupt_state() {
 @test "hs_read_persisted_state -q does not suppress guard errors" {
   # shellcheck disable=SC2329
   f() {
-    init() { local bar=v2; hs_persist_state -S "$1" -- bar || return $?; }
+    init() { local abar=v2; : "$abar"; hs_persist_state -S "$1" -- abar || return $?; }
     local state=""
     init state || return $?
     # -q suppresses missing-variable warnings but must not suppress guard errors
-    hs_read_persisted_state -q -S state -- bar
+    hs_read_persisted_state -q -S state -- abar
   }
   run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
   [[ "$stderr" == *"is not declared in scope"* ]]
@@ -507,19 +508,19 @@ hs2_corrupt_state() {
 @test "hs_read_persisted_state all-or-nothing: does not restore any var when a later var fails" {
   # shellcheck disable=SC2329
   f() {
-    init() { local foo=a bar=b; hs_persist_state -S "$1" -- foo bar || return $?; }
+    init() { local foo=a abar=b; : "$abar"; hs_persist_state -S "$1" -- foo abar || return $?; }
     local state=""
     init state || return $?
     local foo
     # bar is not declared — validation must fail before any restoration occurs
     local err=0
-    hs_read_persisted_state -S state -- foo bar || err=$?
+    hs_read_persisted_state -S state -- foo abar || err=$?
     # foo must remain unset: all-or-nothing means no partial restoration
     printf "%s" "${foo:-UNSET}"
     return "$err"
   }
   run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
-  [[ "$stderr" == *"'bar' is not declared in scope"* ]]
+  [[ "$stderr" == *"'abar' is not declared in scope"* ]]
   [ "$output" = "UNSET" ]
 }
 
@@ -527,8 +528,11 @@ hs2_corrupt_state() {
 @test "hs_read_persisted_state explicit form targets unset var in ancestor scope" {
   # shellcheck disable=SC2329
   init()   { local outer_var=from_init; hs_persist_state -S "$1" -- outer_var || return $?; }
+  # shellcheck disable=SC2329
   inner()  { hs_read_persisted_state -S "$1" -- outer_var || return $?; }
+  # shellcheck disable=SC2329
   middle() { local outer_var; inner "$1" || return $?; printf "%s" "$outer_var"; }
+  # shellcheck disable=SC2329
   f() {
     local state=""
     init state || return $?
@@ -543,8 +547,8 @@ hs2_corrupt_state() {
 @test "eval the output of hs_read_persisted_state in caller scope restores values" {
   # shellcheck disable=SC2329
   f() {
-    init()    { local foo=secret bar=v2 baz=new; hs_persist_state -S "$1" -- foo bar baz || return $?; }
-    cleanup() { local state="$1"; local foo bar baz; eval "$(hs_read_persisted_state -S state)" || return $?; printf "%s:%s:%s" "$foo" "$bar" "$baz"; }
+    init()    { local foo=secret obar=v2 baz=new; hs_persist_state -S "$1" -- foo obar baz || return $?; }
+    cleanup() { local state="$1"; local foo obar baz; eval "$(hs_read_persisted_state -S state)" || return $?; printf "%s:%s:%s" "$foo" "$obar" "$baz"; }
     local state=""
     init state || return $?
     cleanup "$state"
@@ -574,12 +578,12 @@ hs2_corrupt_state() {
 @test "hs_read_persisted_state restores only requested variables" {
   # shellcheck disable=SC2329
   f() {
-    init(){ local foo=secret bar=v2 baz=new; hs_persist_state -S "$1" -- foo bar baz || return $?; }
+    init(){ local foo=secret obar=v2 obaz=new; hs_persist_state -S "$1" -- foo obar obaz || return $?; }
     cleanup(){
       local state_var="$1"
-      local foo bar baz
-      hs_read_persisted_state -S "$state_var" -- foo baz || return $?
-      printf "%s:%s:%s" "$foo" "${bar:-}" "$baz"
+      local foo obar obaz
+      hs_read_persisted_state -S "$state_var" -- foo obaz || return $?
+      printf "%s:%s:%s" "$foo" "${obar:-}" "$obaz"
     }
     local state=""
     init state || return $?
@@ -639,16 +643,16 @@ hs2_corrupt_state() {
     init(){ local foo=secret; hs_persist_state -S "$1" -- foo || return $?; }
     cleanup(){
       local state_var="$1"
-      local foo bar
-      hs_read_persisted_state -S "$state_var" -- foo bar || return $?
-      printf "%s:%s" "$foo" "${bar:-}"
+      local foo ibar
+      hs_read_persisted_state -S "$state_var" -- foo ibar || return $?
+      printf "%s:%s" "$foo" "${ibar:-}"
     }
     local state=""
     init state || return $?
     cleanup state
   }
   run -0 --separate-stderr f
-  [[ "$stderr" == *"[WARNING] hs_read_persisted_state: variable 'bar' is not defined in the state."* ]]
+  [[ "$stderr" == *"[WARNING] hs_read_persisted_state: variable 'ibar' is not defined in the state."* ]]
   [ "$output" = "secret:" ]
 }
 
@@ -659,9 +663,9 @@ hs2_corrupt_state() {
     init(){ local foo=secret; hs_persist_state -S "$1" -- foo || return $?; }
     cleanup(){
       local state_var="$1"
-      local foo bar baz
-      hs_read_persisted_state -S "$state_var" -- foo bar baz || return $?
-      printf "%s:%s:%s" "$foo" "${bar:-}" "${baz:-}"
+      local foo bar ibaz
+      hs_read_persisted_state -S "$state_var" -- foo bar ibaz || return $?
+      printf "%s:%s:%s" "$foo" "${bar:-}" "${ibaz:-}"
     }
     local state=""
     init state || return $?
@@ -669,7 +673,7 @@ hs2_corrupt_state() {
   }
   run -0 --separate-stderr f
   [[ "$stderr" == *"[WARNING] hs_read_persisted_state: variable 'bar' is not defined in the state."* ]]
-  [[ "$stderr" == *"[WARNING] hs_read_persisted_state: variable 'baz' is not defined in the state."* ]]
+  [[ "$stderr" == *"[WARNING] hs_read_persisted_state: variable 'ibaz' is not defined in the state."* ]]
   [ "$output" = "secret::" ]
 }
 
@@ -780,12 +784,15 @@ hs2_corrupt_state() {
 @test "hs_read_persisted_state explicit form targets unset indexed array in ancestor scope" {
   # shellcheck disable=SC2329
   init()   { local -a items=(one two "three four"); hs_persist_state -S "$1" -- items || return $?; }
+  # shellcheck disable=SC2329
   inner()  { hs_read_persisted_state -S "$1" -- items || return $?; }
+  # shellcheck disable=SC2329
   middle() {
     local -a items
     inner "$1" || return $?
     printf "%s:%s:%s" "${items[0]-}" "${items[1]-}" "${items[2]-}"
   }
+  # shellcheck disable=SC2329
   f() {
     local state=""
     init state || return $?
@@ -811,6 +818,7 @@ hs2_corrupt_state() {
     inner "$1" || return $?
     printf "%s:%s" "${ref[name]-}" "${ref[hp]-}"
   }
+  # shellcheck disable=SC2329
   f() {
     local state=""
     init state || return $?
@@ -871,6 +879,7 @@ hs2_corrupt_state() {
     cleanup() {
       declare -gA target
       declare -gn ref
+      : "${target[@]}"  # avoid 'variable appears unused' linter error
       hs_read_persisted_state -S "$1" -- target ref || return $?
       printf "%s:%s" "${ref[name]-}" "${ref[hp]-}"
     }
@@ -934,6 +943,7 @@ hs2_corrupt_state() {
   f() {
     local state=""
     local scalar="value"
+    : "$scalar"   # avoid 'variable appears unused' linter error
     hs_persist_state -S state -- scalar || return $?
     [[ "$state" == HS2:* ]] || { printf "state does not start with HS2: got '%s'\n" "$state" >&2; return 1; }
   }
@@ -988,6 +998,7 @@ hs2_corrupt_state() {
     cleanup() {
       local -A commander
       local -n active
+      : "$commander"  # avoid 'variable appears unused' linter error
       eval "$(hs_read_persisted_state -S "$1")" || return $?
       printf "%s:%s" "${active[name]-}" "${active[hp]-}"
     }
@@ -1004,15 +1015,16 @@ hs2_corrupt_state() {
 @test "hs_persist_state rejects a nameref whose target is not being persisted" {
   # shellcheck disable=SC2329
   f() {
-    local target="value"
-    local -n ref=target
+    local str_target="value"
+    local -n ref=str_target
     local state=""
+    : "$str_target"  # avoids 'variable appears unused' linter error
     hs_persist_state -S state -- ref || return $?
   }
   run -"$HS_ERR_NAMEREF_TARGET_NOT_PERSISTED" --separate-stderr f
   [ -z "$output" ]
   [[ "$stderr" == *"ref"* ]]
-  [[ "$stderr" == *"target"* ]]
+  [[ "$stderr" == *"str_target"* ]]
 }
 
 # bats test_tags=hs_persist_state
@@ -1092,6 +1104,7 @@ hs2_corrupt_state() {
     my_func(){ echo "nope"; }
     local good_var="kept"
     local state_var=""
+    : "$good_var"
     hs_persist_state -S state_var -- good_var my_func || return $?
   }
   run -"$HS_ERR_UNKNOWN_VAR_NAME" --separate-stderr f
@@ -1169,10 +1182,10 @@ hs2_corrupt_state() {
     local reserved
     local state
     init() {
-      local __hsp_vars=bad
-      local __hsp_existing=bad
-      local __hsp_out_var=bad
-      local __hsp_remaining=bad
+      local -a __hsp_vars=(bad)
+      local -a __hsp_existing=(bad)
+      local -a __hsp_out_var=(bad)
+      local -a __hsp_remaining=(bad)
       hs_persist_state -S "$1" -- "$2" || return $?
     }
     for reserved in __hsp_vars __hsp_existing __hsp_out_var __hsp_remaining; do
@@ -1192,6 +1205,7 @@ hs2_corrupt_state() {
     local encoded=""
     init()    { local bar=two; hs_persist_state -S "$1" -- bar || return $?; }
     cleanup() { local bar; hs_read_persisted_state -S "$1" -- bar || return $?; printf "%s" "$bar"; }
+    : "$encoded"  # avoids 'variable appears unused linter error'
     init encoded || return $?
     cleanup encoded
   }
