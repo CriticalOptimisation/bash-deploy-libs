@@ -64,6 +64,10 @@ variables to the opaque state object named by ``-S``.
   variable list.
 - Unknown forwarded options before the effective separator are ignored by this
   helper so wrappers can pass ``"$@"`` directly.
+- ``--list-reserved``: prints one reserved internal variable name per line to
+  stdout and returns 0. Incompatible with all other options. Intended for
+  testing only. All three entry points produce identical output; this form is
+  the canonical one.
 
 Behavior:
 
@@ -81,8 +85,9 @@ Errors:
 - ``HS_ERR_STATE_VAR_UNINITIALIZED=7``: missing ``-S <statevar>``.
 - ``HS_ERR_INVALID_VAR_NAME=5``: invalid state variable name or invalid
   requested variable name.
-- ``HS_ERR_RESERVED_VAR_NAME=1``: requested name collides with an internal
-  helper variable name.
+- ``HS_ERR_RESERVED_VAR_NAME=1``: requested name starts with the reserved
+  prefix ``__hs_``. Run ``hs_persist_state --list-reserved`` for the current
+  list of prohibited names.
 - ``HS_ERR_VAR_NAME_COLLISION=2``: one or more requested names already exist in
   the prior state.
 - ``HS_ERR_CORRUPT_STATE=4``: the prior state is not a valid HS2 object.
@@ -102,6 +107,9 @@ state object and writes the rebuilt state back to the same named variable.
 - If ``--`` is present, its last occurrence starts the explicit destroy list.
 - Without ``--``, the trailing valid Bash identifiers are treated as the
   destroy list.
+- ``--list-reserved``: prints reserved internal variable names to stdout and
+  returns 0. Incompatible with all other options. Intended for testing only.
+  See ``hs_persist_state --list-reserved`` for the authoritative list.
 
 Behavior:
 
@@ -130,6 +138,9 @@ hs_read_persisted_state
 - Usage: ``hs_read_persisted_state [forwarded args] [-q] -S <statevar> [--] [var1 var2 ...]``
 - Convenience form: ``hs_read_persisted_state state_var ...`` is normalized to
   ``-S state_var ...``. Not recommended in library code; prefer explicit ``-S``.
+- ``--list-reserved``: prints reserved internal variable names to stdout and
+  returns 0. Incompatible with all other options. Intended for testing only.
+  See ``hs_persist_state --list-reserved`` for the authoritative list.
 
 Restore form selection
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -254,22 +265,26 @@ _hs_resolve_state_inputs
 ``_hs_resolve_state_inputs`` is the shared option parser used by the public
 entry points.
 
-- It fills an indexed array of unprocessed forwarded arguments.
-- It fills an associative array of processed values:
+The caller must declare the following variables before calling this helper:
 
-  - ``state``: validated state variable name from ``-S``
-  - ``quiet``: ``true`` or ``false``
-  - ``vars``: explicit variable-name list, serialized as a space-separated string
-  - ``separator``: present when an explicit ``--`` was seen
+.. code-block:: bash
+
+   local -a __hs_remaining=()
+   local -A __hs_processed=()
+
+The helper writes its output into those exact names through Bash dynamic
+scoping. On success, ``__hs_processed`` may contain:
+
+- ``state``: validated state variable name from ``-S``
+- ``quiet``: ``true`` or ``false``
+- ``vars``: explicit variable-name list, serialized as a space-separated string
+- ``separator``: present when an explicit ``--`` was seen
 
 Errors:
 
 - ``HS_ERR_MISSING_ARGUMENT=8``: required option parameter missing.
-- ``HS_ERR_INVALID_VAR_NAME=5``: invalid state variable name, invalid
-  explicit variable-name token, or ``$2`` is a name reserved by the helper's
-  own local variables.
-- ``HS_ERR_INVALID_ARGUMENT_TYPE=9``: output containers passed by name are not
-  an indexed array and an associative array respectively.
+- ``HS_ERR_INVALID_VAR_NAME=5``: invalid state variable name or invalid
+  explicit variable-name token.
 - ``HS_ERR_STATE_VAR_UNINITIALIZED=7``: missing ``-S <statevar>``.
 
 Error Codes

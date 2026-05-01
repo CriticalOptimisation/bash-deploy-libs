@@ -338,16 +338,16 @@ hs2_corrupt_state() {
   [[ "$stderr" == *"use -- before the variable names"* ]]
 }
 
-# bats test_tags=hs_resolve_state_inputs
-@test "_hs_resolve_state_inputs rejects a remaining_args name reserved by the helper" {
+# bats test_tags=hs_resolve_state_inputs,hs_persist_state
+@test "hs_persist_state rejects variable names starting with the __hs_ reserved prefix" {
   # shellcheck disable=SC2329
   f() {
-    local -a __trailing_vars=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper __trailing_vars qS: processed_args -S state alpha beta gamma
+    local __hs_remaining="some_value"
+    local state=""
+    hs_persist_state -S state -- __hs_remaining
   }
-  run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr f
-  [[ "$stderr" == *"'__trailing_vars' is a reserved internal name"* ]]
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"reserved"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -1176,25 +1176,17 @@ hs2_corrupt_state() {
 }
 
 # bats test_tags=hs_persist_state
-@test "hs_persist_state rejects all current explicit reserved persisted variable names" {
+@test "hs_persist_state --list-reserved names are all rejected as persisted variable names" {
   # shellcheck disable=SC2329
   f() {
-    local reserved
-    local state
-    init() {
-      local -a __hsp_vars=(bad)
-      local -a __hsp_existing=(bad)
-      local -a __hsp_out_var=(bad)
-      local -a __hsp_remaining=(bad)
-      hs_persist_state -S "$1" -- "$2" || return $?
-    }
-    for reserved in __hsp_vars __hsp_existing __hsp_out_var __hsp_remaining; do
+    local state name
+    while IFS= read -r name; do
       state=""
-      init state "$reserved" || return $?
-    done
+      hs_persist_state -S state -- "$name" || return $?
+    done < <(hs_persist_state --list-reserved)
   }
   run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
-  [[ "$stderr" == *"refusing to persist reserved variable name"* ]]
+  [[ "$stderr" == *"reserved"* ]]
   [ -z "$output" ]
 }
 
@@ -1338,4 +1330,43 @@ hs2_corrupt_state() {
   run -"$HS_ERR_CORRUPT_STATE" --separate-stderr f
   [[ "$stderr" == *"is not in HS2 format"* ]]
   [ -z "$output" ]
+}
+
+# ---------------------------------------------------------------------------
+# --list-reserved
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state --list-reserved returns 0 with non-empty output" {
+  run -0 hs_persist_state --list-reserved
+  [[ -n "$output" ]]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state --list-reserved output names all start with __hs_" {
+  local name
+  while IFS= read -r name; do
+    [[ "$name" == __hs_* ]] || { printf 'unexpected name: %s\n' "$name" >&2; return 1; }
+  done < <(hs_persist_state --list-reserved)
+}
+
+# bats test_tags=hs_persist_state,hs_read_persisted_state,hs_destroy_state
+@test "--list-reserved produces identical output from all three API entry points" {
+  local out_persist out_read out_destroy
+  out_persist=$(hs_persist_state --list-reserved)
+  out_read=$(hs_read_persisted_state --list-reserved)
+  out_destroy=$(hs_destroy_state --list-reserved)
+  [[ "$out_persist" == "$out_read" ]]
+  [[ "$out_persist" == "$out_destroy" ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state --list-reserved returns 0 with non-empty output" {
+  run -0 hs_read_persisted_state --list-reserved
+  [[ -n "$output" ]]
+}
+
+# bats test_tags=hs_destroy_state
+@test "hs_destroy_state --list-reserved returns 0 with non-empty output" {
+  run -0 hs_destroy_state --list-reserved
+  [[ -n "$output" ]]
 }

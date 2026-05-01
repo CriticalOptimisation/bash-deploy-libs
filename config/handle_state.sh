@@ -43,6 +43,10 @@ readonly HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12
 #   to directly process its caller's argument list, future-proofing it against
 #   new hs_persist_state options.
 #   -- - marks the end of options and the beginning of the list of variable names.
+#   --list-reserved - prints the reserved internal variable names to stdout, one
+#     per line, and returns 0. Incompatible with all other options. Intended for
+#     testing only. The reported names are also reported by hs_read_persisted_state
+#     and hs_destroy_state --list-reserved (identical output across all three).
 # Arguments:
 #   $@ - names of local variables to persist. Without `--`, the trailing
 #        arguments that are valid Bash identifiers are treated as the variable
@@ -55,8 +59,8 @@ readonly HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12
 #   - `HS_ERR_STATE_VAR_UNINITIALIZED` if `-S <statevar>` is missing.
 #   - `HS_ERR_CORRUPT_STATE` if the existing state is not in HS2 format or
 #     the rebuilt state cannot be verified.
-#   - `HS_ERR_RESERVED_VAR_NAME` if a requested name collides with an internal
-#     library variable.
+#   - `HS_ERR_RESERVED_VAR_NAME` if a requested name starts with `__hs_`,
+#     which is the reserved internal name prefix used by this library.
 #   - `HS_ERR_VAR_NAME_COLLISION` if a requested name is already present in
 #     the existing state object.
 #   - `HS_ERR_UNKNOWN_VAR_NAME` if a requested name is not declared in scope,
@@ -175,6 +179,9 @@ hs_persist_state() {
 #   to directly process its caller's argument list, future-proofing it against
 #   new hs_destroy_state options.
 #   -- - marks the end of options and the beginning of the list of variable names.
+#   --list-reserved - prints the reserved internal variable names to stdout, one
+#     per line, and returns 0. Incompatible with all other options. Intended for
+#     testing only. See hs_persist_state --list-reserved for the authoritative list.
 # Arguments:
 #   $@ - names of local variables to destroy. Without `--`, the trailing
 #        arguments that are valid Bash identifiers are treated as the variable list.
@@ -268,6 +275,9 @@ hs_destroy_state() {
 #   Other options are ignored up to the last --, so this function is usually able
 #   to directly process its caller's argument list, future-proofing it against
 #   new hs_read_persisted_state options.
+#   --list-reserved - prints the reserved internal variable names to stdout, one
+#     per line, and returns 0. Incompatible with all other options. Intended for
+#     testing only. See hs_persist_state --list-reserved for the authoritative list.
 #   -- - marks the end of options and the beginning of the list of variable names.
 # Arguments:
 #   $@ - names of variables to restore (explicit form). Without `--`, the
@@ -463,40 +473,39 @@ _hs_is_valid_variable_name() {
 #   _hs_resolve_state_inputs
 # Description:
 #   Parses helper options for state-oriented functions. Parsed results are
-#   returned to the caller through the array variables named in `$2` and `$4`.
-#   The helper recognizes `-S <statevar>` when requested by `$3`, optional
+#   written directly into the caller's `__hs_remaining` (indexed array) and
+#   `__hs_processed` (associative array) variables via Bash dynamic scoping.
+#   The helper recognizes `-S <statevar>` when requested by `$2`, optional
 #   helper flags such as `-q`, unknown forwarded options, and an optional
 #   final `--` separator before an explicit variable-name list.
+# Caller contract:
+#   The caller MUST declare the following variables before calling this helper:
+#     local -a __hs_remaining=()
+#     local -A __hs_processed=()
+#   The helper writes its output into those exact names through dynamic scoping.
+#   Passing any other names is a programming error.
 # Arguments:
 #   $1 - caller function name, used in error messages; must be a valid Bash name
-#   $2 - name of the indexed array variable that will receive forwarded,
-#        unprocessed arguments; must be a valid Bash name
-#   $3 - `getopts` format string of accepted helper options; e.g. `qS:`
-#   $4 - name of the associative array variable that will receive processed
-#        arguments; must be a valid Bash name
-#   $5... - forwarded arguments from the public helper caller; if `--` is
+#   $2 - `getopts` format string of accepted helper options; e.g. `qS:`
+#   $3... - forwarded arguments from the public helper caller; if `--` is
 #           present, its last occurrence marks the start of the explicit
 #           variable-name list
 # Returns:
 #   0 on success.
-#   On success, `$4` may contain:
+#   On success, `__hs_processed` may contain:
 #     - `state`: the validated state variable name from `-S`
 #     - `quiet`: `true` or `false`
 #     - `vars`: the validated explicit variable-name list as a space-separated string
 #     - `separator`: set when an explicit `--` was seen
 #   `HS_ERR_MISSING_ARGUMENT` if a required option parameter such as the value
 #   for `-S` is missing.
-#   `HS_ERR_INVALID_VAR_NAME` if `$2` or `$4` collides with a local variable
-#   name in this helper.
-#   `HS_ERR_INVALID_ARGUMENT_TYPE` if `$2` is not an indexed array variable or
-#   if `$4` is not an associative array variable.
 #   `HS_ERR_INVALID_VAR_NAME` if the state variable name or an explicit
 #   variable-name token is not a valid Bash identifier.
 #   `HS_ERR_STATE_VAR_UNINITIALIZED` if no `-S <statevar>` option is provided.
 # Usage:
-#   local -a remaining_args=()
-#   local -A processed_args=()
-#   _hs_resolve_state_inputs my_helper remaining_args qS: processed_args "$@" || return $?
+#   local -a __hs_remaining=()
+#   local -A __hs_processed=()
+#   _hs_resolve_state_inputs my_helper qS: "$@" || return $?
 _hs_resolve_state_inputs() {
     if [ $# -lt 4 ]; then
         echo "[ERROR] $1: missing required arguments; expected at least 4 parameters." >&2
