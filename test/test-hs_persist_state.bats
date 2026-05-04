@@ -23,125 +23,38 @@ hs2_corrupt_state() {
   printf 'NOTHS2:invalid'
 }
 
-# bats test_tags=hs_is_array
-@test "_hs_is_array matches indexed and associative array attributes" {
-  # shellcheck disable=SC2016
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs rejects caller that declared __hs_remaining as a non-array" {
   # shellcheck disable=SC2329
   f() {
-    local -a indexed=(one two)
-    local -A assoc=([key]=value)
-    _hs_is_array indexed &&
-    _hs_is_array -A assoc &&
-    ! _hs_is_array assoc &&
-    ! _hs_is_array -A indexed
+    local __hs_remaining=""
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: -S state foo
   }
-  run -0 --separate-stderr f
-  [ -z "$output" ]
-  [ -z "$stderr" ]
-}
-
-# bats test_tags=hs_is_array
-@test "_hs_is_array recognizes declared but uninitialized arrays" {
-  # shellcheck disable=SC2329
-  f() {
-    local -a indexed
-    local -A assoc
-    _hs_is_array indexed &&
-    _hs_is_array -A assoc &&
-    ! _hs_is_array -A indexed &&
-    ! _hs_is_array assoc
-  }
-  run -0 --separate-stderr f
-  [ -z "$output" ]
-  [ -z "$stderr" ]
-}
-
-# bats test_tags=hs_is_array
-@test "_hs_is_array rejects integers and strings" {
-  # shellcheck disable=SC2329
-  f() {
-    local -i number=42
-    local text="hello"
-    ! _hs_is_array number &&
-    ! _hs_is_array -A number &&
-    ! _hs_is_array text &&
-    ! _hs_is_array -A text
-  }
-  run -0 --separate-stderr f
-  [ -z "$output" ]
-  [ -z "$stderr" ]
-}
-
-# bats test_tags=hs_is_array
-@test "_hs_is_array works through namerefs for array targets" {
-  # shellcheck disable=SC2329
-  # shellcheck disable=SC2034
-  f() {
-    local -a indexed=(one two)
-    local -A assoc=([key]=value)
-    local -n indexed_ref=indexed
-    local -n assoc_ref=assoc
-    _hs_is_array indexed_ref &&
-    _hs_is_array -A assoc_ref &&
-    ! _hs_is_array assoc_ref &&
-    ! _hs_is_array -A indexed_ref
-  }
-  run -0 --separate-stderr f
-  [ -z "$output" ]
-  [ -z "$stderr" ]
-}
-
-# bats test_tags=hs_is_array
-@test "_hs_is_array rejects scalar namerefs" {
-  # shellcheck disable=SC2329
-  # shellcheck disable=SC2034
-  f() {
-    local text="hello"
-    local -i number=42
-    local -n text_ref=text
-    local -n number_ref=number
-    ! _hs_is_array text_ref &&
-    ! _hs_is_array -A text_ref &&
-    ! _hs_is_array number_ref &&
-    ! _hs_is_array -A number_ref
-  }
-  run -0 --separate-stderr f
-  [ -z "$output" ]
-  [ -z "$stderr" ]
+  run -"$HS_ERR_INVALID_ARGUMENT_TYPE" --separate-stderr f
+  [[ "$stderr" == *"__hs_remaining"* ]]
 }
 
 # bats test_tags=hs_resolve_state_inputs
-@test "_hs_resolve_state_inputs rejects a non-array remaining_args container" {
+@test "_hs_resolve_state_inputs rejects caller that declared __hs_processed as a non-associative array" {
   # shellcheck disable=SC2329
   f() {
-    local remaining_args=""
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state foo
+    local -a __hs_remaining=()
+    local -a __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: -S state foo
   }
   run -"$HS_ERR_INVALID_ARGUMENT_TYPE" --separate-stderr f
-  [[ "$stderr" == *"'remaining_args' must name an indexed array variable"* ]]
-}
-
-# bats test_tags=hs_resolve_state_inputs
-@test "_hs_resolve_state_inputs rejects a non-associative processed_args container" {
-  # shellcheck disable=SC2329
-  f() {
-    local -a remaining_args=()
-    local -a processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state foo
-  }
-  run -"$HS_ERR_INVALID_ARGUMENT_TYPE" --separate-stderr f
-  [[ "$stderr" == *"'processed_args' must name an associative array variable"* ]]
+  [[ "$stderr" == *"__hs_processed"* ]]
 }
 
 # bats test_tags=hs_resolve_state_inputs
 @test "_hs_resolve_state_inputs parses known options and preserves remaining arguments" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=([old]=x)
-    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args bad -q -S state -- foo bar
-    printf "%s|%s|%s" "${processed_args[state]}" "${processed_args[quiet]}" "${remaining_args[*]}"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: bad -q -S state -- foo bar
+    printf "%s|%s|%s" "${__hs_processed[state]}" "${__hs_processed[quiet]}" "${__hs_remaining[*]}"
   }
   run -0 --separate-stderr f
   [ "$output" = "state|true|bad" ]
@@ -152,10 +65,10 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs extracts trailing variable names into processed vars" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args bad -q -S state -- foo bar
-    printf "%s|%s|%s|%s" "${processed_args[state]}" "${processed_args[quiet]}" "${remaining_args[*]}" "${processed_args[vars]}"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: bad -q -S state -- foo bar
+    printf "%s|%s|%s|%s" "${__hs_processed[state]}" "${__hs_processed[quiet]}" "${__hs_remaining[*]}" "${__hs_processed[vars]}"
   }
   run -0 --separate-stderr f
   [ "$output" = "state|true|bad|foo bar " ]
@@ -166,10 +79,10 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs preserves explicit variable order in processed vars" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state -- alpha beta gamma
-    printf "%s" "${processed_args[vars]}"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: -S state -- alpha beta gamma
+    printf "%s" "${__hs_processed[vars]}"
   }
   run -0 --separate-stderr f
   [ "$output" = "alpha beta gamma " ]
@@ -180,10 +93,10 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs preserves trailing variable order without explicit separator" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -q -S state alpha beta gamma
-    printf "%s|%s|%s" "${processed_args[state]}" "${processed_args[quiet]}" "${processed_args[vars]}"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: -q -S state alpha beta gamma
+    printf "%s|%s|%s" "${__hs_processed[state]}" "${__hs_processed[quiet]}" "${__hs_processed[vars]}"
   }
   run -0 --separate-stderr f
   [ "$output" = "state|true|alpha beta gamma" ]
@@ -194,10 +107,10 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs treats only the last separator as explicit variable-list start" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state -- alpha -- beta
-    printf "%s|%s" "${remaining_args[*]}" "${processed_args[vars]}"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: -S state -- alpha -- beta
+    printf "%s|%s" "${__hs_remaining[*]}" "${__hs_processed[vars]}"
   }
   run -0 --separate-stderr f
   [ "$output" = "-- alpha|beta " ]
@@ -208,10 +121,10 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs extracts explicit vars after a trailing separator even with prior words" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state 1 -- alpha beta
-    printf "%s|%s" "${remaining_args[*]}" "${processed_args[vars]}"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: -S state 1 -- alpha beta
+    printf "%s|%s" "${__hs_remaining[*]}" "${__hs_processed[vars]}"
   }
   run -0 --separate-stderr f
   [ "$output" = "1|alpha beta " ]
@@ -222,10 +135,10 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs preserves trailing vars after unknown option and parameter" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state -b alpha beta
-    printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: -S state -b alpha beta
+    printf "%s|%s|%s" "${__hs_processed[state]}" "${__hs_remaining[*]}" "${__hs_processed[vars]}"
   }
   run -0 --separate-stderr f
   [ "$output" = "state|-b|alpha beta" ]
@@ -236,10 +149,10 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs allows forwarded unknown option parameters before trailing vars" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S state -c 1 -b beta gamma
-    printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: -S state -c 1 -b beta gamma
+    printf "%s|%s|%s" "${__hs_processed[state]}" "${__hs_remaining[*]}" "${__hs_processed[vars]}"
   }
   run -0 --separate-stderr f
   [ "$output" = "state|-c 1 -b|beta gamma" ]
@@ -250,9 +163,9 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs rejects a missing -S option" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -q foo
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: -q foo
   }
   run -"$HS_ERR_STATE_VAR_UNINITIALIZED" --separate-stderr f
   [[ "$stderr" == *"missing required -S <statevar> option"* ]]
@@ -262,9 +175,9 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs rejects an invalid -S variable name" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args -S 1invalid foo
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: -S 1invalid foo
   }
   run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr f
   [[ "$stderr" == *"invalid variable name '1invalid'"* ]]
@@ -274,9 +187,9 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs rejects -S without a parameter" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args qS: processed_args bad -S
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: bad -S
   }
   run -"$HS_ERR_MISSING_ARGUMENT" --separate-stderr f
   [[ "$stderr" == *"missing required parameter to option -S"* ]]
@@ -286,10 +199,10 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs preserves an unknown short option without parameter" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args S: processed_args -a -S state foo
-    printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper S: -a -S state foo
+    printf "%s|%s|%s" "${__hs_processed[state]}" "${__hs_remaining[*]}" "${__hs_processed[vars]}"
   }
   run -0 --separate-stderr f
   [ "$output" = "state|-a|foo" ]
@@ -300,10 +213,10 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs preserves an unknown short option and its parameter" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args S: processed_args -b toto -S state foo
-    printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper S: -b toto -S state foo
+    printf "%s|%s|%s" "${__hs_processed[state]}" "${__hs_remaining[*]}" "${__hs_processed[vars]}"
   }
   run -0 --separate-stderr f
   [ "$output" = "state|-b toto|foo" ]
@@ -314,10 +227,10 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs extracts vars after unknown forwarded options" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args S: processed_args -b toto -S state foo bar
-    printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper S: -b toto -S state foo bar
+    printf "%s|%s|%s" "${__hs_processed[state]}" "${__hs_remaining[*]}" "${__hs_processed[vars]}"
   }
   run -0 --separate-stderr f
   [ "$output" = "state|-b toto|foo bar" ]
@@ -328,26 +241,26 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs preserves forwarded bare words outside the vars list" {
   # shellcheck disable=SC2329
   f() {
-    local -a remaining_args=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper remaining_args S: processed_args -S state 1invalid foo
-    printf "%s|%s|%s" "${processed_args[state]}" "${remaining_args[*]}" "${processed_args[vars]}"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper S: -S state 1invalid foo
+    printf "%s|%s|%s" "${__hs_processed[state]}" "${__hs_remaining[*]}" "${__hs_processed[vars]}"
   }
   run -0 --separate-stderr f
   [ "$output" = "state|1invalid|foo" ]
   [[ "$stderr" == *"use -- before the variable names"* ]]
 }
 
-# bats test_tags=hs_resolve_state_inputs
-@test "_hs_resolve_state_inputs rejects a remaining_args name reserved by the helper" {
+# bats test_tags=hs_resolve_state_inputs,hs_persist_state
+@test "hs_persist_state rejects variable names starting with the __hs_ reserved prefix" {
   # shellcheck disable=SC2329
   f() {
-    local -a __trailing_vars=()
-    local -A processed_args=()
-    _hs_resolve_state_inputs my_helper __trailing_vars qS: processed_args -S state alpha beta gamma
+    local __hs_remaining="some_value"
+    local state=""
+    hs_persist_state -S state -- __hs_remaining
   }
-  run -"$HS_ERR_INVALID_VAR_NAME" --separate-stderr f
-  [[ "$stderr" == *"'__trailing_vars' is a reserved internal name"* ]]
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"reserved"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -488,6 +401,25 @@ hs2_corrupt_state() {
   }
   run -0 f
   [ "$output" = "secret:v2:new" ]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state explicit restore is not affected by ancestor locals with internal names" {
+  # Regression: if an ancestor frame declares a local named list_reserved,
+  # hs_read_persisted_state must not be fooled into skipping its normal
+  # processing path. The behaviour must be identical to the baseline above.
+  # shellcheck disable=SC2329
+  f() {
+    local list_reserved=1  # ancestor local with a value — must be invisible to the library
+    init()    { local foo=secret ebar=v2 baz=new; : "$ebar"; hs_persist_state -S "$1" -- foo ebar baz || return $?; }
+    cleanup() { local foo ebar baz; hs_read_persisted_state -S "$1" -- foo ebar baz || return $?; printf "%s:%s:%s" "$foo" "$ebar" "$baz"; }
+    local state=""
+    init state || return $?
+    cleanup state
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "secret:v2:new" ]
+  [ -z "$stderr" ]
 }
 
 # bats test_tags=hs_read_persisted_state
@@ -722,7 +654,7 @@ hs2_corrupt_state() {
   # shellcheck disable=SC2329
   f() { hs_read_persisted_state >/dev/null; }
   run -"$HS_ERR_MISSING_ARGUMENT" --separate-stderr f
-  [[ "$stderr" == *"missing required state variable name"* ]]
+  [[ "$stderr" == *"missing required parameter to option -S"* ]]
   [ -z "$output" ]
 }
 
@@ -823,6 +755,31 @@ hs2_corrupt_state() {
     local state=""
     init state || return $?
     middle state
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "Shepard:100" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state explicit form restores nameref and target in direct caller frame" {
+  # shellcheck disable=SC2329
+  init() {
+    local -A target=([hp]=100 [name]="Shepard")
+    local -n ref=target
+    hs_persist_state -S "$1" -- target ref || return $?
+  }
+  cleanup() {
+    local -A target
+    local -n ref
+    hs_read_persisted_state -S "$1" -- target ref || return $?
+    printf "%s:%s" "${ref[name]-}" "${ref[hp]-}"
+  }
+  # shellcheck disable=SC2329
+  f() {
+    local state=""
+    init state || return $?
+    cleanup state
   }
   run -0 --separate-stderr f
   [ "$output" = "Shepard:100" ]
@@ -932,6 +889,50 @@ hs2_corrupt_state() {
   run -0 --separate-stderr f
   [ "$output" = "NOT_RESTORED" ]
   [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state implicit form restores __hs_-prefixed locals not in --list-reserved" {
+  # The eval snippet must not silently skip __hs_* names. Filtering them out
+  # turns future API breaks (e.g. an expansion of the reserved list) into silent
+  # data loss. Any name hs_persist_state accepted must be implicitly restorable.
+  # Uses separate persist/restore scopes so that the local is genuinely unset
+  # when eval runs (avoiding the same-scope-local issue that is the root cause
+  # of the failure in "hs_persist_state accepts __hs_-prefixed names not in
+  # --list-reserved").
+  # shellcheck disable=SC2329
+  f() {
+    persist()  { local __hs_custom_lib_var="hello"; hs_persist_state -S "$1" -- __hs_custom_lib_var || return $?; }
+    restore()  { local __hs_custom_lib_var; eval "$(hs_read_persisted_state -S "$1")" || return $?; printf '%s' "$__hs_custom_lib_var"; }
+    local state=""
+    persist state || return $?
+    restore state
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "hello" ]
+  [ -z "$stderr" ]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state implicit form fails when caller has a reserved name declared local" {
+  # The implicit snippet must not silently skip a reserved name found in the
+  # caller's local frame. Silent skip masks a programming error and could cause
+  # data loss if the reserved list expands in a future API version.
+  # shellcheck disable=SC2329
+  f() {
+    init()    { local token="abc"; hs_persist_state -S "$1" -- token || return $?; }
+    cleanup() {
+      local __hs_remaining
+      local token
+      eval "$(hs_read_persisted_state -S "$1")" || return $?
+      printf '%s' "$token"
+    }
+    local state=""
+    init state || return $?
+    cleanup state
+  }
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"reserved"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -1176,26 +1177,35 @@ hs2_corrupt_state() {
 }
 
 # bats test_tags=hs_persist_state
-@test "hs_persist_state rejects all current explicit reserved persisted variable names" {
+@test "hs_persist_state --list-reserved names are all rejected as persisted variable names" {
   # shellcheck disable=SC2329
   f() {
-    local reserved
-    local state
-    init() {
-      local -a __hsp_vars=(bad)
-      local -a __hsp_existing=(bad)
-      local -a __hsp_out_var=(bad)
-      local -a __hsp_remaining=(bad)
-      hs_persist_state -S "$1" -- "$2" || return $?
-    }
-    for reserved in __hsp_vars __hsp_existing __hsp_out_var __hsp_remaining; do
+    local state name
+    while IFS= read -r name; do
       state=""
-      init state "$reserved" || return $?
-    done
+      hs_persist_state -S state -- "$name" || return $?
+    done < <(hs_persist_state --list-reserved)
   }
   run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
-  [[ "$stderr" == *"refusing to persist reserved variable name"* ]]
+  [[ "$stderr" == *"reserved"* ]]
   [ -z "$output" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state accepts __hs_-prefixed names not in --list-reserved" {
+  # The reserved check must only reject names that are actually in the
+  # collision section (__hs_remaining, __hs_processed), not every __hs_* name.
+  # shellcheck disable=SC2329
+  f() {
+    init()    { local __hs_custom_lib_var="hello"; hs_persist_state -S "$1" -- __hs_custom_lib_var || return $?; }
+    cleanup() { local __hs_custom_lib_var; hs_read_persisted_state -S "$1" -- __hs_custom_lib_var || return $?; printf '%s' "$__hs_custom_lib_var"; }
+    local state=""
+    init state || return $?
+    cleanup state
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "hello" ]
+  [ -z "$stderr" ]
 }
 
 # bats test_tags=hs_persist_state
@@ -1211,6 +1221,55 @@ hs2_corrupt_state() {
   }
   run -0 f
   [ "$output" = "two" ]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state rejects every reserved name as the -S state variable" {
+  # Each name in --list-reserved is also a local in the entry-point frame.
+  # Passing it as -S would shadow the caller's variable so the updated state
+  # would be discarded silently. _hs_resolve_state_inputs must reject every
+  # reserved name with HS_ERR_RESERVED_VAR_NAME, not just the first one.
+  # shellcheck disable=SC2329
+  f() {
+    local foo=one name rc
+    while IFS= read -r name; do
+      hs_persist_state -S "$name" -- foo; rc=$?
+      [[ $rc -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || return "$rc"
+    done < <(hs_persist_state --list-reserved)
+    return "$HS_ERR_RESERVED_VAR_NAME"
+  }
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"reserved"* ]]
+}
+
+# bats test_tags=hs_destroy_state
+@test "hs_destroy_state rejects every reserved name as the -S state variable" {
+  # shellcheck disable=SC2329
+  f() {
+    local name rc
+    while IFS= read -r name; do
+      hs_destroy_state -S "$name" -- foo; rc=$?
+      [[ $rc -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || return "$rc"
+    done < <(hs_destroy_state --list-reserved)
+    return "$HS_ERR_RESERVED_VAR_NAME"
+  }
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"reserved"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state rejects every reserved name as the -S state variable" {
+  # shellcheck disable=SC2329
+  f() {
+    local name rc
+    while IFS= read -r name; do
+      hs_read_persisted_state -S "$name" -- foo; rc=$?
+      [[ $rc -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || return "$rc"
+    done < <(hs_read_persisted_state --list-reserved)
+    return "$HS_ERR_RESERVED_VAR_NAME"
+  }
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"reserved"* ]]
 }
 
 # bats test_tags=hs_persist_state
@@ -1338,4 +1397,73 @@ hs2_corrupt_state() {
   run -"$HS_ERR_CORRUPT_STATE" --separate-stderr f
   [[ "$stderr" == *"is not in HS2 format"* ]]
   [ -z "$output" ]
+}
+
+# bats test_tags=hs_destroy_state
+@test "hs_destroy_state rejects a state variable named with a reserved identifier" {
+  # __hs_processed is declared local -A in hs_destroy_state's entry-point frame.
+  # When the caller passes -S __hs_processed, that local shadows the caller's
+  # variable: reads see an empty value instead of the HS2 string, and any write
+  # is discarded into the local array instead of the caller's variable.
+  # The library must detect this early and return HS_ERR_RESERVED_VAR_NAME
+  # rather than the confusing HS_ERR_CORRUPT_STATE currently produced.
+  # shellcheck disable=SC2329
+  f() {
+    local temp=""
+    init() { local foo=one bar=two; hs_persist_state -S "$1" -- foo bar || return $?; }
+    init temp || return $?
+    local __hs_processed="$temp"
+    hs_destroy_state -S __hs_processed -- foo
+  }
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"reserved"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# --list-reserved
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state --list-reserved returns 0 with non-empty output" {
+  run -0 hs_persist_state --list-reserved
+  [[ -n "$output" ]]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state --list-reserved output names all start with __hs_" {
+  local name
+  while IFS= read -r name; do
+    [[ "$name" == __hs_* ]] || { printf 'unexpected name: %s\n' "$name" >&2; return 1; }
+  done < <(hs_persist_state --list-reserved)
+}
+
+# bats test_tags=hs_persist_state,hs_read_persisted_state,hs_destroy_state
+@test "--list-reserved produces identical output from all three API entry points" {
+  local out_persist out_read out_destroy
+  out_persist=$(hs_persist_state --list-reserved)
+  out_read=$(hs_read_persisted_state --list-reserved)
+  out_destroy=$(hs_destroy_state --list-reserved)
+  [[ "$out_persist" == "$out_read" ]]
+  [[ "$out_persist" == "$out_destroy" ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state --list-reserved returns 0 with non-empty output" {
+  run -0 hs_read_persisted_state --list-reserved
+  [[ -n "$output" ]]
+}
+
+# bats test_tags=hs_destroy_state
+@test "hs_destroy_state --list-reserved returns 0 with non-empty output" {
+  run -0 hs_destroy_state --list-reserved
+  [[ -n "$output" ]]
+}
+
+# bats test_tags=hs_persist_state,hs_read_persisted_state,hs_destroy_state
+@test "--list-reserved collision-surface size is within the expected threshold" {
+  local name count=0
+  while IFS= read -r name; do
+    (( ++count ))
+  done < <(hs_persist_state --list-reserved)
+  [[ "$count" -ge 1 ]]  # guards against vacuous pass when --list-reserved is broken
+  [[ "$count" -le 2 ]]  # regression guard: target is exactly 2 (__hs_remaining, __hs_processed)
 }

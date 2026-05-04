@@ -43,6 +43,10 @@ readonly HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12
 #   to directly process its caller's argument list, future-proofing it against
 #   new hs_persist_state options.
 #   -- - marks the end of options and the beginning of the list of variable names.
+#   --list-reserved - prints the reserved internal variable names to stdout, one
+#     per line, and returns 0. Incompatible with all other options. Intended for
+#     testing only. The reported names are also reported by hs_read_persisted_state
+#     and hs_destroy_state --list-reserved (identical output across all three).
 # Arguments:
 #   $@ - names of local variables to persist. Without `--`, the trailing
 #        arguments that are valid Bash identifiers are treated as the variable
@@ -55,8 +59,8 @@ readonly HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12
 #   - `HS_ERR_STATE_VAR_UNINITIALIZED` if `-S <statevar>` is missing.
 #   - `HS_ERR_CORRUPT_STATE` if the existing state is not in HS2 format or
 #     the rebuilt state cannot be verified.
-#   - `HS_ERR_RESERVED_VAR_NAME` if a requested name collides with an internal
-#     library variable.
+#   - `HS_ERR_RESERVED_VAR_NAME` if a requested name starts with `__hs_`,
+#     which is the reserved internal name prefix used by this library.
 #   - `HS_ERR_VAR_NAME_COLLISION` if a requested name is already present in
 #     the existing state object.
 #   - `HS_ERR_UNKNOWN_VAR_NAME` if a requested name is not declared in scope,
@@ -73,93 +77,112 @@ readonly HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12
 #       hs_persist_state -S "$1" -- items || return $?
 #   }
 hs_persist_state() {
-    local -a __hsp_remaining=()
-    local -A __hsp_processed=()
-    _hs_resolve_state_inputs hs_persist_state __hsp_remaining S: __hsp_processed "$@" || return $?
-    local __hsp_out_var="${__hsp_processed[state]}"
-    local __hsp_existing="${!__hsp_out_var-}"
-    local -a __hsp_vars=()
-    read -r -a __hsp_vars <<< "${__hsp_processed[vars]-}"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    if [[ "${1-}" == "--list-reserved" ]]; then
+        local list_reserved=1
+        shift
+        if [ $# -gt 0 ]; then
+            echo "[ERROR] hs_persist_state: --list-reserved takes no other arguments." >&2
+            return "$HS_ERR_INVALID_ARGUMENT_TYPE"
+        fi
+    else
+        _hs_resolve_state_inputs hs_persist_state S: "$@" || return $?
+        # $() absorbs the helper's exit status; embedding "return N" in the output
+        # lets the surrounding eval propagate the failure to the caller.
+        eval "$(_hs_ps_body "${__hs_processed[state]}" "${__hs_processed[vars]-}" \
+            || printf 'return %d' "$?")" || return $?
+    fi
+    # List reserved
+    if _hs_local_exists "$(local -p)" list_reserved; then
+        # Snapshot taken after all processing locals are declared. local -p runs
+        # in a subshell before the assignment completes, so lp_snapshot itself
+        # is absent from the output. Splitting declare+assign would cause
+        # lp_snapshot to appear in its own snapshot; the combined form is
+        # intentional here.
+        # shellcheck disable=SC2155
+        local lp_snapshot="$(local -p)"
+        _hs_print_reserved_names "$lp_snapshot" list_reserved
+    fi
+}
+
+# _hs_ps_body <out_var> <vars_str>
+# Contains the validation and build logic for hs_persist_state. Runs in its
+# own frame so its locals do not appear in the entry point's collision section.
+_hs_ps_body() {
+    local existing="${!1-}"
+    local out_var="$1"
+    local -a vars=()
+    read -r -a vars <<< "${2-}"
 
     # Parse existing state (must be empty or HS2).
-    local __hsp_existing_payload=""
-    local -a __hsp_existing_recs=()
-    local -A __hsp_existing_names=()
-    if [[ -n "$__hsp_existing" ]]; then
-        if [[ "$__hsp_existing" != HS2:* ]]; then
+    local existing_payload=""
+    local -a existing_recs=()
+    local -A existing_names=()
+    if [[ -n "$existing" ]]; then
+        if [[ "$existing" != HS2:* ]]; then
             echo "[ERROR] hs_persist_state: existing state is not in HS2 format." >&2
             return "$HS_ERR_CORRUPT_STATE"
         fi
-        _hs_hs2_parse hs_persist_state "$__hsp_existing" __hsp_existing_recs || return $?
-        local __hsp_tmp="${__hsp_existing#HS2:}"
-        __hsp_existing_payload="${__hsp_tmp#*:}"
-        local __hsp_er
-        for __hsp_er in "${__hsp_existing_recs[@]}"; do
-            __hsp_existing_names["$(_hs_hs2_record_name "$__hsp_er")"]=1
+        _hs_hs2_parse hs_persist_state "$existing" existing_recs || return $?
+        existing_payload="${existing#HS2:}"
+        existing_payload="${existing_payload#*:}"
+        local existing_rec
+        for existing_rec in "${existing_recs[@]}"; do
+            existing_names["$(_hs_hs2_record_name "$existing_rec")"]=1
         done
     fi
 
-    # Reserved names that must not be persisted.
-    local -A __hsp_reserved=(
-        [__hsp_remaining]=1 [__hsp_processed]=1 [__hsp_out_var]=1
-        [__hsp_existing]=1 [__hsp_vars]=1 [__hsp_existing_payload]=1
-        [__hsp_existing_recs]=1 [__hsp_existing_names]=1 [__hsp_reserved]=1
-        [__hsp_non_namerefs]=1 [__hsp_namerefs]=1 [__hsp_this_call]=1
-        [__hsp_var]=1 [__hsp_decl]=1 [__hsp_flags]=1 [__hsp_target]=1
-        [__hsp_er]=1 [__hsp_tmp]=1
-    )
-
     # Phase 1: validate all names; separate non-namerefs from namerefs.
-    local -a __hsp_non_namerefs=()
-    local -a __hsp_namerefs=()
-    local -A __hsp_this_call=()   # name -> "nameref" or "1"
-    local __hsp_var __hsp_decl __hsp_flags
-    for __hsp_var in "${__hsp_vars[@]}"; do
-        if [[ -n "${__hsp_reserved[$__hsp_var]-}" ]]; then
-            echo "[ERROR] hs_persist_state: refusing to persist reserved variable name '$__hsp_var'." >&2
-            return "$HS_ERR_RESERVED_VAR_NAME"
-        fi
-        if [[ -n "${__hsp_existing_names[$__hsp_var]-}" ]]; then
-            echo "[ERROR] hs_persist_state: variable '$__hsp_var' already exists in the state." >&2
+    local -a non_namerefs=()
+    local -a namerefs=()
+    local -A this_call=()
+    local var decl flags
+    for var in "${vars[@]}"; do
+        if [[ -n "${existing_names[$var]-}" ]]; then
+            echo "[ERROR] hs_persist_state: variable '$var' already exists in the state." >&2
             return "$HS_ERR_VAR_NAME_COLLISION"
         fi
-        if ! __hsp_decl=$(declare -p "$__hsp_var" 2>/dev/null); then
-            if declare -f "$__hsp_var" >/dev/null 2>&1; then
-                echo "[ERROR] hs_persist_state: '$__hsp_var' is a function, not a variable." >&2
+        if ! decl=$(declare -p "$var" 2>/dev/null); then
+            if declare -f "$var" >/dev/null 2>&1; then
+                echo "[ERROR] hs_persist_state: '$var' is a function, not a variable." >&2
             else
-                echo "[ERROR] hs_persist_state: '$__hsp_var' is not declared in scope." >&2
+                echo "[ERROR] hs_persist_state: '$var' is not declared in scope." >&2
             fi
             return "$HS_ERR_UNKNOWN_VAR_NAME"
         fi
-        __hsp_flags="${__hsp_decl#declare }"
-        __hsp_flags="${__hsp_flags%% *}"
-        if [[ "$__hsp_flags" == *n* ]]; then
-            __hsp_this_call["$__hsp_var"]=nameref
+        flags="${decl#declare }"
+        flags="${flags%% *}"
+        if [[ "$flags" == *n* ]]; then
+            this_call["$var"]=nameref
         else
-            __hsp_non_namerefs+=("$(_hs_strip_export "$__hsp_decl")")
-            __hsp_this_call["$__hsp_var"]=1
+            non_namerefs+=("$(_hs_strip_export "$decl")")
+            this_call["$var"]=1
         fi
     done
 
     # Phase 2: validate nameref targets and build nameref records (after targets).
-    local __hsp_target
-    for __hsp_var in "${__hsp_vars[@]}"; do
-        [[ "${__hsp_this_call[$__hsp_var]-}" == nameref ]] || continue
-        __hsp_decl=$(declare -p "$__hsp_var" 2>/dev/null)
-        # Extract target: declare -n name="target" → value part between quotes.
-        __hsp_target="${__hsp_decl#*\"}"
-        __hsp_target="${__hsp_target%\"}"
-        if [[ -z "${__hsp_existing_names[$__hsp_target]-}" && \
-              -z "${__hsp_this_call[$__hsp_target]-}" ]]; then
-            echo "[ERROR] hs_persist_state: nameref '$__hsp_var' target '$__hsp_target' is not being persisted." >&2
+    local target
+    for var in "${vars[@]}"; do
+        [[ "${this_call[$var]-}" == nameref ]] || continue
+        decl=$(declare -p "$var" 2>/dev/null)
+        target="${decl#*\"}"
+        target="${target%\"}"
+        if [[ -z "${existing_names[$target]-}" && \
+              -z "${this_call[$target]-}" ]]; then
+            echo "[ERROR] hs_persist_state: nameref '$var' target '$target' is not being persisted." >&2
             return "$HS_ERR_NAMEREF_TARGET_NOT_PERSISTED"
         fi
-        __hsp_namerefs+=("$(_hs_strip_export "$__hsp_decl")")
+        namerefs+=("$(_hs_strip_export "$decl")")
     done
 
     # Build HS2 state: existing payload + non-nameref records + nameref records.
-    _hs_hs2_build "$__hsp_out_var" "$__hsp_existing_payload" \
-        "${__hsp_non_namerefs[@]}" "${__hsp_namerefs[@]}"
+    # Print the assignment statement; the entry point evals it so no helper
+    # ever writes directly into a caller's variable.
+    local new_state
+    new_state=$(_hs_hs2_build "$existing_payload" \
+        "${non_namerefs[@]}" "${namerefs[@]}") || return $?
+    printf '%s=%s\n' "$out_var" "$(printf '%q' "$new_state")"
 }
 
 # --- hs_destroy_state ---------------------------------------------------------------
@@ -175,6 +198,9 @@ hs_persist_state() {
 #   to directly process its caller's argument list, future-proofing it against
 #   new hs_destroy_state options.
 #   -- - marks the end of options and the beginning of the list of variable names.
+#   --list-reserved - prints the reserved internal variable names to stdout, one
+#     per line, and returns 0. Incompatible with all other options. Intended for
+#     testing only. See hs_persist_state --list-reserved for the authoritative list.
 # Arguments:
 #   $@ - names of local variables to destroy. Without `--`, the trailing
 #        arguments that are valid Bash identifiers are treated as the variable list.
@@ -193,57 +219,84 @@ hs_persist_state() {
 #       hs_destroy_state "$@" -- mylib_statevar1 mylib_statevar2
 #   }
 hs_destroy_state() {
-    local -a __remaining_args=()
-    local -A __processed_args=()
-    _hs_resolve_state_inputs hs_destroy_state __remaining_args S: __processed_args "$@" || return $?
-    local __output_state_var="${__processed_args[state]}"
-    local __existing_state="${!__output_state_var-}"
-    local -a __destroy_var_args=()
-    read -r -a __destroy_var_args <<< "${__processed_args[vars]-}"
-    local __var_name
-
-    if [[ "$__existing_state" == HS2:* ]]; then
-        # Phase 1: parse existing state into an array of records and build a
-        # name-keyed presence map for O(1) membership checks.
-        local -a __hsd2_recs=()
-        _hs_hs2_parse hs_destroy_state "$__existing_state" __hsd2_recs || return $?
-        local -A __hsd2_present=()
-        local __hsd2_rec
-        for __hsd2_rec in "${__hsd2_recs[@]}"; do
-            __hsd2_present["$(_hs_hs2_record_name "$__hsd2_rec")"]=1
-        done
-
-        # Phase 2: validate — every requested name must exist in the state.
-        for __var_name in "${__destroy_var_args[@]}"; do
-            if [[ -z "${__hsd2_present[$__var_name]-}" ]]; then
-                echo "[ERROR] hs_destroy_state: variable '$__var_name' is not defined in the state." >&2
-                return "$HS_ERR_VAR_NAME_NOT_IN_STATE"
-            fi
-        done
-
-        # Phase 3: collect survivors — records not named in the destroy list.
-        local -A __hsd2_destroy_set=()
-        for __var_name in "${__destroy_var_args[@]}"; do
-            __hsd2_destroy_set["$__var_name"]=1
-        done
-        local -a __hsd2_survivors=()
-        for __hsd2_rec in "${__hsd2_recs[@]}"; do
-            local __hsd2_rname
-            __hsd2_rname=$(_hs_hs2_record_name "$__hsd2_rec")
-            [[ -z "${__hsd2_destroy_set[$__hsd2_rname]-}" ]] && __hsd2_survivors+=("$__hsd2_rec")
-        done
-
-        # Phase 4: write back — rebuild HS2 state from survivors, or clear if empty.
-        if (( ${#__hsd2_survivors[@]} > 0 )); then
-            _hs_hs2_build "$__output_state_var" "" "${__hsd2_survivors[@]}"
-        else
-            printf -v "$__output_state_var" '%s' ""
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    if [[ "${1-}" == "--list-reserved" ]]; then
+        local list_reserved=1
+        shift
+        if [ $# -gt 0 ]; then
+            echo "[ERROR] hs_destroy_state: --list-reserved takes no other arguments." >&2
+            return "$HS_ERR_INVALID_ARGUMENT_TYPE"
         fi
-        return 0
+    else
+        _hs_resolve_state_inputs hs_destroy_state S: "$@" || return $?
+        # $() absorbs the helper's exit status; embedding "return N" in the output
+        # lets the surrounding eval propagate the failure to the caller.
+        eval "$(_hs_ds_body "${__hs_processed[state]}" "${__hs_processed[vars]-}" \
+            || printf 'return %d' "$?")" || return $?
+    fi
+    if _hs_local_exists "$(local -p)" list_reserved; then
+        # Snapshot taken after all processing locals are declared. local -p runs
+        # in a subshell before the assignment completes, so lp_snapshot itself
+        # is absent from the output. Splitting declare+assign would cause
+        # lp_snapshot to appear in its own snapshot; the combined form is
+        # intentional here.
+        # shellcheck disable=SC2155
+        local lp_snapshot="$(local -p)"
+        _hs_print_reserved_names "$lp_snapshot" list_reserved
+    fi
+}
+
+# _hs_ds_body <out_var> <vars_str>
+# Contains the validation and rebuild logic for hs_destroy_state. Runs in its
+# own frame so its locals do not appear in the entry point's collision section.
+_hs_ds_body() {
+    local out_var="$1"
+    local -a vars=()
+    read -r -a vars <<< "${2-}"
+    local existing="${!out_var-}"
+
+    if [[ "$existing" != HS2:* ]]; then
+        echo "[ERROR] hs_destroy_state: state is not in HS2 format." >&2
+        return "$HS_ERR_CORRUPT_STATE"
     fi
 
-    echo "[ERROR] hs_destroy_state: state is not in HS2 format." >&2
-    return "$HS_ERR_CORRUPT_STATE"
+    local -a recs=()
+    _hs_hs2_parse hs_destroy_state "$existing" recs || return $?
+    local -A present=()
+    local rec
+    for rec in "${recs[@]}"; do
+        present["$(_hs_hs2_record_name "$rec")"]=1
+    done
+
+    local var
+    for var in "${vars[@]}"; do
+        if [[ -z "${present[$var]-}" ]]; then
+            echo "[ERROR] hs_destroy_state: variable '$var' is not defined in the state." >&2
+            return "$HS_ERR_VAR_NAME_NOT_IN_STATE"
+        fi
+    done
+
+    local -A destroy_set=()
+    for var in "${vars[@]}"; do
+        destroy_set["$var"]=1
+    done
+    local -a survivors=()
+    local record_name
+    for rec in "${recs[@]}"; do
+        record_name=$(_hs_hs2_record_name "$rec")
+        [[ -z "${destroy_set[$record_name]-}" ]] && survivors+=("$rec")
+    done
+
+    # Print the assignment statement; the entry point evals it so no helper
+    # ever writes directly into a caller's variable.
+    local new_state
+    if (( ${#survivors[@]} > 0 )); then
+        new_state=$(_hs_hs2_build "" "${survivors[@]}") || return $?
+        printf '%s=%s\n' "$out_var" "$(printf '%q' "$new_state")"
+    else
+        printf '%s=\n' "$out_var"
+    fi
 }
 # --- hs_read_persisted_state --------------------------------------------------------
 # Function:
@@ -268,6 +321,9 @@ hs_destroy_state() {
 #   Other options are ignored up to the last --, so this function is usually able
 #   to directly process its caller's argument list, future-proofing it against
 #   new hs_read_persisted_state options.
+#   --list-reserved - prints the reserved internal variable names to stdout, one
+#     per line, and returns 0. Incompatible with all other options. Intended for
+#     testing only. See hs_persist_state --list-reserved for the authoritative list.
 #   -- - marks the end of options and the beginning of the list of variable names.
 # Arguments:
 #   $@ - names of variables to restore (explicit form). Without `--`, the
@@ -305,144 +361,156 @@ hs_destroy_state() {
 #       printf 'Cleaned up resource: %s\n' "$resource_id"
 #   }
 hs_read_persisted_state() {
-    # Step 1: normalize the convenience form `hs_read_persisted_state state`
-    # into the regular `-S state` form, then delegate all option parsing to
-    # _hs_resolve_state_inputs.
-    if [ $# -eq 0 ]; then
-        echo "[ERROR] hs_read_persisted_state: missing required state variable name." >&2
-        return "$HS_ERR_MISSING_ARGUMENT"
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    if [[ "${1-}" == "--list-reserved" ]]; then
+        local list_reserved=1
+        shift
+        if [ $# -gt 0 ]; then
+            echo "[ERROR] hs_read_persisted_state: --list-reserved takes no other arguments." >&2
+            return "$HS_ERR_INVALID_ARGUMENT_TYPE"
+        fi
+    else
+        if [[ "${1-}" != -* ]]; then
+            set -- -S "$@"
+        fi
+        _hs_resolve_state_inputs hs_read_persisted_state qS: "$@" || return $?
+        if [[ -n "${__hs_processed[vars]-}" ]]; then
+            # $() absorbs the helper's exit status; embedding "return N" in the
+            # output lets the surrounding eval propagate the failure to the caller.
+            eval "$(_hs_rr_explicit_stmts "${__hs_processed[state]}" \
+                "${__hs_processed[quiet]}" "${__hs_processed[vars]}" \
+                || printf 'return %d' "$?")" || return $?
+            return 0
+        fi
+        [[ -n "${__hs_processed[separator]-}" ]] && return 0
+        _hs_rr_implicit_snippet "${__hs_processed[state]}" || return $?
     fi
-
-    if [[ "${1-}" != -* ]]; then
-        set -- -S "$@"
+    if _hs_local_exists "$(local -p)" list_reserved; then
+        # Snapshot taken after all processing locals are declared. local -p runs
+        # in a subshell before the assignment completes, so lp_snapshot itself
+        # is absent from the output. Splitting declare+assign would cause
+        # lp_snapshot to appear in its own snapshot; the combined form is
+        # intentional here.
+        # shellcheck disable=SC2155
+        local lp_snapshot="$(local -p)"
+        _hs_print_reserved_names "$lp_snapshot" list_reserved
     fi
-    # Step 2: resolve the named state variable and capture its current payload.
-    # The helper validates names, enforces the presence of -S, and returns:
-    #   - __output_state_var: the caller-visible variable name holding that state
-    #   - __processed_args[quiet]: whether -q was provided
-    #   - __processed_args[vars]: the validated requested-variable list
-    local -a __remaining_args=()
-    local -A __processed_args=()
-    _hs_resolve_state_inputs hs_read_persisted_state __remaining_args qS: __processed_args "$@" || return $?
-    local __quiet="${__processed_args[quiet]}"
-    local __output_state_var="${__processed_args[state]}"
-    local __existing_state="${!__output_state_var-}"
-    local __has_separator="${__processed_args[separator]-}"
-    local -a __requested_var_args=()
-    read -r -a __requested_var_args <<< "${__processed_args[vars]-}"
+}
 
-    if [ -z "$__existing_state" ]; then
-        echo "[ERROR] hs_read_persisted_state: state variable '$__output_state_var' is not set or is empty." >&2
+# _hs_rr_explicit_stmts <state_var> <quiet> <vars_str>
+# Validates all requested variables (declared and unset in dynamic scope), then
+# prints one assignment statement per variable to stdout. The caller evals the
+# output in the entry point's frame so assignments traverse dynamic scope and
+# none of this helper's locals are in the collision section.
+_hs_rr_explicit_stmts() {
+    local existing="${!1-}"
+    local state_var="$1"
+    local quiet="$2"
+    local -a requested=()
+    read -r -a requested <<< "${3-}"
+ 
+    if [ -z "$existing" ]; then
+        echo "[ERROR] hs_read_persisted_state: state variable '$state_var' is not set or is empty." >&2
         return "$HS_ERR_STATE_VAR_UNINITIALIZED"
     fi
+    if [[ "$existing" != HS2:* ]]; then
+        echo "[ERROR] hs_read_persisted_state: state is not in HS2 format." >&2
+        return "$HS_ERR_CORRUPT_STATE"
+    fi
 
-    # Step 3: explicit restore — variable names listed after --.
-    # Traverses the full dynamic scope so it can target locals in any calling
-    # frame, declared globals, and namerefs. Assigning to an unset nameref via
-    # dynamic scope sets its target, so namerefs are restored the same as scalars.
-    if [ ${#__requested_var_args[@]} -gt 0 ]; then
-        if [[ "$__existing_state" != HS2:* ]]; then
-            echo "[ERROR] hs_read_persisted_state: state is not in HS2 format." >&2
-            return "$HS_ERR_CORRUPT_STATE"
+    local -a recs=()
+    _hs_hs2_parse hs_read_persisted_state "$existing" recs || return $?
+    local -A record_map=()
+    local rec
+    for rec in "${recs[@]}"; do
+        record_map["$(_hs_hs2_record_name "$rec")"]="$rec"
+    done
+
+    # Phase 1: all-or-nothing guard check.
+    local var caller_decl
+    for var in "${requested[@]}"; do
+        [[ -z "${record_map[$var]+x}" ]] && continue
+        if ! caller_decl=$(declare -p "$var" 2>/dev/null); then
+            echo "[ERROR] hs_read_persisted_state: '$var' is not declared in scope." >&2
+            return "$HS_ERR_UNKNOWN_VAR_NAME"
         fi
-        local -a __hsrr_recs=()
-        _hs_hs2_parse hs_read_persisted_state "$__existing_state" __hsrr_recs || return $?
-        local -A __hsrr_map=()
-        local __hsrr_r
-        for __hsrr_r in "${__hsrr_recs[@]}"; do
-            __hsrr_map["$(_hs_hs2_record_name "$__hsrr_r")"]="$__hsrr_r"
-        done
-        # Phase 1: validate all guard conditions before restoring anything (all-or-nothing).
-        local __requested_var __hsrr_caller_decl
-        for __requested_var in "${__requested_var_args[@]}"; do
-            [[ -z "${__hsrr_map[$__requested_var]+x}" ]] && continue
-            if ! __hsrr_caller_decl=$(declare -p "$__requested_var" 2>/dev/null); then
-                echo "[ERROR] hs_read_persisted_state: '$__requested_var' is not declared in scope." >&2
-                return "$HS_ERR_UNKNOWN_VAR_NAME"
-            fi
-            if [[ "$__hsrr_caller_decl" == *=* ]]; then
-                echo "[ERROR] hs_read_persisted_state: '$__requested_var' is already set; refusing to overwrite." >&2
-                return "$HS_ERR_VAR_ALREADY_SET"
-            fi
-        done
-        # Phase 2: restore — only reached when all guards passed.
-        local __hsrr_rec __hsrr_valpart
-        for __requested_var in "${__requested_var_args[@]}"; do
-            if [[ -z "${__hsrr_map[$__requested_var]+x}" ]]; then
-                [[ "$__quiet" == "false" ]] && \
-                    echo "[WARNING] hs_read_persisted_state: variable '$__requested_var' is not defined in the state." >&2
-                continue
-            fi
-            __hsrr_rec="${__hsrr_map[$__requested_var]}"
-            if [[ "$__hsrr_rec" == *=* ]]; then
-                __hsrr_valpart="${__hsrr_rec#*=}"
-                eval "$__requested_var=${__hsrr_valpart}" || {
-                    echo "[ERROR] hs_read_persisted_state: failed to restore '$__requested_var'." >&2
-                    return "$HS_ERR_CORRUPT_STATE"
-                }
-            fi
-        done
-        return 0
+        if [[ "$caller_decl" == *=* ]]; then
+            echo "[ERROR] hs_read_persisted_state: '$var' is already set; refusing to overwrite." >&2
+            return "$HS_ERR_VAR_ALREADY_SET"
+        fi
+    done
+
+    # Phase 2: generate assignment statements (eval'd by the entry point).
+    local record value_part
+    for var in "${requested[@]}"; do
+        if [[ -z "${record_map[$var]+x}" ]]; then
+            [[ "$quiet" == "false" ]] && \
+                echo "[WARNING] hs_read_persisted_state: variable '$var' is not defined in the state." >&2
+            continue
+        fi
+        record="${record_map[$var]}"
+        if [[ "$record" == *=* ]]; then
+            value_part="${record#*=}"
+            printf '%s=%s\n' "$var" "$value_part"
+        fi
+    done
+}
+
+# _hs_rr_implicit_snippet <state_var>
+# Emits the eval-able restore snippet for the implicit (no-variable-names) form
+# of hs_read_persisted_state. Runs in its own frame; the snippet is eval'd by
+# the caller of hs_read_persisted_state, not by the entry point.
+_hs_rr_implicit_snippet() {
+    local existing="${!1-}"
+    local state_var="$1"
+
+    if [ -z "$existing" ]; then
+        echo "[ERROR] hs_read_persisted_state: state variable '$state_var' is not set or is empty." >&2
+        return "$HS_ERR_STATE_VAR_UNINITIALIZED"
+    fi
+    if [[ "$existing" != HS2:* ]]; then
+        echo "[ERROR] hs_read_persisted_state: state is not in HS2 format." >&2
+        return "$HS_ERR_CORRUPT_STATE"
     fi
 
-    # Step 4: if the caller used an explicit `--` but provided no variable
-    # names after it, do not emit the implicit restore snippet. This lets
-    # callers disable the stdout/eval path intentionally.
-    if [[ -n "$__has_separator" ]]; then
-        return 0
-    fi
+    local -a recs=()
+    _hs_hs2_parse hs_read_persisted_state "$existing" recs || return $?
+    local -A nameref_targets=()
+    local rec rec_flags rec_name rec_target
+    for rec in "${recs[@]}"; do
+        rec_flags="${rec#declare }"
+        rec_flags="${rec_flags%% *}"
+        if [[ "$rec_flags" == *n* && "$rec" == *=* ]]; then
+            rec_name=$(_hs_hs2_record_name "$rec")
+            rec_target="${rec#*\"}"
+            rec_target="${rec_target%\"}"
+            nameref_targets["$rec_name"]="$rec_target"
+        fi
+    done
 
-    # Step 5: otherwise, generate an implicit restore snippet. The snippet
-    # inspects the current function's locals with `local -p`, selects unset
-    # locals, and reenters hs_read_persisted_state with -q so unrelated
-    # locals stay quiet. For HS2 state, namerefs are restored inline.
-    local __probe_snippet=""
-    local __hsi_sv
-    __hsi_sv=$(printf '%q' "$__output_state_var")
-
-    if [[ "$__existing_state" == HS2:* ]]; then
-        # Parse state to discover nameref records for inline restoration.
-        local -a __hsi_recs=()
-        _hs_hs2_parse hs_read_persisted_state "$__existing_state" __hsi_recs || return $?
-        local -A __hsi_nr_targets=()
-        local __hsi_r
-        for __hsi_r in "${__hsi_recs[@]}"; do
-            local __hsi_rf="${__hsi_r#declare }"
-            __hsi_rf="${__hsi_rf%% *}"
-            if [[ "$__hsi_rf" == *n* && "$__hsi_r" == *=* ]]; then
-                local __hsi_rn
-                __hsi_rn=$(_hs_hs2_record_name "$__hsi_r")
-                local __hsi_rt="${__hsi_r#*\"}"
-                __hsi_rt="${__hsi_rt%\"}"
-                __hsi_nr_targets["$__hsi_rn"]="$__hsi_rt"
-            fi
-        done
-
-        # Part 1: explicit restore for non-nameref unset locals (scalars + arrays).
-        IFS= read -r -d '' __probe_snippet <<EOF || true
-hs_read_persisted_state -q -S ${__hsi_sv} -- \$(
+    local escaped_state_var
+    escaped_state_var=$(printf '%q' "$state_var")
+    local snippet=""
+    IFS= read -r -d '' snippet <<EOF || true
+hs_read_persisted_state -q -S ${escaped_state_var} -- \$(
   local -p | while IFS= read -r __hs_local_decl; do
     [[ "\$__hs_local_decl" == *=* ]] && continue
     [[ "\$__hs_local_decl" =~ ^declare\ -[^[:space:]]*n ]] && continue
     __hs_local_name=\${__hs_local_decl##* }
-    [[ "\$__hs_local_name" == __hs_* ]] && continue
     printf '%s ' "\$__hs_local_name"
   done
 ) >/dev/null
 EOF
-        # Part 2: inline nameref restores guarded by caller's local -n declaration.
-        local __hsi_nrn __hsi_nrt __hsi_qn __hsi_qt
-        for __hsi_nrn in "${!__hsi_nr_targets[@]}"; do
-            __hsi_nrt="${__hsi_nr_targets[$__hsi_nrn]}"
-            __hsi_qn=$(printf '%q' "$__hsi_nrn")
-            __hsi_qt=$(printf '%q' "$__hsi_nrt")
-            __probe_snippet+="[[ \"\$(declare -p ${__hsi_qn} 2>/dev/null)\" == 'declare -'*n*' ${__hsi_qn}' ]] && declare -n ${__hsi_qn}=${__hsi_qt}"$'\n'
-        done
-    else
-        echo "[ERROR] hs_read_persisted_state: state is not in HS2 format." >&2
-        return "$HS_ERR_CORRUPT_STATE"
-    fi
-    printf '%s' "$__probe_snippet"
+
+    local nameref_name nameref_target quoted_name quoted_target
+    for nameref_name in "${!nameref_targets[@]}"; do
+        nameref_target="${nameref_targets[$nameref_name]}"
+        quoted_name=$(printf '%q' "$nameref_name")
+        quoted_target=$(printf '%q' "$nameref_target")
+        snippet+="[[ \"\$(declare -p ${quoted_name} 2>/dev/null)\" == 'declare -'*n*' ${quoted_name}' ]] && declare -n ${quoted_name}=${quoted_target}"$'\n'
+    done
+    printf '%s' "$snippet"
 }
 
 # --- Utility functions --------------------------------------------------------
@@ -455,198 +523,205 @@ EOF
 #   $1 - candidate variable name
 # Returns:
 #   0 if the name is valid, 1 otherwise.
+# _hs_local_exists <lp_snapshot> <name>
+# Returns 0 if <name> appears as a declared local in the local -p snapshot,
+# 1 otherwise. The snapshot must be captured with local -p in the caller's
+# own frame so that only that frame's locals are visible — not ancestor frames.
+# This avoids the dynamic-scope false-positive that [[ -v name ]] produces when
+# an ancestor frame happens to declare a local with the same name.
+_hs_local_exists() {
+    local __hs_le_name="$2"
+    local __hs_le_line __hs_le_n
+    while IFS= read -r __hs_le_line; do
+        [[ "$__hs_le_line" != declare\ * ]] && continue
+        __hs_le_n="${__hs_le_line#* }"; __hs_le_n="${__hs_le_n#* }"; __hs_le_n="${__hs_le_n%%=*}"
+        [[ "$__hs_le_n" == "$__hs_le_name" ]] && return 0
+    done <<< "$1"
+    return 1
+}
+
 _hs_is_valid_variable_name() {
     [[ "${1-}" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]
+}
+
+# _hs_print_reserved_names <lp_snapshot> [exclude]
+# Prints every variable name found in the local -p snapshot, one per line,
+# skipping the single name given by the optional <exclude> argument. Called by
+# the --list-reserved end block of each entry point; <exclude> is the mode-flag
+# local (e.g. list_reserved) that is present only in --list-reserved mode and
+# must not be reported as part of the collision section.
+_hs_print_reserved_names() {
+    local __hs_prn_snapshot="$1"
+    local __hs_prn_exclude="${2-}"
+    local declaration name
+    while IFS= read -r declaration; do
+        [[ "$declaration" != declare\ * ]] && continue
+        name="${declaration#* }"; name="${name#* }"; name="${name%%=*}"
+        [[ -n "$__hs_prn_exclude" && "$name" == "$__hs_prn_exclude" ]] && continue
+        printf '%s\n' "$name"
+    done <<< "$__hs_prn_snapshot"
 }
 
 # Function:
 #   _hs_resolve_state_inputs
 # Description:
 #   Parses helper options for state-oriented functions. Parsed results are
-#   returned to the caller through the array variables named in `$2` and `$4`.
-#   The helper recognizes `-S <statevar>` when requested by `$3`, optional
+#   written directly into the caller's `__hs_remaining` (indexed array) and
+#   `__hs_processed` (associative array) variables via Bash dynamic scoping.
+#   The helper recognizes `-S <statevar>` when requested by `$2`, optional
 #   helper flags such as `-q`, unknown forwarded options, and an optional
 #   final `--` separator before an explicit variable-name list.
+# Caller contract:
+#   The caller MUST declare the following variables before calling this helper:
+#     local -a __hs_remaining=()
+#     local -A __hs_processed=()
+#   The helper writes its output into those exact names through dynamic scoping.
+#   Passing any other names is a programming error.
 # Arguments:
 #   $1 - caller function name, used in error messages; must be a valid Bash name
-#   $2 - name of the indexed array variable that will receive forwarded,
-#        unprocessed arguments; must be a valid Bash name
-#   $3 - `getopts` format string of accepted helper options; e.g. `qS:`
-#   $4 - name of the associative array variable that will receive processed
-#        arguments; must be a valid Bash name
-#   $5... - forwarded arguments from the public helper caller; if `--` is
+#   $2 - `getopts` format string of accepted helper options; e.g. `qS:`
+#   $3... - forwarded arguments from the public helper caller; if `--` is
 #           present, its last occurrence marks the start of the explicit
 #           variable-name list
 # Returns:
 #   0 on success.
-#   On success, `$4` may contain:
+#   On success, `__hs_processed` may contain:
 #     - `state`: the validated state variable name from `-S`
 #     - `quiet`: `true` or `false`
 #     - `vars`: the validated explicit variable-name list as a space-separated string
 #     - `separator`: set when an explicit `--` was seen
 #   `HS_ERR_MISSING_ARGUMENT` if a required option parameter such as the value
 #   for `-S` is missing.
-#   `HS_ERR_INVALID_VAR_NAME` if `$2` or `$4` collides with a local variable
-#   name in this helper.
-#   `HS_ERR_INVALID_ARGUMENT_TYPE` if `$2` is not an indexed array variable or
-#   if `$4` is not an associative array variable.
 #   `HS_ERR_INVALID_VAR_NAME` if the state variable name or an explicit
 #   variable-name token is not a valid Bash identifier.
+#   `HS_ERR_RESERVED_VAR_NAME` if the state variable name or a variable-name
+#   token matches a name in the caller's --list-reserved output.
 #   `HS_ERR_STATE_VAR_UNINITIALIZED` if no `-S <statevar>` option is provided.
 # Usage:
-#   local -a remaining_args=()
-#   local -A processed_args=()
-#   _hs_resolve_state_inputs my_helper remaining_args qS: processed_args "$@" || return $?
+#   local -a __hs_remaining=()
+#   local -A __hs_processed=()
+#   _hs_resolve_state_inputs my_helper qS: "$@" || return $?
 _hs_resolve_state_inputs() {
-    if [ $# -lt 4 ]; then
-        echo "[ERROR] $1: missing required arguments; expected at least 4 parameters." >&2
+    if [ $# -lt 2 ]; then
+        echo "[ERROR] ${1-_hs_resolve_state_inputs}: missing required arguments." >&2
         return "$HS_ERR_MISSING_ARGUMENT"
     fi
-    local __arg
-    local __caller_name=$1
-    local __options=$3
-    local __current_option
+    local __hs_ri_caller="$1"
+    local __hs_ri_opts="$2"
+    local __hs_ri_opt
+    local OPTARG
     local -i OPTIND=1
-    local -i __last_separator_index
-    local -i __scan_index
-    local -i __last_opt_remaining_size=0
-    local -a __trailing_vars=()
-    local -n __remaining_args_ref
-    local -n __processed_args_ref
-    for __arg in "$1" "$2" "$4"; do
-        if ! _hs_is_valid_variable_name "$__arg"; then
-            echo "[ERROR] $1: invalid variable name '$__arg'." >&2
-            return "$HS_ERR_INVALID_VAR_NAME"
-        fi
-    done
-    if local -p "$2" >/dev/null 2>&1; then
-        echo "[ERROR] ${__caller_name}: '$2' is a reserved internal name used by _hs_resolve_state_inputs; choose a different variable name." >&2
-        return "$HS_ERR_INVALID_VAR_NAME"
-    fi
+    local -i __hs_ri_sep_idx=0
+    local -i __hs_ri_scan=0
+    local -i __hs_ri_last_opt_sz=0
+    local -a __hs_ri_trailing=()
+    shift 2
 
-    __remaining_args_ref=$2
-    __processed_args_ref=$4
-    shift 4
-
-    # Validate the types of passed arrays using ${...@a}
-    if ! _hs_is_array __remaining_args_ref; then
-        echo "[ERROR] ${__caller_name}: '${!__remaining_args_ref}' must name an indexed array variable." >&2
+    # Verify caller declared the required output variables with correct types.
+    if [[ "${__hs_remaining@a}" != *a* ]]; then
+        echo "[ERROR] ${__hs_ri_caller}: caller must declare 'local -a __hs_remaining=()' before calling _hs_resolve_state_inputs." >&2
         return "$HS_ERR_INVALID_ARGUMENT_TYPE"
     fi
-    if ! _hs_is_array -A __processed_args_ref; then
-        echo "[ERROR] ${__caller_name}: '${!__processed_args_ref}' must name an associative array variable." >&2
+    if [[ "${__hs_processed@a}" != *A* ]]; then
+        echo "[ERROR] ${__hs_ri_caller}: caller must declare 'local -A __hs_processed=()' before calling _hs_resolve_state_inputs." >&2
         return "$HS_ERR_INVALID_ARGUMENT_TYPE"
     fi
 
-    
-    # Initialize processed options
-    __processed_args_ref=(["quiet"]=false)
+    __hs_processed=(["quiet"]=false)
+    __hs_remaining=()
 
-    # Process options
-    # Increments OPTIND scanning for known options.
-    __remaining_args_ref=()
-    
-    # Force a colon in front of $__options to record unknown options in $OPTARG
+    local __hs_ri_reserved_list
+    __hs_ri_reserved_list=$("$__hs_ri_caller" --list-reserved 2>/dev/null) || true
+
     while (( "$#" >= "$OPTIND" )); do
-        __scan_index=${OPTIND}
-        if getopts ":$__options" __current_option; then
-            # Returns OK if known or unknown option -X [val]
-            # value is assigned to $OPTARG for known options
-            # value can be attached -Svarname or detached -S varname
-            case "$__current_option" in
+        __hs_ri_scan=${OPTIND}
+        if getopts ":$__hs_ri_opts" __hs_ri_opt; then
+            case "$__hs_ri_opt" in
                 \?)
-                    # Unknown option
-                    __remaining_args_ref+=("-$OPTARG")
+                    __hs_remaining+=("-$OPTARG")
                     ;;
                 S)
                     if ! _hs_is_valid_variable_name "$OPTARG"; then
-                        echo "[ERROR] ${__caller_name}: invalid variable name '${OPTARG}'." >&2
+                        echo "[ERROR] ${__hs_ri_caller}: invalid variable name '${OPTARG}'." >&2
                         return "$HS_ERR_INVALID_VAR_NAME"
                     fi
-                    __processed_args_ref["state"]="$OPTARG"
-                    __last_opt_remaining_size=${#__remaining_args_ref[@]}
+                    if [[ -n "$__hs_ri_reserved_list" && \
+                          $'\n'"$__hs_ri_reserved_list"$'\n' == *$'\n'"$OPTARG"$'\n'* ]]; then
+                        echo "[ERROR] ${__hs_ri_caller}: state variable name '$OPTARG' is reserved; choose a different variable name." >&2
+                        return "$HS_ERR_RESERVED_VAR_NAME"
+                    fi
+                    __hs_processed["state"]="$OPTARG"
+                    __hs_ri_last_opt_sz=${#__hs_remaining[@]}
                     ;;
                 q)
-                    __processed_args_ref["quiet"]=true
-                    __last_opt_remaining_size=${#__remaining_args_ref[@]}
+                    __hs_processed["quiet"]=true
+                    __hs_ri_last_opt_sz=${#__hs_remaining[@]}
                     ;;
                 :)
-                    # Only triggered by -S in the last position since getopts accepts
-                    # -q or -- as the value of -S if it encounters ... -S -q or ... -S -- ...
-                    echo "[ERROR] ${__caller_name}: missing required parameter to option -${OPTARG}." >&2
+                    echo "[ERROR] ${__hs_ri_caller}: missing required parameter to option -${OPTARG}." >&2
                     return "$HS_ERR_MISSING_ARGUMENT"
                     ;;
             esac
-        elif (( "$__scan_index" == "$OPTIND" )); then
-            # It was a word (parameter to some unknown option)
-            __remaining_args_ref+=("${!OPTIND}")
+        elif (( __hs_ri_scan == OPTIND )); then
+            __hs_remaining+=("${!OPTIND}")
             OPTIND=$(( OPTIND + 1 ))
         else
-            # Hit --. Only the last separator counts. Preserve any earlier
-            # separator and the tokens up to the final separator as forwarded
-            # caller arguments, then treat only the suffix after the final
-            # separator as the explicit variable list.
-            __processed_args_ref["separator"]=true
-            __last_separator_index=$((OPTIND - 1))
-            for ((__scan_index = OPTIND; __scan_index <= $#; __scan_index++)); do
-                if [[ "${!__scan_index}" == "--" ]]; then
-                    __last_separator_index=$__scan_index
-                fi
+            # Hit --. Find the last occurrence to handle multiple separators.
+            __hs_processed["separator"]=true
+            __hs_ri_sep_idx=$(( OPTIND - 1 ))
+            for (( __hs_ri_scan = OPTIND; __hs_ri_scan <= $#; __hs_ri_scan++ )); do
+                [[ "${!__hs_ri_scan}" == "--" ]] && __hs_ri_sep_idx=$__hs_ri_scan
             done
-            if (( __last_separator_index > OPTIND - 1 )); then
-                __remaining_args_ref+=("--")
+            if (( __hs_ri_sep_idx > OPTIND - 1 )); then
+                __hs_remaining+=("--")
             fi
-            while (( OPTIND < __last_separator_index )); do
-                __remaining_args_ref+=("${!OPTIND}")
+            while (( OPTIND < __hs_ri_sep_idx )); do
+                __hs_remaining+=("${!OPTIND}")
                 OPTIND=$(( OPTIND + 1 ))
             done
-            OPTIND=$(( __last_separator_index + 1 ))
+            OPTIND=$(( __hs_ri_sep_idx + 1 ))
             break
         fi
     done
 
-    # Pull variable names from the end
-    : "${__processed_args_ref["vars"]:=}"
-    if [[ -n "${__processed_args_ref[separator]-}" ]]; then
+    : "${__hs_processed["vars"]:=}"
+    if [[ -n "${__hs_processed[separator]-}" ]]; then
         while (( "$#" >= "$OPTIND" )); do
             if ! _hs_is_valid_variable_name "${!OPTIND}"; then
-                echo "[ERROR] ${__caller_name}: invalid variable name '${!OPTIND}'." >&2
+                echo "[ERROR] ${__hs_ri_caller}: invalid variable name '${!OPTIND}'." >&2
                 return "$HS_ERR_INVALID_VAR_NAME"
             fi
-            printf -v __processed_args_ref["vars"] "%s%s " "${__processed_args_ref['vars']}" "${!OPTIND}"
+            if [[ -n "$__hs_ri_reserved_list" && \
+                  $'\n'"$__hs_ri_reserved_list"$'\n' == *$'\n'"${!OPTIND}"$'\n'* ]]; then
+                echo "[ERROR] ${__hs_ri_caller}: variable name '${!OPTIND}' is reserved." >&2
+                return "$HS_ERR_RESERVED_VAR_NAME"
+            fi
+            printf -v '__hs_processed[vars]' "%s%s " "${__hs_processed[vars]}" "${!OPTIND}"
             OPTIND=$(( OPTIND + 1 ))
         done
     else
-        # Without an explicit separator, treat the maximal suffix of valid
-        # variable names as the library-owned var list. We peel that suffix
-        # from the end, then rebuild it in original argument order.
-        while (( ${#__remaining_args_ref[@]} > __last_opt_remaining_size )) && _hs_is_valid_variable_name "${__remaining_args_ref[-1]}"; do
-            __trailing_vars=("${__remaining_args_ref[-1]}" "${__trailing_vars[@]}")
-            unset "__remaining_args_ref[-1]"
+        while (( ${#__hs_remaining[@]} > __hs_ri_last_opt_sz )) && \
+              _hs_is_valid_variable_name "${__hs_remaining[-1]}"; do
+            if [[ -n "$__hs_ri_reserved_list" && \
+                  $'\n'"$__hs_ri_reserved_list"$'\n' == *$'\n'"${__hs_remaining[-1]}"$'\n'* ]]; then
+                echo "[ERROR] ${__hs_ri_caller}: variable name '${__hs_remaining[-1]}' is reserved." >&2
+                return "$HS_ERR_RESERVED_VAR_NAME"
+            fi
+            __hs_ri_trailing=("${__hs_remaining[-1]}" "${__hs_ri_trailing[@]}")
+            unset '__hs_remaining[-1]'
         done
         local IFS=' '
-        __processed_args_ref["vars"]="${__trailing_vars[*]}"
-        if [[ "${__processed_args_ref[quiet]}" == false ]] && ((${#__remaining_args_ref[@]} > 0)); then
-            echo "[WARNING] ${__caller_name}: forwarded arguments remain after implicit variable-list parsing; use -- before the variable names." >&2
+        __hs_processed["vars"]="${__hs_ri_trailing[*]}"
+        if [[ "${__hs_processed[quiet]}" == false ]] && \
+           (( ${#__hs_remaining[@]} > 0 )); then
+            echo "[WARNING] ${__hs_ri_caller}: forwarded arguments remain after implicit variable-list parsing; use -- before the variable names." >&2
         fi
     fi
-    
-    if [[ -z "${__processed_args_ref[state]-}" ]]; then
-        echo "[ERROR] ${__caller_name}: state variable is uninitialized; missing required -S <statevar> option." >&2
+
+    if [[ -z "${__hs_processed[state]-}" ]]; then
+        echo "[ERROR] ${__hs_ri_caller}: state variable is uninitialized; missing required -S <statevar> option." >&2
         return "$HS_ERR_STATE_VAR_UNINITIALIZED"
     fi
-}
-
-_hs_is_array() {
-    local arraytypes="a"
-    if [[ "$1" == "-A" ]]; then
-        arraytypes="A"
-        shift
-    fi
-    local -n vname=$1
-    local attrs
-    attrs=${vname@a}
-    [[ "$attrs" == *[$arraytypes]* ]]
 }
 
 # --- HS2 helper functions -------------------------------------------------------
@@ -675,13 +750,12 @@ _hs_hs2_record_name() {
     printf '%s' "${__rest%%=*}"
 }
 
-# _hs_hs2_build <out_var> <existing_payload> [record ...]
-# Builds an HS2 state string from existing payload and new records and writes
-# it to the variable named by <out_var>.
+# _hs_hs2_build <existing_payload> [record ...]
+# Builds an HS2 state string from existing payload and new records and prints
+# it to stdout. Callers are responsible for assigning the result.
 _hs_hs2_build() {
-    local __hs2b_out="$1"
-    local __hs2b_payload="$2"
-    shift 2
+    local __hs2b_payload="$1"
+    shift 1
     local __hs2b_rec
     for __hs2b_rec in "$@"; do
         if [[ -n "$__hs2b_payload" ]]; then
@@ -692,7 +766,7 @@ _hs_hs2_build() {
     local __hs2b_cksum
     __hs2b_cksum=$(printf '%s' "$__hs2b_payload" | cksum)
     __hs2b_cksum="${__hs2b_cksum%% *}"
-    printf -v "$__hs2b_out" 'HS2:%s:%s' "$__hs2b_cksum" "$__hs2b_payload"
+    printf 'HS2:%s:%s' "$__hs2b_cksum" "$__hs2b_payload"
 }
 
 # _hs_hs2_parse <caller> <state> <out_array>
