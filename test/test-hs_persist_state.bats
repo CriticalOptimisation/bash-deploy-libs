@@ -1227,14 +1227,16 @@ hs2_corrupt_state() {
 @test "hs_persist_state rejects every reserved name as the -S state variable" {
   # Each name in --list-reserved is also a local in the entry-point frame.
   # Passing it as -S would shadow the caller's variable so the updated state
-  # would be discarded silently. _hs_resolve_state_inputs must catch this and
-  # return HS_ERR_RESERVED_VAR_NAME for every name in the reserved list.
+  # would be discarded silently. _hs_resolve_state_inputs must reject every
+  # reserved name with HS_ERR_RESERVED_VAR_NAME, not just the first one.
   # shellcheck disable=SC2329
   f() {
-    local foo=one name
+    local foo=one name rc
     while IFS= read -r name; do
-      hs_persist_state -S "$name" -- foo || return $?
+      hs_persist_state -S "$name" -- foo; rc=$?
+      [[ $rc -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || return "$rc"
     done < <(hs_persist_state --list-reserved)
+    return "$HS_ERR_RESERVED_VAR_NAME"
   }
   run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
   [[ "$stderr" == *"reserved"* ]]
@@ -1244,10 +1246,12 @@ hs2_corrupt_state() {
 @test "hs_destroy_state rejects every reserved name as the -S state variable" {
   # shellcheck disable=SC2329
   f() {
-    local name
+    local name rc
     while IFS= read -r name; do
-      hs_destroy_state -S "$name" -- foo || return $?
+      hs_destroy_state -S "$name" -- foo; rc=$?
+      [[ $rc -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || return "$rc"
     done < <(hs_destroy_state --list-reserved)
+    return "$HS_ERR_RESERVED_VAR_NAME"
   }
   run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
   [[ "$stderr" == *"reserved"* ]]
@@ -1257,10 +1261,12 @@ hs2_corrupt_state() {
 @test "hs_read_persisted_state rejects every reserved name as the -S state variable" {
   # shellcheck disable=SC2329
   f() {
-    local name
+    local name rc
     while IFS= read -r name; do
-      hs_read_persisted_state -S "$name" -- foo || return $?
+      hs_read_persisted_state -S "$name" -- foo; rc=$?
+      [[ $rc -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || return "$rc"
     done < <(hs_read_persisted_state --list-reserved)
+    return "$HS_ERR_RESERVED_VAR_NAME"
   }
   run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
   [[ "$stderr" == *"reserved"* ]]
