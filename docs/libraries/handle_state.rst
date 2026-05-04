@@ -9,7 +9,9 @@ Location
 Purpose
 -------
 
-``handle_state.sh`` helps Bash libraries carry cleanup state by name.
+``handle_state.sh`` helps Bash libraries carry private global state information 
+between functions, without polluting the global namespace. It also allows applications
+to carry several distinct states, one for each context.
 
 The public API is built around a named state variable passed with
 ``-S <statevar>``. The state value is an opaque internal token; callers should
@@ -236,7 +238,7 @@ the persisted state transmitted by the caller directly.
 
    Automatic probing only inspects the immediate caller scope. Locals in the
    caller's caller are not restored automatically. They can still be restored
-   if an intermediate function names them explicitly.
+   if they are named explicitly.
 
 If ``--`` is present and no variable names follow it, the function emits no
 implicit restore snippet and returns success.
@@ -256,8 +258,14 @@ Errors:
   set (including empty string); ``unset`` the variable first if an overwrite
   is intended.
 
-Helper API
-----------
+Developer Reference
+-------------------
+
+.. warning::
+
+   The functions documented in this section are internal implementation details.
+   They are not part of the public API and may change signature or be removed
+   without notice. Application and library code must not call them directly.
 
 _hs_resolve_state_inputs
 ~~~~~~~~~~~~~~~~~~~~~~~~
