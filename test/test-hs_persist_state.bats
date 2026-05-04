@@ -1224,19 +1224,43 @@ hs2_corrupt_state() {
 }
 
 # bats test_tags=hs_persist_state
-@test "hs_persist_state rejects a state variable named __hs_processed" {
-  # __hs_processed is declared local -A in hs_persist_state's entry-point frame.
-  # Using it as the state variable name causes the updated state to be discarded
-  # into the local associative array instead of the caller's variable.
-  # The library must detect this early via _hs_resolve_state_inputs and return
-  # HS_ERR_RESERVED_VAR_NAME rather than silently losing the persisted state.
+@test "hs_persist_state rejects every reserved name as the -S state variable" {
+  # Each name in --list-reserved is also a local in the entry-point frame.
+  # Passing it as -S would shadow the caller's variable so the updated state
+  # would be discarded silently. _hs_resolve_state_inputs must catch this and
+  # return HS_ERR_RESERVED_VAR_NAME for every name in the reserved list.
   # shellcheck disable=SC2329
   f() {
-    local __hs_processed=""
-    init()    { local bar=two; hs_persist_state -S "$1" -- bar || return $?; }
-    cleanup() { local bar; hs_read_persisted_state -S "$1" -- bar || return $?; printf "%s" "$bar"; }
-    init __hs_processed || return $?
-    cleanup __hs_processed
+    local foo=one name
+    while IFS= read -r name; do
+      hs_persist_state -S "$name" -- foo || return $?
+    done < <(hs_persist_state --list-reserved)
+  }
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"reserved"* ]]
+}
+
+# bats test_tags=hs_destroy_state
+@test "hs_destroy_state rejects every reserved name as the -S state variable" {
+  # shellcheck disable=SC2329
+  f() {
+    local name
+    while IFS= read -r name; do
+      hs_destroy_state -S "$name" -- foo || return $?
+    done < <(hs_destroy_state --list-reserved)
+  }
+  run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
+  [[ "$stderr" == *"reserved"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state rejects every reserved name as the -S state variable" {
+  # shellcheck disable=SC2329
+  f() {
+    local name
+    while IFS= read -r name; do
+      hs_read_persisted_state -S "$name" -- foo || return $?
+    done < <(hs_read_persisted_state --list-reserved)
   }
   run -"$HS_ERR_RESERVED_VAR_NAME" --separate-stderr f
   [[ "$stderr" == *"reserved"* ]]
