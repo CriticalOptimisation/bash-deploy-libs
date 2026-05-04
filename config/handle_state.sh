@@ -139,10 +139,6 @@ _hs_ps_body() {
     local -A this_call=()
     local var decl flags
     for var in "${vars[@]}"; do
-        if [[ "$var" == "__hs_remaining" || "$var" == "__hs_processed" ]]; then
-            echo "[ERROR] hs_persist_state: refusing to persist reserved variable name '$var'." >&2
-            return "$HS_ERR_RESERVED_VAR_NAME"
-        fi
         if [[ -n "${existing_names[$var]-}" ]]; then
             echo "[ERROR] hs_persist_state: variable '$var' already exists in the state." >&2
             return "$HS_ERR_VAR_NAME_COLLISION"
@@ -256,10 +252,6 @@ hs_destroy_state() {
 # own frame so its locals do not appear in the entry point's collision section.
 _hs_ds_body() {
     local out_var="$1"
-    if [[ "$out_var" == "__hs_remaining" || "$out_var" == "__hs_processed" ]]; then
-        echo "[ERROR] hs_destroy_state: state variable name '$out_var' is reserved; choose a different variable name." >&2
-        return "$HS_ERR_RESERVED_VAR_NAME"
-    fi
     local -a vars=()
     read -r -a vars <<< "${2-}"
     local existing="${!out_var-}"
@@ -438,10 +430,6 @@ _hs_rr_explicit_stmts() {
     # Phase 1: all-or-nothing guard check.
     local var caller_decl
     for var in "${requested[@]}"; do
-        if [[ "$var" == "__hs_remaining" || "$var" == "__hs_processed" ]]; then
-            echo "[ERROR] hs_read_persisted_state: '$var' is a reserved name and cannot be restored." >&2
-            return "$HS_ERR_RESERVED_VAR_NAME"
-        fi
         [[ -z "${record_map[$var]+x}" ]] && continue
         if ! caller_decl=$(declare -p "$var" 2>/dev/null); then
             echo "[ERROR] hs_read_persisted_state: '$var' is not declared in scope." >&2
@@ -606,6 +594,8 @@ _hs_print_reserved_names() {
 #   for `-S` is missing.
 #   `HS_ERR_INVALID_VAR_NAME` if the state variable name or an explicit
 #   variable-name token is not a valid Bash identifier.
+#   `HS_ERR_RESERVED_VAR_NAME` if the state variable name or a variable-name
+#   token matches a name in the caller's --list-reserved output.
 #   `HS_ERR_STATE_VAR_UNINITIALIZED` if no `-S <statevar>` option is provided.
 # Usage:
 #   local -a __hs_remaining=()
@@ -640,6 +630,9 @@ _hs_resolve_state_inputs() {
     __hs_processed=(["quiet"]=false)
     __hs_remaining=()
 
+    local __hs_ri_reserved_list
+    __hs_ri_reserved_list=$("$__hs_ri_caller" --list-reserved 2>/dev/null) || true
+
     while (( "$#" >= "$OPTIND" )); do
         __hs_ri_scan=${OPTIND}
         if getopts ":$__hs_ri_opts" __hs_ri_opt; then
@@ -651,6 +644,11 @@ _hs_resolve_state_inputs() {
                     if ! _hs_is_valid_variable_name "$OPTARG"; then
                         echo "[ERROR] ${__hs_ri_caller}: invalid variable name '${OPTARG}'." >&2
                         return "$HS_ERR_INVALID_VAR_NAME"
+                    fi
+                    if [[ -n "$__hs_ri_reserved_list" && \
+                          $'\n'"$__hs_ri_reserved_list"$'\n' == *$'\n'"$OPTARG"$'\n'* ]]; then
+                        echo "[ERROR] ${__hs_ri_caller}: state variable name '$OPTARG' is reserved; choose a different variable name." >&2
+                        return "$HS_ERR_RESERVED_VAR_NAME"
                     fi
                     __hs_processed["state"]="$OPTARG"
                     __hs_ri_last_opt_sz=${#__hs_remaining[@]}
@@ -693,12 +691,22 @@ _hs_resolve_state_inputs() {
                 echo "[ERROR] ${__hs_ri_caller}: invalid variable name '${!OPTIND}'." >&2
                 return "$HS_ERR_INVALID_VAR_NAME"
             fi
+            if [[ -n "$__hs_ri_reserved_list" && \
+                  $'\n'"$__hs_ri_reserved_list"$'\n' == *$'\n'"${!OPTIND}"$'\n'* ]]; then
+                echo "[ERROR] ${__hs_ri_caller}: variable name '${!OPTIND}' is reserved." >&2
+                return "$HS_ERR_RESERVED_VAR_NAME"
+            fi
             printf -v '__hs_processed[vars]' "%s%s " "${__hs_processed[vars]}" "${!OPTIND}"
             OPTIND=$(( OPTIND + 1 ))
         done
     else
         while (( ${#__hs_remaining[@]} > __hs_ri_last_opt_sz )) && \
               _hs_is_valid_variable_name "${__hs_remaining[-1]}"; do
+            if [[ -n "$__hs_ri_reserved_list" && \
+                  $'\n'"$__hs_ri_reserved_list"$'\n' == *$'\n'"${__hs_remaining[-1]}"$'\n'* ]]; then
+                echo "[ERROR] ${__hs_ri_caller}: variable name '${__hs_remaining[-1]}' is reserved." >&2
+                return "$HS_ERR_RESERVED_VAR_NAME"
+            fi
             __hs_ri_trailing=("${__hs_remaining[-1]}" "${__hs_ri_trailing[@]}")
             unset '__hs_remaining[-1]'
         done
