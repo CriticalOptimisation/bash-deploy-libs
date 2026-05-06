@@ -41,23 +41,29 @@ _cg_resolve_command_path() {
 #   Defines a function named <command> that shadows the external command and
 #   dispatches to it by full path with all arguments forwarded.
 # Usage:
-#   guard [-q] [--] [command ...]
+#   guard [-q] [--] [token ...]
 # Options:
 #   -q  Quiet mode: suppress warnings when guard is called without any commands
-#   --  End of options, start of command list
-# Examples:
-#   guard uname
-#   guard uname date hostname
-#   guard -q  # no warning
-#   guard -- uname -login  # Treats "-login" as a command name
+#   --  End of options, start of token list
+# Tokens:
+#   Each token is either a plain command name or a name=path pair.
+#   Plain name:  guard uname             — resolved via restricted PATH (command -pv)
+#   name=path:   guard uname=/usr/bin/uname — pinned to the given absolute path,
+#                bypassing PATH resolution. name must be a valid Bash identifier;
+#                path must be absolute and point to an existing executable file.
+#   Both forms may be mixed: guard "uname=/usr/bin/uname" date hostname
 # Errors:
-#   CG_ERR_INVALID_NAME, CG_ERR_NOT_FOUND
+#   - CG_ERR_INVALID_NAME if a name is not a valid Bash identifier, or an unknown
+#     option is passed.
+#   - CG_ERR_NOT_FOUND if a plain command cannot be resolved, or a name=path token
+#     has a non-absolute, non-existent, or non-executable path.
 # Notes:
-#   Uses a restricted PATH ("/usr/bin:/bin") in a subshell to resolve the command.
-#   This avoids resolving through user-controlled PATH entries.
-#
-#   This function uses eval to define the shadowing function; input is validated
-#   to be a legal Bash identifier before eval is invoked.
+#   Validation is all-or-nothing: no wrapper functions are created unless every
+#   token is valid.
+#   Uses a restricted PATH in a subshell to resolve plain names, avoiding
+#   user-controlled PATH entries.
+#   Uses eval to define the shadowing function; input is validated to be a legal
+#   Bash identifier before eval is invoked.
 guard() {
     local quiet=false
     local -a commands=()
@@ -83,12 +89,32 @@ guard() {
         return 0
     fi
 
-    # First pass: validate all commands
-    local cmd full_path
+    # First pass: validate all tokens (plain names and name=path pairs)
+    local cmd full_path name fixed_path
     local -a valid_commands=()
     local -a full_paths=()
 
     for cmd in "${commands[@]}"; do
+        if [[ "$cmd" == *=* ]]; then
+            name="${cmd%%=*}"
+            fixed_path="${cmd#*=}"
+            if ! [[ "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+                echo "[ERROR] guard: invalid command identifier '$name'." >&2
+                return "$CG_ERR_INVALID_NAME"
+            fi
+            if [[ "${fixed_path:0:1}" != "/" ]]; then
+                echo "[ERROR] guard: '$name': path must be an absolute path." >&2
+                [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
+            fi
+            if [[ ! -x "$fixed_path" ]]; then
+                echo "[ERROR] guard: unable to resolve full path for '$name'. Use the full path." >&2
+                [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
+            fi
+            valid_commands+=("$name")
+            full_paths+=("$fixed_path")
+            continue
+        fi
+
         if ! [[ "$cmd" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
             echo "[ERROR] guard: invalid command identifier '$cmd'." >&2
             return "$CG_ERR_INVALID_NAME"
