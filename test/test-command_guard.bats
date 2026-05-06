@@ -106,10 +106,10 @@ setup_file() {
   [[ "$output" != *"inside"* ]]
   [[ "$stderr" == "[BUG] guard: 'myalias' is an alias"* ]]
 }
-# --- PR#1: Multiple commands support (should fail initially) ---
+# --- Multiple commands support ---
 
 # bats test_tags=guard,pr1
-@test "PR#1: guard accepts multiple commands" {
+@test "guard accepts multiple commands" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     guard uname date hostname
@@ -117,7 +117,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr1
-@test "PR#1: multiple commands all create wrapper functions" {
+@test "multiple commands all create wrapper functions" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     guard uname date hostname
@@ -128,7 +128,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr1
-@test "PR#1: multiple guarded commands execute correctly" {
+@test "multiple guarded commands execute correctly" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     guard uname echo
@@ -140,7 +140,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr1
-@test "PR#1: failure in one command stops processing, acts as no-op" {
+@test "failure in one command stops processing, acts as no-op" {
   # shellcheck disable=SC2016
   run bash --noprofile -lc '
     guard uname nonexistent_xyz date
@@ -153,7 +153,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr1
-@test "PR#1: backward compatible with single command" {
+@test "backward compatible with single command" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     guard uname
@@ -163,10 +163,10 @@ setup_file() {
   '
 }
 
-# --- PR#2: Custom path syntax (should fail initially) ---
+# --- name=path token syntax ---
 
 # bats test_tags=guard,pr2
-@test "PR#2: guard accepts cmd=path syntax" {
+@test "guard accepts cmd=path syntax" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     guard "uname=/usr/bin/uname"
@@ -174,7 +174,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr2
-@test "PR#2: custom path command creates wrapper function" {
+@test "custom path command creates wrapper function" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     guard "uname=/usr/bin/uname"
@@ -183,7 +183,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr2
-@test "PR#2: custom path command executes with specified path" {
+@test "custom path command executes with specified path" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     guard "kernel=/usr/bin/uname"
@@ -193,7 +193,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr2
-@test "PR#2: mix of custom path and regular commands" {
+@test "mix of custom path and regular commands" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     guard "uname=/usr/bin/uname" date hostname
@@ -204,7 +204,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr2
-@test "PR#2: custom path with nonexistent file fails" {
+@test "custom path with nonexistent file fails" {
   # shellcheck disable=SC2016
   run -"$CG_ERR_NOT_FOUND" bash --noprofile -lc '
     guard "badcmd=/nonexistent/path/badcmd"
@@ -213,7 +213,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr2
-@test "PR#2: custom path with non-executable fails" {
+@test "custom path with non-executable fails" {
   local tmpfile
   tmpfile=$(mktemp)
   run -"$CG_ERR_NOT_FOUND" bash --noprofile -lc "guard 'notexec=${tmpfile}'"
@@ -221,7 +221,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr2
-@test "PR#2: custom path with relative path fails" {
+@test "custom path with relative path fails" {
   # shellcheck disable=SC2016
   run -"$CG_ERR_NOT_FOUND" bash --noprofile -lc '
     guard "cmd=../bin/cmd"
@@ -230,7 +230,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr2
-@test "PR#2: invalid syntax in cmd=path fails gracefully" {
+@test "invalid syntax in cmd=path fails gracefully" {
   # shellcheck disable=SC2016
   run -"$CG_ERR_INVALID_NAME" bash --noprofile -lc '
     guard "bad-name=/usr/bin/test"
@@ -238,11 +238,11 @@ setup_file() {
   [[ "$output" == *"invalid command identifier"* ]]
 }
 
-# --- PR#3: PATH enforcement and debug trap (should fail initially) ---
+# --- PATH enforcement and debug trap ---
 
 # bats test_tags=guard,pr3
-@test "PR#3: original PATH is saved on source" {
-  skip "Feature not yet implemented - PR#3"
+@test "original PATH is saved on source" {
+  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     original="$PATH"
@@ -253,8 +253,8 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr3
-@test "PR#3: PATH is unset after sourcing" {
-  skip "Feature not yet implemented - PR#3"
+@test "PATH is unset after sourcing" {
+  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     source "$LIB"
@@ -264,8 +264,8 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr3
-@test "PR#3: non-guarded command fails when PATH unset" {
-  skip "Feature not yet implemented - PR#3"
+@test "non-guarded command fails when PATH unset" {
+  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -127 bash --noprofile -lc '
     source "$LIB"
@@ -274,8 +274,8 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr3
-@test "PR#3: guarded command works despite unset PATH" {
-  skip "Feature not yet implemented - PR#3"
+@test "guarded command works despite unset PATH" {
+  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     source "$LIB"
@@ -286,8 +286,8 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr3
-@test "PR#3: debug trap catches non-guarded command in debug mode" {
-  skip "Feature not yet implemented - PR#3"
+@test "debug trap catches non-guarded command in debug mode" {
+  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -127 --separate-stderr bash --noprofile -lc '
     set -x
@@ -298,8 +298,8 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr3
-@test "PR#3: debug trap suggests guard command with path" {
-  skip "Feature not yet implemented - PR#3"
+@test "debug trap suggests guard command with path" {
+  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run --separate-stderr bash --noprofile -lc '
     set -x
@@ -310,8 +310,8 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr3
-@test "PR#3: debug trap uses default PATH for suggestions" {
-  skip "Feature not yet implemented - PR#3"
+@test "debug trap uses default PATH for suggestions" {
+  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run --separate-stderr bash --noprofile -lc '
     set -x
@@ -323,8 +323,8 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr3
-@test "PR#3: debug trap falls back to original PATH" {
-  skip "Feature not yet implemented - PR#3"
+@test "debug trap falls back to original PATH" {
+  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run --separate-stderr bash --noprofile -lc '
     export PATH="/custom/bin:$PATH"
@@ -337,8 +337,8 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr3
-@test "PR#3: debug trap does not trigger for guarded commands" {
-  skip "Feature not yet implemented - PR#3"
+@test "debug trap does not trigger for guarded commands" {
+  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
     set -x
@@ -350,8 +350,8 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr3
-@test "PR#3: debug trap does not trigger for builtins" {
-  skip "Feature not yet implemented - PR#3"
+@test "debug trap does not trigger for builtins" {
+  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
     set -x
@@ -361,10 +361,10 @@ setup_file() {
   [[ "$stderr" != *"WARNING: Non-guarded command"* ]]
 }
 
-# --- PR#4: Zero commands and options support (should fail initially) ---
+# --- Zero commands and options support ---
 
 # bats test_tags=guard,pr4
-@test "PR#4: guard with zero commands emits warning and returns 0" {
+@test "guard with zero commands emits warning and returns 0" {
 
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
@@ -374,7 +374,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr4
-@test "PR#4: guard with -q suppresses warnings for zero commands" {
+@test "guard with -q suppresses warnings for zero commands" {
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
     guard -q
@@ -383,7 +383,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr4
-@test "PR#4: guard with -- separates options from commands" {
+@test "guard with -- separates options from commands" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     guard -- uname
@@ -392,7 +392,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr4
-@test "PR#4: guard with -q -- suppresses warnings and separates options" {
+@test "guard with -q -- suppresses warnings and separates options" {
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile -lc '
     guard -q --
@@ -402,7 +402,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,pr4
-@test "PR#4: guard backward compatible with single command after options" {
+@test "guard backward compatible with single command after options" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     guard -q -- uname
