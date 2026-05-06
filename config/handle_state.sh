@@ -54,6 +54,7 @@ readonly HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12
 #        mistaken for a variable unless `--` is used.
 # Errors:
 #   - `HS_ERR_MISSING_ARGUMENT` if no state variable name is supplied at all.
+#   - `HS_ERR_MULTIPLE_STATE_INPUTS` if `-S` is given more than once.
 #   - `HS_ERR_INVALID_VAR_NAME` if the state variable name or a requested
 #     persist variable name is not a valid Bash identifier.
 #   - `HS_ERR_STATE_VAR_UNINITIALIZED` if `-S <statevar>` is missing.
@@ -208,6 +209,7 @@ _hs_ps_body() {
 #        for a variable unless `--` is used.
 # Errors:
 #   - `HS_ERR_STATE_VAR_UNINITIALIZED` if `-S <statevar>` is missing.
+#   - `HS_ERR_MULTIPLE_STATE_INPUTS` if `-S` is given more than once.
 #   - `HS_ERR_INVALID_VAR_NAME` if the state variable name or a requested
 #     destroy variable name is not a valid Bash identifier.
 #   - `HS_ERR_VAR_NAME_NOT_IN_STATE` if a requested destroy variable is not
@@ -333,6 +335,7 @@ _hs_ds_body() {
 #        `--` is used.
 # Errors:
 #   - `HS_ERR_MISSING_ARGUMENT` if no state variable name is supplied at all.
+#   - `HS_ERR_MULTIPLE_STATE_INPUTS` if `-S` is given more than once.
 #   - `HS_ERR_INVALID_VAR_NAME` if the state variable name or a requested
 #     restore variable name is not a valid Bash identifier.
 #   - `HS_ERR_STATE_VAR_UNINITIALIZED` if `-S <statevar>` is missing, or if
@@ -392,6 +395,7 @@ hs_read_persisted_state() {
         # is absent from the output. Splitting declare+assign would cause
         # lp_snapshot to appear in its own snapshot; the combined form is
         # intentional here.
+        : "${list_reserved}"
         # shellcheck disable=SC2155
         local lp_snapshot="$(local -p)"
         _hs_print_reserved_names "$lp_snapshot" list_reserved
