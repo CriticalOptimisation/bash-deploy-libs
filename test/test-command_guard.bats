@@ -165,7 +165,7 @@ setup_file() {
 
 # --- PR#2: Custom path syntax (should fail initially) ---
 
-# bats test_tags=guard,pr2,xfail
+# bats test_tags=guard,pr2
 @test "PR#2: guard accepts cmd=path syntax" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
@@ -173,7 +173,7 @@ setup_file() {
   '
 }
 
-# bats test_tags=guard,pr2,xfail
+# bats test_tags=guard,pr2
 @test "PR#2: custom path command creates wrapper function" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
@@ -182,17 +182,17 @@ setup_file() {
   '
 }
 
-# bats test_tags=guard,pr2,xfail
+# bats test_tags=guard,pr2
 @test "PR#2: custom path command executes with specified path" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
-    guard "uname=/usr/bin/uname"
-    out="$(uname)"
+    guard "kernel=/usr/bin/uname"
+    out="$(kernel -s)"
     [ -n "$out" ]
   '
 }
 
-# bats test_tags=guard,pr2,xfail
+# bats test_tags=guard,pr2
 @test "PR#2: mix of custom path and regular commands" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
@@ -203,7 +203,7 @@ setup_file() {
   '
 }
 
-# bats test_tags=guard,pr2,xfail
+# bats test_tags=guard,pr2
 @test "PR#2: custom path with nonexistent file fails" {
   # shellcheck disable=SC2016
   run -"$CG_ERR_NOT_FOUND" bash --noprofile -lc '
@@ -212,17 +212,15 @@ setup_file() {
   [[ "$output" == *"unable to resolve"* ]]
 }
 
-# bats test_tags=guard,pr2,xfail
+# bats test_tags=guard,pr2
 @test "PR#2: custom path with non-executable fails" {
-  # shellcheck disable=SC2016
-  run -"$CG_ERR_NOT_FOUND" bash --noprofile -lc '
-    tmpfile=$(mktemp)
-    guard "notexec=$tmpfile"
-    rm -f "$tmpfile"
-  '
+  local tmpfile
+  tmpfile=$(mktemp)
+  run -"$CG_ERR_NOT_FOUND" bash --noprofile -lc "guard 'notexec=${tmpfile}'"
+  rm -f "$tmpfile"
 }
 
-# bats test_tags=guard,pr2,xfail
+# bats test_tags=guard,pr2
 @test "PR#2: custom path with relative path fails" {
   # shellcheck disable=SC2016
   run -"$CG_ERR_NOT_FOUND" bash --noprofile -lc '
@@ -231,7 +229,7 @@ setup_file() {
   [[ "$output" == *"absolute path"* ]]
 }
 
-# bats test_tags=guard,pr2,xfail
+# bats test_tags=guard,pr2
 @test "PR#2: invalid syntax in cmd=path fails gracefully" {
   # shellcheck disable=SC2016
   run -"$CG_ERR_INVALID_NAME" bash --noprofile -lc '

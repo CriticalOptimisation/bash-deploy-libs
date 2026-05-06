@@ -89,12 +89,32 @@ guard() {
         return 0
     fi
 
-    # First pass: validate all commands
-    local cmd full_path
+    # First pass: validate all tokens (plain names and name=path pairs)
+    local cmd full_path name fixed_path
     local -a valid_commands=()
     local -a full_paths=()
 
     for cmd in "${commands[@]}"; do
+        if [[ "$cmd" == *=* ]]; then
+            name="${cmd%%=*}"
+            fixed_path="${cmd#*=}"
+            if ! [[ "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+                echo "[ERROR] guard: invalid command identifier '$name'." >&2
+                return "$CG_ERR_INVALID_NAME"
+            fi
+            if [[ "${fixed_path:0:1}" != "/" ]]; then
+                echo "[ERROR] guard: '$name': path must be an absolute path." >&2
+                [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
+            fi
+            if [[ ! -x "$fixed_path" ]]; then
+                echo "[ERROR] guard: unable to resolve full path for '$name'. Use the full path." >&2
+                [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
+            fi
+            valid_commands+=("$name")
+            full_paths+=("$fixed_path")
+            continue
+        fi
+
         if ! [[ "$cmd" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
             echo "[ERROR] guard: invalid command identifier '$cmd'." >&2
             return "$CG_ERR_INVALID_NAME"
