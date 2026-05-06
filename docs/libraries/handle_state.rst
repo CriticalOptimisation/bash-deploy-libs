@@ -85,7 +85,8 @@ Behavior:
 Errors:
 
 - ``HS_ERR_STATE_VAR_UNINITIALIZED=7``: missing ``-S <statevar>``.
-- ``HS_ERR_MULTIPLE_STATE_INPUTS=3``: ``-S`` was given more than once.
+- ``HS_ERR_MULTIPLE_STATE_INPUTS=3``: ``-S`` was given more than once; repeating
+  the option is not allowed even when both occurrences name the same variable.
 - ``HS_ERR_INVALID_VAR_NAME=5``: invalid state variable name or invalid
   requested variable name.
 - ``HS_ERR_RESERVED_VAR_NAME=1``: requested name starts with the reserved
@@ -126,7 +127,8 @@ Behavior:
 Errors:
 
 - ``HS_ERR_STATE_VAR_UNINITIALIZED=7``: missing ``-S <statevar>``.
-- ``HS_ERR_MULTIPLE_STATE_INPUTS=3``: ``-S`` was given more than once.
+- ``HS_ERR_MULTIPLE_STATE_INPUTS=3``: ``-S`` was given more than once; repeating
+  the option is not allowed even when both occurrences name the same variable.
 - ``HS_ERR_INVALID_VAR_NAME=5``: invalid state variable name or invalid
   requested destroy name.
 - ``HS_ERR_VAR_NAME_NOT_IN_STATE=6``: requested destroy name is not present in
@@ -248,7 +250,8 @@ implicit restore snippet and returns success.
 Errors:
 
 - ``HS_ERR_MISSING_ARGUMENT=8``: no state variable name was supplied at all.
-- ``HS_ERR_MULTIPLE_STATE_INPUTS=3``: ``-S`` was given more than once.
+- ``HS_ERR_MULTIPLE_STATE_INPUTS=3``: ``-S`` was given more than once; repeating
+  the option is not allowed even when both occurrences name the same variable.
 - ``HS_ERR_INVALID_VAR_NAME=5``: invalid state variable name or invalid
   requested restore name.
 - ``HS_ERR_STATE_VAR_UNINITIALIZED=7``: missing ``-S <statevar>``, or the named

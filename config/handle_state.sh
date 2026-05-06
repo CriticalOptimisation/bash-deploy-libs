@@ -54,7 +54,8 @@ readonly HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12
 #        mistaken for a variable unless `--` is used.
 # Errors:
 #   - `HS_ERR_MISSING_ARGUMENT` if no state variable name is supplied at all.
-#   - `HS_ERR_MULTIPLE_STATE_INPUTS` if `-S` is given more than once.
+#   - `HS_ERR_MULTIPLE_STATE_INPUTS` if `-S` is given more than once, even with
+#     the same variable name.
 #   - `HS_ERR_INVALID_VAR_NAME` if the state variable name or a requested
 #     persist variable name is not a valid Bash identifier.
 #   - `HS_ERR_STATE_VAR_UNINITIALIZED` if `-S <statevar>` is missing.
@@ -101,6 +102,7 @@ hs_persist_state() {
         # is absent from the output. Splitting declare+assign would cause
         # lp_snapshot to appear in its own snapshot; the combined form is
         # intentional here.
+        : "${list_reserved}"
         # shellcheck disable=SC2155
         local lp_snapshot="$(local -p)"
         _hs_print_reserved_names "$lp_snapshot" list_reserved
@@ -209,7 +211,8 @@ _hs_ps_body() {
 #        for a variable unless `--` is used.
 # Errors:
 #   - `HS_ERR_STATE_VAR_UNINITIALIZED` if `-S <statevar>` is missing.
-#   - `HS_ERR_MULTIPLE_STATE_INPUTS` if `-S` is given more than once.
+#   - `HS_ERR_MULTIPLE_STATE_INPUTS` if `-S` is given more than once, even with
+#     the same variable name.
 #   - `HS_ERR_INVALID_VAR_NAME` if the state variable name or a requested
 #     destroy variable name is not a valid Bash identifier.
 #   - `HS_ERR_VAR_NAME_NOT_IN_STATE` if a requested destroy variable is not
@@ -243,6 +246,7 @@ hs_destroy_state() {
         # is absent from the output. Splitting declare+assign would cause
         # lp_snapshot to appear in its own snapshot; the combined form is
         # intentional here.
+        : "${list_reserved}"
         # shellcheck disable=SC2155
         local lp_snapshot="$(local -p)"
         _hs_print_reserved_names "$lp_snapshot" list_reserved
@@ -335,7 +339,8 @@ _hs_ds_body() {
 #        `--` is used.
 # Errors:
 #   - `HS_ERR_MISSING_ARGUMENT` if no state variable name is supplied at all.
-#   - `HS_ERR_MULTIPLE_STATE_INPUTS` if `-S` is given more than once.
+#   - `HS_ERR_MULTIPLE_STATE_INPUTS` if `-S` is given more than once, even with
+#     the same variable name.
 #   - `HS_ERR_INVALID_VAR_NAME` if the state variable name or a requested
 #     restore variable name is not a valid Bash identifier.
 #   - `HS_ERR_STATE_VAR_UNINITIALIZED` if `-S <statevar>` is missing, or if
@@ -653,6 +658,10 @@ _hs_resolve_state_inputs() {
                           $'\n'"$__hs_ri_reserved_list"$'\n' == *$'\n'"$OPTARG"$'\n'* ]]; then
                         echo "[ERROR] ${__hs_ri_caller}: state variable name '$OPTARG' is reserved; choose a different variable name." >&2
                         return "$HS_ERR_RESERVED_VAR_NAME"
+                    fi
+                    if [[ -n "${__hs_processed[state]-}" ]]; then
+                        echo "[ERROR] ${__hs_ri_caller}: option -S may only be given once." >&2
+                        return "$HS_ERR_MULTIPLE_STATE_INPUTS"
                     fi
                     __hs_processed["state"]="$OPTARG"
                     __hs_ri_last_opt_sz=${#__hs_remaining[@]}

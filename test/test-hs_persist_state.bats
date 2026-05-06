@@ -27,6 +27,7 @@ hs2_corrupt_state() {
 @test "_hs_resolve_state_inputs rejects caller that declared __hs_remaining as a non-array" {
   # shellcheck disable=SC2329
   f() {
+    # shellcheck disable=SC2178
     local __hs_remaining=""
     local -A __hs_processed=()
     _hs_resolve_state_inputs my_helper qS: -S state foo
@@ -255,6 +256,7 @@ hs2_corrupt_state() {
 @test "hs_persist_state rejects variable names starting with the __hs_ reserved prefix" {
   # shellcheck disable=SC2329
   f() {
+    # shellcheck disable=SC2178
     local __hs_remaining="some_value"
     local state=""
     hs_persist_state -S state -- __hs_remaining
@@ -935,6 +937,66 @@ hs2_corrupt_state() {
   [[ "$stderr" == *"reserved"* ]]
 }
 
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs rejects a repeated -S option" {
+  # shellcheck disable=SC2329
+  f() {
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: -S var1 -S var2
+  }
+  run -"$HS_ERR_MULTIPLE_STATE_INPUTS" --separate-stderr f
+  [[ "$stderr" == *"-S"* ]]
+}
+
+# bats test_tags=hs_resolve_state_inputs
+@test "_hs_resolve_state_inputs rejects an identically repeated -S option" {
+  # shellcheck disable=SC2329
+  f() {
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    _hs_resolve_state_inputs my_helper qS: -S state -S state
+  }
+  run -"$HS_ERR_MULTIPLE_STATE_INPUTS" --separate-stderr f
+  [[ "$stderr" == *"-S"* ]]
+}
+
+# bats test_tags=hs_persist_state
+@test "hs_persist_state rejects adjacent repeated -S options" {
+  # shellcheck disable=SC2329
+  f() {
+    local state1="" state2=""
+    local myvar="hello"
+    : "$myvar"
+    hs_persist_state -S state1 -S state2 -- myvar
+  }
+  run -"$HS_ERR_MULTIPLE_STATE_INPUTS" --separate-stderr f
+  [[ "$stderr" == *"-S"* ]]
+}
+
+# bats test_tags=hs_destroy_state
+@test "hs_destroy_state rejects repeated -S options spaced by a non-option word" {
+  # shellcheck disable=SC2329
+  f() {
+    local state1="" state2=""
+    hs_destroy_state -S state1 extra_arg -S state2 -- myvar
+  }
+  run -"$HS_ERR_MULTIPLE_STATE_INPUTS" --separate-stderr f
+  [[ "$stderr" == *"-S"* ]]
+}
+
+# bats test_tags=hs_read_persisted_state
+@test "hs_read_persisted_state rejects repeated -S options spaced by -q" {
+  # shellcheck disable=SC2329
+  f() {
+    local state1="" state2=""
+    : "$state1" "$state2"
+    hs_read_persisted_state -S state1 -q -S state2
+  }
+  run -"$HS_ERR_MULTIPLE_STATE_INPUTS" --separate-stderr f
+  [[ "$stderr" == *"-S"* ]]
+}
+
 # ---------------------------------------------------------------------------
 # hs_persist_state
 
@@ -1412,6 +1474,7 @@ hs2_corrupt_state() {
     local temp=""
     init() { local foo=one bar=two; hs_persist_state -S "$1" -- foo bar || return $?; }
     init temp || return $?
+    # shellcheck disable=SC2178
     local __hs_processed="$temp"
     hs_destroy_state -S __hs_processed -- foo
   }
