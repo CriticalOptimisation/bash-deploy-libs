@@ -41,23 +41,29 @@ _cg_resolve_command_path() {
 #   Defines a function named <command> that shadows the external command and
 #   dispatches to it by full path with all arguments forwarded.
 # Usage:
-#   guard [-q] [--] [command ...]
+#   guard [-q] [--] [token ...]
 # Options:
 #   -q  Quiet mode: suppress warnings when guard is called without any commands
-#   --  End of options, start of command list
-# Examples:
-#   guard uname
-#   guard uname date hostname
-#   guard -q  # no warning
-#   guard -- uname -login  # Treats "-login" as a command name
+#   --  End of options, start of token list
+# Tokens:
+#   Each token is either a plain command name or a name=path pair.
+#   Plain name:  guard uname             — resolved via restricted PATH (command -pv)
+#   name=path:   guard uname=/usr/bin/uname — pinned to the given absolute path,
+#                bypassing PATH resolution. name must be a valid Bash identifier;
+#                path must be absolute and point to an existing executable file.
+#   Both forms may be mixed: guard "uname=/usr/bin/uname" date hostname
 # Errors:
-#   CG_ERR_INVALID_NAME, CG_ERR_NOT_FOUND
+#   - CG_ERR_INVALID_NAME if a name is not a valid Bash identifier, or an unknown
+#     option is passed.
+#   - CG_ERR_NOT_FOUND if a plain command cannot be resolved, or a name=path token
+#     has a non-absolute, non-existent, or non-executable path.
 # Notes:
-#   Uses a restricted PATH ("/usr/bin:/bin") in a subshell to resolve the command.
-#   This avoids resolving through user-controlled PATH entries.
-#
-#   This function uses eval to define the shadowing function; input is validated
-#   to be a legal Bash identifier before eval is invoked.
+#   Validation is all-or-nothing: no wrapper functions are created unless every
+#   token is valid.
+#   Uses a restricted PATH in a subshell to resolve plain names, avoiding
+#   user-controlled PATH entries.
+#   Uses eval to define the shadowing function; input is validated to be a legal
+#   Bash identifier before eval is invoked.
 guard() {
     local quiet=false
     local -a commands=()
