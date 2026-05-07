@@ -219,7 +219,7 @@ guard() {
             fi
             if [[ ! -x "$token" ]]; then
                 echo "[ERROR] guard: unable to resolve full path for '$token'. Use the full path." >&2
-                [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
+                return "$CG_ERR_NOT_FOUND"
             fi
             valid_fnames+=("$fname")
             valid_paths+=("$token")
@@ -238,13 +238,13 @@ guard() {
                 # Absolute path — verbatim
                 if [[ ! -x "$rhs" ]]; then
                     echo "[ERROR] guard: unable to resolve full path for '$fname'. Use the full path." >&2
-                    [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
+                    return "$CG_ERR_NOT_FOUND"
                 fi
                 full_path="$rhs"
             elif [[ "$rhs" == */* ]]; then
                 # Contains / but not absolute
                 echo "[ERROR] guard: '$rhs' must be an absolute path." >&2
-                [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_SYNTAX_ERROR" || return "$CG_ERR_SYNTAX_ERROR"
+                return "$CG_ERR_SYNTAX_ERROR"
             else
                 # Plain name — resolve via resolver
                 full_path="$("$resolver" "${forward_opts[@]}" "$rhs")" || {
@@ -255,7 +255,7 @@ guard() {
                     else
                         echo "[ERROR] guard: unable to resolve full path for '$rhs'. Use the full path." >&2
                     fi
-                    [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
+                    return "$CG_ERR_NOT_FOUND"
                 }
             fi
             valid_fnames+=("$fname")
@@ -276,7 +276,7 @@ guard() {
                 else
                     echo "[ERROR] guard: unable to resolve full path for '$token'. Use the full path." >&2
                 fi
-                [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
+                return "$CG_ERR_NOT_FOUND"
             }
             fname="${prefix}${token}"
             valid_fnames+=("$fname")
