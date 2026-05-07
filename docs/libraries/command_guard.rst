@@ -157,8 +157,10 @@ options; pass all arguments directly to ``guard``.
 - Returns ``0`` and prints the absolute path on success.
 - Returns ``CG_ERR_NOT_FOUND`` on failure (also prints the raw ``command -pv``
   output, which may be ``exec`` for builtins or ``alias …`` for aliases; guard
-  uses this to produce specific diagnostics). Also returned when called with
-  more than one argument.
+  uses this to produce specific diagnostics).
+- Returns ``CG_ERR_INVALID_NAME`` with a diagnostic message when called with
+  more than one argument (structural misuse; guard never passes options to this
+  resolver).
 - Returns ``CG_ERR_MISSING_ARGUMENT`` when called with no arguments.
 
 cg_path_resolver

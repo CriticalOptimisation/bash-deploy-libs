@@ -16,7 +16,7 @@ readonly CG_ERR_MISSING_ARGUMENT=4
 _CG_DEFAULT_PATH="$(unset PATH; "$(command -pv bash)" -c 'echo "$PATH"')"
 readonly _CG_DEFAULT_PATH
 
-# --- Internal helpers ---------------------------------------------------------
+# --- Public resolvers ---------------------------------------------------------
 
 # Function:
 #   cg_safe_resolver
@@ -30,7 +30,10 @@ readonly _CG_DEFAULT_PATH
 #   cg_safe_resolver <cmd-name>
 cg_safe_resolver() {
     [[ $# -eq 0 ]] && return "$CG_ERR_MISSING_ARGUMENT"
-    [[ $# -ne 1 ]] && return "$CG_ERR_NOT_FOUND"
+    if [[ $# -ne 1 ]]; then
+        echo "[ERROR] cg_safe_resolver: accepts exactly one argument (command name); use -r with cg_path_resolver to pass options." >&2
+        return "$CG_ERR_INVALID_NAME"
+    fi
     local cmd="$1"
     local resolved
     resolved="$(command -pv -- "$cmd")" || return "$CG_ERR_NOT_FOUND"
