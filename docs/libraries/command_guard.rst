@@ -9,10 +9,11 @@ Location
 Purpose
 -------
 
-This library provides a single entry point, `guard`, that defines a Bash function
-named after an external command. The generated function shadows the external
-command and dispatches to it by full path, ensuring command resolution is not
-affected by untrusted PATH prefixes.
+This library provides a single entry point, ``cg_guard``, that defines a Bash
+function named after an external command. The generated function shadows the
+external command and dispatches to it by full path, ensuring command resolution
+is not affected by untrusted PATH prefixes. A short alias ``guard`` is defined
+automatically unless a function named ``guard`` already exists at source time.
 
 Additionally, `cg_safe_run` provides function-scoped PATH restriction: any
 unguarded external command invoked inside the called function produces a hard
@@ -27,7 +28,7 @@ Quick Start
    # Source once in the main script of your library
    source "$(dirname "$0")/config/command_guard.sh"
 
-   guard ls
+   cg_guard ls
    ls -l
 
 PATH-safe entry point:
@@ -37,7 +38,7 @@ PATH-safe entry point:
    source "$(dirname "$0")/config/command_guard.sh"
 
    my_main() {
-       guard uname date
+       cg_guard uname date
        uname -s
        date -u
    }
@@ -47,16 +48,17 @@ PATH-safe entry point:
 Public API
 ----------
 
-guard
-~~~~~
+cg_guard
+~~~~~~~~
 
 Defines a function named ``<command>`` that forwards to the external command by
-full path.
+full path. Also available as ``guard`` (short alias, defined only if unclaimed —
+see *guard alias* below).
 
-- Usage: ``guard [-q] [-p <prefix>] [-r <resolver>] [resolver-opts] [--] [token ...]``
+- Usage: ``cg_guard [-q] [-p <prefix>] [-r <resolver>] [resolver-opts] [--] [token ...]``
 - **Guard options must precede resolver options.** The recommended order is
   ``-p prefix -r resolver resolver-opts tokens``, but ``-r`` and ``-p`` may be
-  swapped. All ``-X`` flags that guard does not recognise are forwarded to the
+  swapped. All ``-X`` flags that ``cg_guard`` does not recognise are forwarded to the
   active resolver (see *Resolver Protocol*).
 - Options:
 
@@ -117,6 +119,20 @@ full path.
 - Validation is all-or-nothing: no wrapper functions are created unless every
   token passes validation.
 
+guard alias
+~~~~~~~~~~~
+
+After ``cg_guard`` is defined, the library defines ``guard`` as a short alias:
+
+.. code-block:: bash
+
+   guard() { cg_guard "$@"; }
+
+This alias is installed only if no function named ``guard`` already exists at
+source time (same pattern as ``command_not_found_handle``). Applications that
+define their own ``guard`` function before sourcing the library will not have it
+overwritten. Both names are fully supported; ``cg_guard`` is the canonical name.
+
 cg_safe_run
 ~~~~~~~~~~~
 
@@ -137,7 +153,7 @@ entire call stack unconditionally.
     an unguarded external command is attempted inside ``fn``.
   - Whatever ``fn`` returns on success.
 
-- Use ``cg_unsafe`` to wrap library-initialization code (``guard`` calls) inside
+- Use ``cg_unsafe`` to wrap library-initialization code (``cg_guard`` calls) inside
   a ``cg_safe_run`` context.
 
 cg_unsafe
@@ -147,7 +163,7 @@ Executes a function with a writable local PATH set to the compiled-in Bash
 default (discovered once at source time via a subshell; never hardcoded).
 
 - Usage: ``cg_unsafe <fn> [args...]``
-- Intended for wrapping library ``guard`` calls that must run inside a
+- Intended for wrapping library ``cg_guard`` calls that must run inside a
   ``cg_safe_run`` context. Because ``local PATH`` in the callee creates a
   new binding that shadows the ``local -r PATH`` from ``cg_safe_run``, no
   error occurs.
@@ -156,19 +172,19 @@ default (discovered once at source time via a subshell; never hardcoded).
 cg_safe_resolver
 ~~~~~~~~~~~~~~~~
 
-The default resolver used by ``guard``. Resolves a command name to its absolute
+The default resolver used by ``cg_guard``. Resolves a command name to its absolute
 path using ``command -pv`` (Bash builtin, POSIX default PATH). Accepts no
-options; pass all arguments directly to ``guard``.
+options; pass all arguments directly to ``cg_guard``.
 
 - Protocol: ``cg_safe_resolver <cmd-name>``
   (see *Resolver Protocol* for the calling convention).
 - Returns ``0`` and prints the absolute path on success.
 - Returns ``CG_ERR_NOT_FOUND`` on failure (also prints the raw ``command -pv``
-  output, which may be ``exec`` for builtins or ``alias …`` for aliases; guard
-  uses this to produce specific diagnostics).
+  output, which may be ``exec`` for builtins or ``alias …`` for aliases;
+  ``cg_guard`` uses this to produce specific diagnostics).
 - Returns ``CG_ERR_SYNTAX_ERROR`` with a diagnostic message when called with
-  more than one argument (structural misuse; guard never passes options to this
-  resolver).
+  more than one argument (structural misuse; ``cg_guard`` never passes options
+  to this resolver).
 - Returns ``CG_ERR_MISSING_ARGUMENT`` when called with no arguments.
 
 cg_path_resolver
@@ -200,20 +216,20 @@ Example — guard a snap binary:
 
 .. code-block:: bash
 
-   guard -r cg_path_resolver -d /snap/bin snapd
+   cg_guard -r cg_path_resolver -d /snap/bin snapd
 
 Example — snap binary plus standard commands in one call:
 
 .. code-block:: bash
 
    # -s appends the safe path after /snap/bin, so standard commands are also found:
-   guard -r cg_path_resolver -d /snap/bin -s snapd uname date
+   cg_guard -r cg_path_resolver -d /snap/bin -s snapd uname date
 
 Example — safe path searched first, custom directory as fallback:
 
 .. code-block:: bash
 
-   guard -r cg_path_resolver -s -d /opt/myapp/bin uname myapp
+   cg_guard -r cg_path_resolver -s -d /opt/myapp/bin uname myapp
 
 cg_command_not_found_handler
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -251,13 +267,15 @@ calling convention is:
 - All preceding arguments are options specific to the resolver.
 - On success: print the resolved absolute path to stdout; return 0.
 - On failure: return non-zero. The function **should** print the raw
-  ``command -v`` (or equivalent) output even on failure, so that guard can
-  distinguish builtins, aliases, and truly missing commands.
+  ``command -v`` (or equivalent) output even on failure, so that ``cg_guard``
+  can distinguish builtins, aliases, and truly missing commands.
 - **Required contract**: when called with no command name (all arguments were
   consumed as option parameters), the resolver **must** return
-  ``CG_ERR_MISSING_ARGUMENT``. Guard uses this to determine which forwarded
-  options take an argument, via a probe call (see ``guard`` option forwarding).
-- Resolvers must be **pure** (no side effects). Guard discards probe-call results.
+  ``CG_ERR_MISSING_ARGUMENT``. ``cg_guard`` uses this to determine which
+  forwarded options take an argument, via a probe call (see ``cg_guard`` option
+  forwarding).
+- Resolvers must be **pure** (no side effects). ``cg_guard`` discards probe-call
+  results.
 
 Custom resolver example:
 
@@ -271,7 +289,7 @@ Custom resolver example:
        [[ -x "$resolved" ]] || return "$CG_ERR_NOT_FOUND"
    }
 
-   guard -r my_resolver mytool
+   cg_guard -r my_resolver mytool
 
 PATH Enforcement
 ----------------
@@ -291,12 +309,12 @@ or any amount of function nesting.
 Guarded commands are unaffected because their wrapper functions dispatch by
 absolute path and do not use PATH.
 
-Library authors should wrap their ``guard`` initialisation in ``cg_unsafe``:
+Library authors should wrap their ``cg_guard`` initialisation in ``cg_unsafe``:
 
 .. code-block:: bash
 
    my_lib_init() {
-       cg_unsafe guard uname date hostname
+       cg_unsafe cg_guard uname date hostname
        # ... other initialisation
    }
 
@@ -337,8 +355,8 @@ Bash builtin restricted default PATH independently of the ``$PATH`` variable.
 caller-supplied directories. It does not fall back to the POSIX default PATH;
 list all required directories explicitly.
 
-It is an error to call ``guard`` on aliases and shell builtins. An error message
-is printed to stderr and the script is aborted.
+It is an error to call ``cg_guard`` on aliases and shell builtins. An error
+message is printed to stderr and the script is aborted.
 
 Subshells will be exited but the overall script may continue to run. Avoid
 constructs that generate subshells in favour of returning results via
@@ -393,6 +411,10 @@ Known Limitations
   installs it only if unclaimed; applications that need their own handler should
   define it before sourcing the library, or chain via
   ``cg_command_not_found_handler``.
+- The ``guard`` alias is a single global resource. The library defines it only
+  if unclaimed; applications that define their own ``guard`` function before
+  sourcing the library will keep their version. Use ``cg_guard`` directly when
+  ``guard`` may be claimed.
 
 Examples
 --------
@@ -402,34 +424,34 @@ Guarding standard commands:
 .. code-block:: bash
 
    source "$(dirname "$0")/config/command_guard.sh"
-   guard uname date hostname
+   cg_guard uname date hostname
    uname -s
 
 Guarding with an explicit path:
 
 .. code-block:: bash
 
-   guard "myuname=/usr/bin/uname"
+   cg_guard "myuname=/usr/bin/uname"
    myuname -s
 
 Guarding with a prefix (library namespace isolation):
 
 .. code-block:: bash
 
-   guard -p mylib_ uname date
+   cg_guard -p mylib_ uname date
    mylib_uname -s
 
 Guarding a snap binary by absolute path token:
 
 .. code-block:: bash
 
-   guard /snap/bin/snapd
+   cg_guard /snap/bin/snapd
 
 Guarding a binary whose filename is not a valid identifier:
 
 .. code-block:: bash
 
-   guard "bash5=/usr/bin/bash5.0"
+   cg_guard "bash5=/usr/bin/bash5.0"
 
 Full ``cg_safe_run`` pattern with library initialisation:
 
@@ -438,7 +460,7 @@ Full ``cg_safe_run`` pattern with library initialisation:
    source "$(dirname "$0")/config/command_guard.sh"
 
    _my_init() {
-       cg_unsafe guard uname date
+       cg_unsafe cg_guard uname date
    }
 
    _my_main() {

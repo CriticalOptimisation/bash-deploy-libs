@@ -28,6 +28,29 @@ setup() {
 }
 
 # bats test_tags=guard
+@test "cg_guard is defined after sourcing" {
+  [[ "$(type -t cg_guard)" == "function" ]]
+}
+
+# bats test_tags=guard
+@test "guard alias is defined after sourcing when unclaimed" {
+  [[ "$(type -t guard)" == "function" ]]
+}
+
+# bats test_tags=guard
+@test "guard alias is not installed when guard is already defined" {
+  # Genuine fresh-shell test: guard must be defined before the library is sourced.
+  # The sentinel prevents re-sourcing in the BATS process, so run bash is required.
+  # shellcheck disable=SC2016  # $LIB is exported; it expands inside the subprocess, not here
+  run -0 bash --noprofile --norc -c '
+    guard() { echo "MY_GUARD"; }
+    source "$LIB"
+    guard
+  '
+  [[ "$output" == "MY_GUARD" ]]
+}
+
+# bats test_tags=guard
 @test "guard defines a function that shadows the command" {
   f() {
     guard uname
@@ -66,14 +89,14 @@ setup() {
     guard myalias
   }
   run -"$CG_ERR_NOT_FOUND" --separate-stderr f
-  [[ "$stderr" == "[BUG] guard: 'myalias' is an alias"* ]]
+  [[ "$stderr" == "[BUG] cg_guard: 'myalias' is an alias"* ]]
 }
 
 # bats test_tags=guard
 @test "guard is not fooled by a builtin" {
   f() { guard exec; }
   run -"$CG_ERR_NOT_FOUND" --separate-stderr f
-  [[ "$stderr" == "[BUG] guard: 'exec' is a builtin"* ]]
+  [[ "$stderr" == "[BUG] cg_guard: 'exec' is a builtin"* ]]
 }
 
 # bats test_tags=guard
@@ -88,7 +111,7 @@ setup() {
   }
   run -"$CG_ERR_NOT_FOUND" --separate-stderr f
   [[ "$output" == *"after"* ]]
-  [[ "$stderr" == "[BUG] guard: 'myalias' is an alias"* ]]
+  [[ "$stderr" == "[BUG] cg_guard: 'myalias' is an alias"* ]]
 }
 
 # bats test_tags=guard
@@ -104,7 +127,7 @@ setup() {
   run -"$CG_ERR_NOT_FOUND" --separate-stderr f
   [[ "$output" == *"subshell=3"* ]]
   [[ "$output" != *"inside"* ]]
-  [[ "$stderr" == "[BUG] guard: 'myalias' is an alias"* ]]
+  [[ "$stderr" == "[BUG] cg_guard: 'myalias' is an alias"* ]]
 }
 
 # --- Multiple commands support ---
@@ -132,6 +155,7 @@ setup() {
     guard uname echo
     local out1 out2
     out1="$(uname)"
+    # shellcheck disable=SC2116  # echo is a guarded wrapper here, not the builtin
     out2="$(echo test)"
     [[ -n "$out1" ]]
     [[ "$out2" == "test" ]]
@@ -147,7 +171,7 @@ setup() {
     type -t uname
   }
   run f
-  [[ "${lines[0]}" == *"[ERROR] guard: unable to resolve full path"* ]]
+  [[ "${lines[0]}" == *"[ERROR] cg_guard: unable to resolve full path"* ]]
   [[ "${lines[1]}" == "EXIT_CODE:3" ]]
   [[ "${lines[2]}" == "file" ]]
 }
@@ -283,7 +307,7 @@ setup() {
     echo "exit:$?"
   }
   run -0 --separate-stderr f
-  [[ "$stderr" == *"[WARNING] guard: non-guarded command"* ]]
+  [[ "$stderr" == *"[WARNING] cg_guard: non-guarded command"* ]]
   [[ "$output" == *"exit:127"* ]]
 }
 
@@ -296,7 +320,7 @@ setup() {
     echo "exit:$?"
   }
   run -0 --separate-stderr f
-  [[ "$stderr" == *"[WARNING] Suggestion: guard uname="* ]]
+  [[ "$stderr" == *"[WARNING] Suggestion: cg_guard uname="* ]]
 }
 
 # bats test_tags=guard,cg_safe_run
@@ -315,6 +339,7 @@ setup() {
 @test "command_not_found_handle not installed when already defined" {
   # Genuine fresh-shell test: handler must be defined before the library is sourced.
   # The sentinel prevents re-sourcing in the BATS process, so run bash is required.
+  # shellcheck disable=SC2016  # $LIB is exported; it expands inside the subprocess, not here
   run -0 bash --noprofile --norc -c '
     command_not_found_handle() { echo "CUSTOM_HANDLER"; return 127; }
     source "$LIB"
@@ -337,14 +362,14 @@ setup() {
   }
   run -0 --separate-stderr f
   [[ "$output" == *"APP_HANDLER:nonexistent_cmd_cg_test_xyz"* ]]
-  [[ "$stderr" == *"[WARNING] guard: non-guarded command"* ]]
+  [[ "$stderr" == *"[WARNING] cg_guard: non-guarded command"* ]]
 }
 
 # bats test_tags=guard,cg_safe_run
 @test "guard -r resolver uses provided function for path resolution" {
   f() {
     my_resolver() {
-      local cmd="${@: -1}"
+      local cmd="${*: -1}"
       [[ "$cmd" == "uname" ]] || return 3
       printf "/usr/bin/uname"
     }
@@ -396,21 +421,21 @@ setup() {
 @test "guard rejects duplicate -q" {
   f() { guard -q -q uname; }
   run -"$CG_ERR_SYNTAX_ERROR" --separate-stderr f
-  [[ "$stderr" == *"[ERROR] guard: option -q specified more than once."* ]]
+  [[ "$stderr" == *"[ERROR] cg_guard: option -q specified more than once."* ]]
 }
 
 # bats test_tags=guard,options
 @test "guard rejects duplicate -r" {
   f() { guard -r cg_safe_resolver -r cg_safe_resolver uname; }
   run -"$CG_ERR_SYNTAX_ERROR" --separate-stderr f
-  [[ "$stderr" == *"[ERROR] guard: option -r specified more than once."* ]]
+  [[ "$stderr" == *"[ERROR] cg_guard: option -r specified more than once."* ]]
 }
 
 # bats test_tags=guard,options
 @test "guard rejects duplicate -p" {
   f() { guard -p foo_ -p bar_ uname; }
   run -"$CG_ERR_SYNTAX_ERROR" --separate-stderr f
-  [[ "$stderr" == *"[ERROR] guard: option -p specified more than once."* ]]
+  [[ "$stderr" == *"[ERROR] cg_guard: option -p specified more than once."* ]]
 }
 
 # --- Zero commands and options support ---
@@ -419,7 +444,7 @@ setup() {
 @test "guard with zero commands emits warning and returns 0" {
   f() { guard; }
   run -0 --separate-stderr f
-  [[ "$stderr" == *"[WARNING] guard: no commands specified."* ]]
+  [[ "$stderr" == *"[WARNING] cg_guard: no commands specified."* ]]
 }
 
 # bats test_tags=guard,pr4
@@ -538,6 +563,7 @@ setup() {
 # bats test_tags=guard,envtest
 @test "envtest: local VAR fails when variable is globally readonly" {
   f() {
+    # shellcheck disable=SC2034  # readonly is the point; inner() tries local redeclaration
     readonly GLOBALVAR="fixed"
     inner() { local GLOBALVAR="new_value"; }
     inner

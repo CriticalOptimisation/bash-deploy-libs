@@ -121,10 +121,10 @@ cg_command_not_found_handler() {
         local resolved
         resolved="$(command -pv "$cmd" 2>/dev/null)"
         if [[ -n "$resolved" ]]; then
-            echo "[WARNING] guard: non-guarded command: $cmd" >&2
-            echo "[WARNING] Suggestion: guard ${cmd}=${resolved}" >&2
+            echo "[WARNING] cg_guard: non-guarded command: $cmd" >&2
+            echo "[WARNING] Suggestion: cg_guard ${cmd}=${resolved}" >&2
         else
-            echo "[WARNING] guard: non-guarded command not found: $cmd" >&2
+            echo "[WARNING] cg_guard: non-guarded command not found: $cmd" >&2
         fi
     fi
     return 127
@@ -136,18 +136,18 @@ if ! declare -f command_not_found_handle >/dev/null 2>&1; then
 fi
 
 # Function:
-#   guard
+#   cg_guard
 # Description:
 #   Defines a wrapper function for each token that dispatches to the
 #   resolved full path with all arguments forwarded.
 # Usage:
-#   guard [-q] [-p <prefix>] [-r <resolver>] [resolver-opts] [--] [token ...]
+#   cg_guard [-q] [-p <prefix>] [-r <resolver>] [resolver-opts] [--] [token ...]
 # Options:
 #   -q          Quiet: suppress warnings for zero tokens.
 #   -p prefix   Prepend prefix to generated function names for plain-name
 #               and /abs/path tokens. Has no effect on fname=... tokens.
 #   -r resolver Use resolver instead of cg_safe_resolver. All unrecognised
-#               option flags are forwarded to the resolver; guard probes the
+#               option flags are forwarded to the resolver; cg_guard probes the
 #               resolver to determine which flags take an argument.
 #               Guard options must precede resolver options.
 #   --          End of options; required when a token name starts with -.
@@ -158,13 +158,13 @@ fi
 #   name             function name = <prefix>name, resolved via resolver
 # Errors:
 #   CG_ERR_INVALID_NAME      invalid Bash identifier in a token
-#   CG_ERR_MISSING_ARGUMENT  guard option -r or -p is missing its argument
+#   CG_ERR_MISSING_ARGUMENT  cg_guard option -r or -p is missing its argument
 #   CG_ERR_NOT_FOUND         command not found or path invalid/non-executable
 #   CG_ERR_SYNTAX_ERROR      relative path used where an absolute path is required
 # Notes:
 #   Validation is all-or-nothing: no wrapper is created unless every token
 #   passes validation.
-guard() {
+cg_guard() {
     local quiet=false resolver="cg_safe_resolver" prefix=""
     local -a forward_opts=()
     local opt_q=false opt_r=false opt_p=false
@@ -175,11 +175,11 @@ guard() {
     OPTIND=1
     while getopts ":qr:p:" opt; do
         case $opt in
-            q) [[ "$opt_q" == true ]] && { echo "[ERROR] guard: option -q specified more than once." >&2; return "$CG_ERR_SYNTAX_ERROR"; }
+            q) [[ "$opt_q" == true ]] && { echo "[ERROR] cg_guard: option -q specified more than once." >&2; return "$CG_ERR_SYNTAX_ERROR"; }
                opt_q=true; quiet=true ;;
-            r) [[ "$opt_r" == true ]] && { echo "[ERROR] guard: option -r specified more than once." >&2; return "$CG_ERR_SYNTAX_ERROR"; }
+            r) [[ "$opt_r" == true ]] && { echo "[ERROR] cg_guard: option -r specified more than once." >&2; return "$CG_ERR_SYNTAX_ERROR"; }
                opt_r=true; resolver="$OPTARG" ;;
-            p) [[ "$opt_p" == true ]] && { echo "[ERROR] guard: option -p specified more than once." >&2; return "$CG_ERR_SYNTAX_ERROR"; }
+            p) [[ "$opt_p" == true ]] && { echo "[ERROR] cg_guard: option -p specified more than once." >&2; return "$CG_ERR_SYNTAX_ERROR"; }
                opt_p=true; prefix="$OPTARG" ;;
             \?)
                 local flag="-$OPTARG"
@@ -201,7 +201,7 @@ guard() {
                     forward_opts+=("$flag")
                 fi
                 ;;
-            :)  echo "[ERROR] guard: option -$OPTARG requires an argument." >&2
+            :)  echo "[ERROR] cg_guard: option -$OPTARG requires an argument." >&2
                 return "$CG_ERR_MISSING_ARGUMENT" ;;
         esac
     done
@@ -211,7 +211,7 @@ guard() {
     # Handle zero tokens
     if [[ $# -eq 0 ]]; then
         if [[ "$quiet" != true ]]; then
-            echo "[WARNING] guard: no commands specified." >&2
+            echo "[WARNING] cg_guard: no commands specified." >&2
         fi
         return 0
     fi
@@ -227,11 +227,11 @@ guard() {
             bname="${token##*/}"
             fname="${prefix}${bname}"
             if ! [[ "$fname" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-                echo "[ERROR] guard: '$bname' is not a valid identifier; use the 'fname=${token}' form." >&2
+                echo "[ERROR] cg_guard: '$bname' is not a valid identifier; use the 'fname=${token}' form." >&2
                 return "$CG_ERR_INVALID_NAME"
             fi
             if [[ ! -x "$token" ]]; then
-                echo "[ERROR] guard: unable to resolve full path for '$token'. Use the full path." >&2
+                echo "[ERROR] cg_guard: unable to resolve full path for '$token'. Use the full path." >&2
                 return "$CG_ERR_NOT_FOUND"
             fi
             valid_fnames+=("$fname")
@@ -243,30 +243,30 @@ guard() {
             rhs="${token#*=}"
 
             if ! [[ "$fname" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-                echo "[ERROR] guard: invalid command identifier '$fname'." >&2
+                echo "[ERROR] cg_guard: invalid command identifier '$fname'." >&2
                 return "$CG_ERR_INVALID_NAME"
             fi
 
             if [[ "${rhs:0:1}" == "/" ]]; then
                 # Absolute path — verbatim
                 if [[ ! -x "$rhs" ]]; then
-                    echo "[ERROR] guard: unable to resolve full path for '$fname'. Use the full path." >&2
+                    echo "[ERROR] cg_guard: unable to resolve full path for '$fname'. Use the full path." >&2
                     return "$CG_ERR_NOT_FOUND"
                 fi
                 full_path="$rhs"
             elif [[ "$rhs" == */* ]]; then
                 # Contains / but not absolute
-                echo "[ERROR] guard: '$rhs' must be an absolute path." >&2
+                echo "[ERROR] cg_guard: '$rhs' must be an absolute path." >&2
                 return "$CG_ERR_SYNTAX_ERROR"
             else
                 # Plain name — resolve via resolver
                 full_path="$("$resolver" "${forward_opts[@]}" "$rhs")" || {
                     if [[ "$full_path" == "$rhs" ]]; then
-                        echo "[BUG] guard: '$rhs' is a builtin and should not be guarded." >&2
+                        echo "[BUG] cg_guard: '$rhs' is a builtin and should not be guarded." >&2
                     elif [[ "$full_path" == alias\ * ]]; then
-                        echo "[BUG] guard: '$rhs' is an alias and should not be used in scripts." >&2
+                        echo "[BUG] cg_guard: '$rhs' is an alias and should not be used in scripts." >&2
                     else
-                        echo "[ERROR] guard: unable to resolve full path for '$rhs'. Use the full path." >&2
+                        echo "[ERROR] cg_guard: unable to resolve full path for '$rhs'. Use the full path." >&2
                     fi
                     return "$CG_ERR_NOT_FOUND"
                 }
@@ -277,17 +277,17 @@ guard() {
         else
             # plain name — prefix applied, resolved via resolver
             if ! [[ "$token" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-                echo "[ERROR] guard: invalid command identifier '$token'." >&2
+                echo "[ERROR] cg_guard: invalid command identifier '$token'." >&2
                 return "$CG_ERR_INVALID_NAME"
             fi
 
             full_path="$("$resolver" "${forward_opts[@]}" "$token")" || {
                 if [[ "$full_path" == "$token" ]]; then
-                    echo "[BUG] guard: '$token' is a builtin and should not be guarded." >&2
+                    echo "[BUG] cg_guard: '$token' is a builtin and should not be guarded." >&2
                 elif [[ "$full_path" == alias\ * ]]; then
-                    echo "[BUG] guard: '$token' is an alias and should not be used in scripts." >&2
+                    echo "[BUG] cg_guard: '$token' is an alias and should not be used in scripts." >&2
                 else
-                    echo "[ERROR] guard: unable to resolve full path for '$token'. Use the full path." >&2
+                    echo "[ERROR] cg_guard: unable to resolve full path for '$token'. Use the full path." >&2
                 fi
                 return "$CG_ERR_NOT_FOUND"
             }
@@ -303,3 +303,8 @@ guard() {
         eval "${valid_fnames[i]}() { \"${valid_paths[i]}\" \"\$@\"; }"
     done
 }
+
+# Define 'guard' as a short alias for cg_guard only if unclaimed.
+if ! declare -f guard >/dev/null 2>&1; then
+    guard() { cg_guard "$@"; }
+fi
