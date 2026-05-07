@@ -12,8 +12,13 @@ setup_file() {
   fi
   # shellcheck source=../config/command_guard.sh
   source "$LIB"
-  export -f guard _cg_resolve_command_path
+  # Core functions (always present)
+  export -f guard
+  declare -f _cg_resolve_command_path >/dev/null 2>&1 && export -f _cg_resolve_command_path || true
+  # New functions added in issue #112 (present after Task 5; silently skip if absent)
+  export -f cg_safe_resolver cg_path_resolver cg_safe_run cg_unsafe cg_command_not_found_handler 2>/dev/null || true
   export CG_ERR_INVALID_NAME CG_ERR_NOT_FOUND
+  export CG_ERR_MISSING_ARGUMENT CG_ERR_PATH_VIOLATION _CG_DEFAULT_PATH
 }
 
 # bats test_tags=guard,issue-24
@@ -238,127 +243,147 @@ setup_file() {
   [[ "$output" == *"invalid command identifier"* ]]
 }
 
-# --- PATH enforcement and debug trap ---
+# --- PATH enforcement: cg_safe_run, cg_unsafe, command_not_found_handle ---
 
-# bats test_tags=guard,pr3
-@test "original PATH is saved on source" {
-  skip "Feature not yet implemented"
-  # shellcheck disable=SC2016
-  run -0 bash --noprofile -lc '
-    original="$PATH"
-    source "$LIB"
-    [ -n "${_ORIGINAL_PATH}" ]
-    [ "${_ORIGINAL_PATH}" = "$original" ]
-  '
-}
-
-# bats test_tags=guard,pr3
-@test "PATH is unset after sourcing" {
-  skip "Feature not yet implemented"
-  # shellcheck disable=SC2016
-  run -0 bash --noprofile -lc '
-    source "$LIB"
-    [ -z "${PATH+x}" ] && echo "PATH_UNSET" || echo "PATH_SET"
-  '
-  [[ "$output" == *"PATH_UNSET"* ]]
-}
-
-# bats test_tags=guard,pr3
-@test "non-guarded command fails when PATH unset" {
-  skip "Feature not yet implemented"
-  # shellcheck disable=SC2016
-  run -127 bash --noprofile -lc '
-    source "$LIB"
-    curl --version
-  '
-}
-
-# bats test_tags=guard,pr3
-@test "guarded command works despite unset PATH" {
+# bats test_tags=guard,cg_safe_run
+@test "cg_safe_run executes a guarded function" {
   skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     source "$LIB"
     guard uname
-    out="$(uname)"
+    _func() { uname -s; }
+    cg_safe_run _func
+  '
+  [[ -n "$output" ]]
+}
+
+# bats test_tags=guard,cg_safe_run
+@test "non-guarded external command fails inside cg_safe_run" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile --norc -lc '
+    source "$LIB"
+    _func() { uname; }
+    cg_safe_run _func
+    echo "exit:$?"
+  '
+  [[ "$output" == *"exit:127"* ]]
+}
+
+# bats test_tags=guard,cg_safe_run
+@test "cg_unsafe restores writable PATH inside cg_safe_run" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile -lc '
+    source "$LIB"
+    _init() { cg_unsafe guard uname; }
+    _func() { _init; uname -s; }
+    cg_safe_run _func
+  '
+  [[ -n "$output" ]]
+}
+
+# bats test_tags=guard,cg_safe_run
+@test "cg_safe_run rejects non-function argument" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -"$CG_ERR_INVALID_NAME" --separate-stderr bash --noprofile -lc '
+    source "$LIB"
+    cg_safe_run not_a_function
+  '
+  [[ "$stderr" == *"[ERROR] cg_safe_run:"* ]]
+}
+
+# bats test_tags=guard,cg_safe_run
+@test "CG_DEBUG=1 prints WARNING for non-guarded command" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile --norc -c '
+    source "$LIB"
+    export CG_DEBUG=1
+    nonexistent_cmd_cg_test_xyz
+    echo "exit:$?"
+  '
+  [[ "$stderr" == *"[WARNING] guard: non-guarded command"* ]]
+  [[ "$output" == *"exit:127"* ]]
+}
+
+# bats test_tags=guard,cg_safe_run
+@test "CG_DEBUG=1 suggests guard path inside cg_safe_run" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile --norc -lc '
+    source "$LIB"
+    export CG_DEBUG=1
+    _func() { uname; }
+    cg_safe_run _func
+    echo "exit:$?"
+  '
+  [[ "$stderr" == *"[WARNING] Suggestion: guard uname="* ]]
+}
+
+# bats test_tags=guard,cg_safe_run
+@test "CG_DEBUG unset is silent for non-guarded command" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile --norc -lc '
+    source "$LIB"
+    unset CG_DEBUG
+    _func() { uname; }
+    cg_safe_run _func
+    echo "exit:$?"
+  '
+  [[ "$stderr" != *"WARNING"* ]]
+}
+
+# bats test_tags=guard,cg_safe_run
+@test "command_not_found_handle not installed when already defined" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile --norc -c '
+    command_not_found_handle() { echo "CUSTOM_HANDLER"; return 127; }
+    source "$LIB"
+    nonexistent_cmd_cg_test_xyz
+    echo "exit:$?"
+  '
+  [[ "$output" == *"CUSTOM_HANDLER"* ]]
+}
+
+# bats test_tags=guard,cg_safe_run
+@test "cg_command_not_found_handler is chainable" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -0 --separate-stderr bash --noprofile --norc -c '
+    source "$LIB"
+    export CG_DEBUG=1
+    command_not_found_handle() {
+      echo "APP_HANDLER:$1"
+      cg_command_not_found_handler "$@"
+    }
+    nonexistent_cmd_cg_test_xyz
+    echo "exit:$?"
+  '
+  [[ "$output" == *"APP_HANDLER:nonexistent_cmd_cg_test_xyz"* ]]
+  [[ "$stderr" == *"[WARNING] guard: non-guarded command"* ]]
+}
+
+# bats test_tags=guard,cg_safe_run
+@test "guard -f resolver uses provided function for path resolution" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile -lc '
+    source "$LIB"
+    my_resolver() {
+      local cmd="${@: -1}"
+      [[ "$cmd" == "uname" ]] || return 3
+      printf "/usr/bin/uname"
+    }
+    guard -f my_resolver uname
+    [ "$(type -t uname)" = "function" ]
+    out=$(uname)
     [ -n "$out" ]
   '
-}
-
-# bats test_tags=guard,pr3
-@test "debug trap catches non-guarded command in debug mode" {
-  skip "Feature not yet implemented"
-  # shellcheck disable=SC2016
-  run -127 --separate-stderr bash --noprofile -lc '
-    set -x
-    source "$LIB"
-    curl --version 2>&1 || true
-  '
-  [[ "$stderr" == *"WARNING: Non-guarded command attempted: curl"* ]]
-}
-
-# bats test_tags=guard,pr3
-@test "debug trap suggests guard command with path" {
-  skip "Feature not yet implemented"
-  # shellcheck disable=SC2016
-  run --separate-stderr bash --noprofile -lc '
-    set -x
-    source "$LIB"
-    ls / 2>&1 || true
-  '
-  [[ "$stderr" == *"Suggestion: guard ls="* ]]
-}
-
-# bats test_tags=guard,pr3
-@test "debug trap uses default PATH for suggestions" {
-  skip "Feature not yet implemented"
-  # shellcheck disable=SC2016
-  run --separate-stderr bash --noprofile -lc '
-    set -x
-    source "$LIB"
-    uname 2>&1 || true
-  '
-  [[ "$stderr" == *"Suggestion: guard uname=/usr/bin/uname"* ]] ||
-  [[ "$stderr" == *"Suggestion: guard uname=/bin/uname"* ]]
-}
-
-# bats test_tags=guard,pr3
-@test "debug trap falls back to original PATH" {
-  skip "Feature not yet implemented"
-  # shellcheck disable=SC2016
-  run --separate-stderr bash --noprofile -lc '
-    export PATH="/custom/bin:$PATH"
-    set -x
-    source "$LIB"
-    # Try a command that might only be in custom location
-    fakecmd 2>&1 || true
-  '
-  [[ "$stderr" == *"Suggestion:"* ]] || [[ "$stderr" == *"WARNING:"* ]]
-}
-
-# bats test_tags=guard,pr3
-@test "debug trap does not trigger for guarded commands" {
-  skip "Feature not yet implemented"
-  # shellcheck disable=SC2016
-  run -0 --separate-stderr bash --noprofile -lc '
-    set -x
-    source "$LIB"
-    guard uname
-    uname > /dev/null 2>&1
-  '
-  [[ "$stderr" != *"WARNING: Non-guarded command"* ]]
-}
-
-# bats test_tags=guard,pr3
-@test "debug trap does not trigger for builtins" {
-  skip "Feature not yet implemented"
-  # shellcheck disable=SC2016
-  run -0 --separate-stderr bash --noprofile -lc '
-    set -x
-    source "$LIB"
-    echo "test" > /dev/null 2>&1
-  '
-  [[ "$stderr" != *"WARNING: Non-guarded command"* ]]
 }
 
 # --- Zero commands and options support ---
@@ -408,4 +433,166 @@ setup_file() {
     guard -q -- uname
     [ "$(type -t uname)" = "function" ]
   '
+}
+
+# --- prefix (-p) option ---
+
+# bats test_tags=guard,prefix
+@test "guard -p prefix_ creates prefixed wrapper for plain-name tokens" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile -lc '
+    source "$LIB"
+    guard -p mylib_ uname date
+    [ "$(type -t mylib_uname)" = "function" ]
+    [ "$(type -t mylib_date)" = "function" ]
+    [ "$(type -t uname)" != "function" ]
+  '
+}
+
+# bats test_tags=guard,prefix
+@test "guard -p does not apply prefix to fname=path tokens" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile -lc '
+    source "$LIB"
+    guard -p mylib_ "myuname=/usr/bin/uname"
+    [ "$(type -t myuname)" = "function" ]
+    [ "$(type -t mylib_myuname)" != "function" ]
+  '
+}
+
+# --- Extended token forms ---
+
+# bats test_tags=guard,tokens
+@test "guard fname=name resolves name via active resolver" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile -lc '
+    source "$LIB"
+    guard "kernel=uname"
+    [ "$(type -t kernel)" = "function" ]
+    out=$(kernel -s)
+    [ -n "$out" ]
+  '
+}
+
+# bats test_tags=guard,tokens
+@test "guard /abs/path creates wrapper with prefixed basename" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile -lc '
+    source "$LIB"
+    uname_path="$(PATH=/usr/bin:/bin command -v uname)"
+    guard -p mylib_ "$uname_path"
+    [ "$(type -t mylib_uname)" = "function" ]
+    out=$(mylib_uname)
+    [ -n "$out" ]
+  '
+}
+
+# bats test_tags=guard,tokens
+@test "guard fname=name with relative rhs is rejected" {
+  skip "Feature not yet implemented"
+  # shellcheck disable=SC2016
+  run -"$CG_ERR_NOT_FOUND" bash --noprofile -lc '
+    source "$LIB"
+    guard "mybash=../bin/bash"
+  '
+}
+
+# --- Environmental regression tests ---
+# These tests verify undocumented Bash behaviors the library relies on.
+# No skip — must always pass. A failure indicates a Bash regression that
+# would break the library on this platform.
+
+# bats test_tags=guard,envtest
+@test "envtest: local VAR in callee shadows local -r VAR from parent without error" {
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile --norc -c '
+    outer() {
+      local -r MYVAR="readonly_value"
+      inner
+    }
+    inner() {
+      local MYVAR="writable_value"
+      [ "$MYVAR" = "writable_value" ]
+    }
+    outer
+  '
+}
+
+# bats test_tags=guard,envtest
+@test "envtest: local VAR fails when variable is globally readonly" {
+  # shellcheck disable=SC2016
+  run bash --noprofile --norc -c '
+    readonly GLOBALVAR="fixed"
+    inner() {
+      local GLOBALVAR="new_value"
+    }
+    inner
+  '
+  [[ "$status" -ne 0 ]]
+}
+
+# bats test_tags=guard,envtest
+@test "envtest: local -r PATH prevents command resolution within function scope" {
+  # Directly relevant to cg_safe_run: local -r PATH to a fake value makes
+  # 'command -v' fail, and the outer scope is unaffected after the call.
+  local saved_path="$PATH"
+  _cg_env3_restricted() {
+    local -r PATH="/nonexistent-cg-env3-test"
+    command -v uname 2>/dev/null
+    printf 'lookup_exit:%d' $?
+  }
+  local result
+  result="$(_cg_env3_restricted)"
+  [[ "$result" == "lookup_exit:1" ]]
+  [[ "$PATH" == "$saved_path" ]]
+}
+
+# bats test_tags=guard,envtest
+@test "envtest: command_not_found_handle sees parent dynamic-scope local PATH" {
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile --norc -c '
+    checker() {
+      local PATH="/sentinel-path"
+      nonexistent_cmd_cg_envtest_xyz
+    }
+    command_not_found_handle() {
+      [[ "$PATH" == "/sentinel-path" ]] && echo "SEEN_LOCAL_PATH"
+      return 127
+    }
+    checker
+    echo "done"
+  '
+  [[ "$output" == *"SEEN_LOCAL_PATH"* ]]
+}
+
+# bats test_tags=guard,envtest
+@test "envtest: command -pv resolves commands independently of local PATH" {
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile --norc -c '
+    fake_path_func() {
+      local PATH="/nonexistent-fake"
+      result="$(command -pv uname)"
+      [[ "$result" == /*/uname ]] && echo "RESOLVED_CORRECTLY"
+    }
+    fake_path_func
+  '
+  [[ "$output" == *"RESOLVED_CORRECTLY"* ]]
+}
+
+# bats test_tags=guard,envtest
+@test "envtest: eval-defined functions inside functions are globally scoped" {
+  # shellcheck disable=SC2016
+  run -0 bash --noprofile --norc -c '
+    definer() {
+      eval "my_evaled_fn() { echo evaled; }"
+    }
+    definer
+    [ "$(type -t my_evaled_fn)" = "function" ]
+    my_evaled_fn
+  '
+  [[ "$output" == *"evaled"* ]]
 }
