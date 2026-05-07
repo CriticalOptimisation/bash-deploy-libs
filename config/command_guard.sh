@@ -57,7 +57,8 @@ cg_path_resolver() {
     while [[ $# -gt 1 ]]; do
         case "$1" in
             -d) extra_path="${extra_path:+$extra_path:}$2"; shift 2 ;;
-            *)  echo "[ERROR] cg_path_resolver: unexpected token '$1'; use -d for each directory." >&2
+            -s) extra_path="${extra_path:+$extra_path:}$_CG_DEFAULT_PATH"; shift ;;
+            *)  echo "[ERROR] cg_path_resolver: unexpected token '$1'; use -d for each directory or -s for the safe path." >&2
                 return "$CG_ERR_SYNTAX_ERROR" ;;
         esac
     done

@@ -357,6 +357,39 @@ setup() {
   run -0 f
 }
 
+# --- cg_path_resolver -s option ---
+
+# bats test_tags=guard,cg_path_resolver
+@test "cg_path_resolver -s resolves a standard command" {
+  f() { guard -r cg_path_resolver -s uname; }
+  run -0 f
+}
+
+# bats test_tags=guard,cg_path_resolver
+@test "cg_path_resolver -s fails for unknown command" {
+  f() { guard -r cg_path_resolver -s nonexistent_xyz_cg_test; }
+  run -"$CG_ERR_NOT_FOUND" f
+}
+
+# bats test_tags=guard,cg_path_resolver
+@test "cg_path_resolver -d then -s finds command present only in safe path" {
+  # /nonexistent_cg_test is not a real dir; uname is not there, but -s adds the safe path
+  f() { guard -r cg_path_resolver -d /nonexistent_cg_test -s uname; }
+  run -0 f
+}
+
+# bats test_tags=guard,cg_path_resolver
+@test "cg_path_resolver -s then -d finds command present only in safe path" {
+  f() { guard -r cg_path_resolver -s -d /nonexistent_cg_test uname; }
+  run -0 f
+}
+
+# bats test_tags=guard,cg_path_resolver
+@test "cg_path_resolver -d without -s does not find standard command" {
+  f() { guard -r cg_path_resolver -d /nonexistent_cg_test uname; }
+  run -"$CG_ERR_NOT_FOUND" f
+}
+
 # --- Zero commands and options support ---
 
 # bats test_tags=guard,pr4

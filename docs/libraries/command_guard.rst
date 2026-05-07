@@ -174,21 +174,23 @@ cg_path_resolver
 An extended resolver that searches a caller-specified set of directories instead
 of the POSIX default PATH.
 
-- Protocol: ``cg_path_resolver [-d dir-or-colon-list] ... <cmd-name>``
+- Protocol: ``cg_path_resolver [-d dir-or-colon-list] [-s] ... <cmd-name>``
   (see *Resolver Protocol*).
 - ``-d <dir-or-colon-list>``: add one or more directories to the search PATH
   (cumulative; ``-d`` may be repeated; its value may be a single directory or a
   colon-separated list such as ``/a:/b:/c``).
-- Positional path strings without ``-d`` are not accepted and cause
-  ``CG_ERR_NOT_FOUND``.
-- Builds a ``local PATH`` from the accumulated directories, then uses
-  ``command -v`` to resolve the command.
+- ``-s``: append the compiled-in Bash safe path (equivalent to
+  ``-d "$_CG_DEFAULT_PATH"``). Use this option when standard commands must be
+  resolved alongside custom directories without referencing the internal
+  ``_CG_DEFAULT_PATH`` variable. Option order is respected: ``-s`` inserts the
+  safe path at its position in the search order relative to any ``-d`` options.
+- Builds a ``local PATH`` from the accumulated directories in the order the
+  options appear, then uses ``command -v`` to resolve the command.
 - Returns ``0`` and prints the absolute path on success.
 - Returns ``CG_ERR_NOT_FOUND`` on failure (command not resolved in the given
   directories).
 - Returns ``CG_ERR_SYNTAX_ERROR`` with a diagnostic message when an unexpected
-  token appears before the command name (positional paths without ``-d`` are
-  not accepted).
+  token appears before the command name.
 - Returns ``CG_ERR_MISSING_ARGUMENT`` when called with no command name.
 
 Example — guard a snap binary:
@@ -197,15 +199,18 @@ Example — guard a snap binary:
 
    guard -r cg_path_resolver -d /snap/bin snapd
 
-Example — mix of custom and default resolution in one call:
+Example — snap binary plus standard commands in one call:
 
 .. code-block:: bash
 
-   guard -r cg_path_resolver -d /snap/bin snapd uname  # uname not in /snap/bin → fails
+   # -s appends the safe path after /snap/bin, so standard commands are also found:
+   guard -r cg_path_resolver -d /snap/bin -s snapd uname date
 
-   # Use cg_safe_resolver (default) for standard commands:
-   guard uname
-   guard -r cg_path_resolver -d /snap/bin snapd
+Example — safe path searched first, custom directory as fallback:
+
+.. code-block:: bash
+
+   guard -r cg_path_resolver -s -d /opt/myapp/bin uname myapp
 
 cg_command_not_found_handler
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -377,9 +382,10 @@ Known Limitations
 
 - ``cg_safe_run`` hard-aborts the entire script on a PATH violation; there is no
   mechanism to catch or recover from it. This is by design.
-- ``cg_path_resolver`` searches only the directories supplied via ``-d`` or
-  colon-separated positional arguments. It does not fall back to the POSIX
-  default PATH; if you need both custom and standard locations, list them all.
+- ``cg_path_resolver`` searches only the directories supplied via ``-d`` and/or
+  ``-s``. It does not fall back to the POSIX default PATH unless ``-s`` is
+  present; list all required directories explicitly or add ``-s`` to include
+  the standard locations.
 - The ``command_not_found_handle`` hook is a single global resource. The library
   installs it only if unclaimed; applications that need their own handler should
   define it before sourcing the library, or chain via
