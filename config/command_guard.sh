@@ -7,138 +7,277 @@
 [[ -z ${__COMMAND_GUARD_SH_INCLUDED:-} ]] && __COMMAND_GUARD_SH_INCLUDED=1 || return 0
 
 # --- Public error codes --------------------------------------------------------
+readonly CG_ERR_PATH_VIOLATION=1
 readonly CG_ERR_INVALID_NAME=2
 readonly CG_ERR_NOT_FOUND=3
+readonly CG_ERR_MISSING_ARGUMENT=4
+
+# --- Compiled-in default PATH (discovered once; used by cg_unsafe) ------------
+_CG_DEFAULT_PATH="$(unset PATH; "$(command -pv bash)" -c 'echo "$PATH"')"
+readonly _CG_DEFAULT_PATH
 
 # --- Internal helpers ---------------------------------------------------------
+
 # Function:
-#   _cg_resolve_command_path
+#   cg_safe_resolver
 # Description:
-#   Resolve the full path of a command using a restricted PATH in a subshell.
+#   Default resolver: resolves a command name to its absolute path using
+#   command -pv (POSIX default PATH, independent of $PATH).
+#   Prints the command -pv output (even on failure, so guard can diagnose
+#   builtins and aliases). Returns CG_ERR_MISSING_ARGUMENT when called
+#   with no command name (required by the resolver protocol).
 # Usage:
-#   _cg_resolve_command_path "ls"
-_cg_resolve_command_path() {
-    local cmd="$1"
+#   cg_safe_resolver [forwarded-opts...] <cmd-name>
+cg_safe_resolver() {
+    [[ $# -eq 0 ]] && return "$CG_ERR_MISSING_ARGUMENT"
+    local cmd="${@: -1}"
     local resolved
-
-    # Option -p supersedes PATH with a builtin default value
-    resolved="$(command -pv -- "$cmd")" || return 1
-    # "command -v" worked.
+    resolved="$(command -pv -- "$cmd")" || return "$CG_ERR_NOT_FOUND"
     printf '%s' "$resolved"
-    # Check that it's an executabla and has an absolute path
-    # Fast path: if it's an executable with an absolute path, return it
-    if [[ -x "$resolved" && "${resolved#/}" != "$resolved" ]]; then
-        return 0
-    fi
+    [[ -x "$resolved" && "${resolved:0:1}" == "/" ]] || return "$CG_ERR_NOT_FOUND"
+}
 
-    return 1
+# Function:
+#   cg_path_resolver
+# Description:
+#   Extended resolver: builds a local PATH from -d options and colon-separated
+#   positional path strings, then resolves via command -v.
+#   Prints the command -v output (even on failure). Returns
+#   CG_ERR_MISSING_ARGUMENT when called with no command name.
+# Usage:
+#   cg_path_resolver [-d dir | dir:dir:...] ... <cmd-name>
+cg_path_resolver() {
+    local extra_path=""
+    while [[ $# -gt 1 ]]; do
+        case "$1" in
+            -d) extra_path="${extra_path:+$extra_path:}$2"; shift 2 ;;
+            *)  extra_path="${extra_path:+$extra_path:}$1"; shift ;;
+        esac
+    done
+    [[ $# -eq 0 ]] && return "$CG_ERR_MISSING_ARGUMENT"
+    local cmd="$1"
+    local PATH="$extra_path"
+    local resolved
+    resolved="$(command -v -- "$cmd" 2>/dev/null)"
+    printf '%s' "$resolved"
+    [[ -x "$resolved" && "${resolved:0:1}" == "/" ]] || return "$CG_ERR_NOT_FOUND"
 }
 
 # --- Public API ---------------------------------------------------------------
+
+# Function:
+#   cg_safe_run
+# Description:
+#   Executes a declared Bash function under a restricted, read-only PATH.
+#   Any attempt to assign to PATH inside the function (or its callees)
+#   fails with a readonly-assignment error (CG_ERR_PATH_VIOLATION).
+#   Unguarded external commands fail with exit 127 (command not found).
+# Usage:
+#   cg_safe_run <fn> [args...]
+cg_safe_run() {
+    declare -f "$1" >/dev/null 2>&1 || {
+        echo "[ERROR] cg_safe_run: '$1' is not a function." >&2
+        return "$CG_ERR_INVALID_NAME"
+    }
+    local -r PATH="/nonexistent-${SRANDOM:-${-}${RANDOM}}"
+    "$@"
+}
+
+# Function:
+#   cg_unsafe
+# Description:
+#   Executes a function with a writable local PATH set to the compiled-in
+#   Bash default. Use inside cg_safe_run to allow library guard calls.
+#   The local PATH in cg_unsafe shadows the local -r PATH from cg_safe_run.
+# Usage:
+#   cg_unsafe <fn> [args...]
+cg_unsafe() {
+    local PATH="$_CG_DEFAULT_PATH"
+    "$@"
+}
+
+# Function:
+#   cg_command_not_found_handler
+# Description:
+#   Public handler for the command_not_found_handle hook. When CG_DEBUG is
+#   set (non-empty), prints a [WARNING] and a guard suggestion to stderr.
+#   Always returns 127. Applications can chain to this from their own handler.
+# Usage:
+#   cg_command_not_found_handler <cmd>
+cg_command_not_found_handler() {
+    local cmd="$1"
+    if [[ -n "${CG_DEBUG:-}" ]]; then
+        local resolved
+        resolved="$(command -pv "$cmd" 2>/dev/null)"
+        if [[ -n "$resolved" ]]; then
+            echo "[WARNING] guard: non-guarded command: $cmd" >&2
+            echo "[WARNING] Suggestion: guard ${cmd}=${resolved}" >&2
+        else
+            echo "[WARNING] guard: non-guarded command not found: $cmd" >&2
+        fi
+    fi
+    return 127
+}
+
+# Install command_not_found_handle only if unclaimed.
+if ! declare -f command_not_found_handle >/dev/null 2>&1; then
+    command_not_found_handle() { cg_command_not_found_handler "$@"; }
+fi
+
 # Function:
 #   guard
 # Description:
-#   Defines a function named <command> that shadows the external command and
-#   dispatches to it by full path with all arguments forwarded.
+#   Defines a wrapper function for each token that dispatches to the
+#   resolved full path with all arguments forwarded.
 # Usage:
-#   guard [-q] [--] [token ...]
+#   guard [-q] [-p <prefix>] [-f <resolver>] [resolver-opts] [--] [token ...]
 # Options:
-#   -q  Quiet mode: suppress warnings when guard is called without any commands
-#   --  End of options, start of token list
-# Tokens:
-#   Each token is either a plain command name or a name=path pair.
-#   Plain name:  guard uname             — resolved via restricted PATH (command -pv)
-#   name=path:   guard uname=/usr/bin/uname — pinned to the given absolute path,
-#                bypassing PATH resolution. name must be a valid Bash identifier;
-#                path must be absolute and point to an existing executable file.
-#   Both forms may be mixed: guard "uname=/usr/bin/uname" date hostname
+#   -q          Quiet: suppress warnings for zero tokens.
+#   -p prefix   Prepend prefix to generated function names for plain-name
+#               and /abs/path tokens. Has no effect on fname=... tokens.
+#   -f resolver Use resolver instead of cg_safe_resolver. All unrecognised
+#               option flags are forwarded to the resolver; guard probes the
+#               resolver to determine which flags take an argument.
+#               Guard options must precede resolver options.
+#   --          End of options; required when a token name starts with -.
+# Token forms:
+#   fname=/abs/path  explicit fname, absolute path verbatim
+#   fname=name       explicit fname, name resolved via resolver
+#   /abs/path        function name = <prefix>basename, path verbatim
+#   name             function name = <prefix>name, resolved via resolver
 # Errors:
-#   - CG_ERR_INVALID_NAME if a name is not a valid Bash identifier, or an unknown
-#     option is passed.
-#   - CG_ERR_NOT_FOUND if a plain command cannot be resolved, or a name=path token
-#     has a non-absolute, non-existent, or non-executable path.
+#   CG_ERR_INVALID_NAME  invalid identifier or unrecognised guard option
+#   CG_ERR_NOT_FOUND     command not found or path invalid/non-executable
 # Notes:
-#   Validation is all-or-nothing: no wrapper functions are created unless every
-#   token is valid.
-#   Uses a restricted PATH in a subshell to resolve plain names, avoiding
-#   user-controlled PATH entries.
-#   Uses eval to define the shadowing function; input is validated to be a legal
-#   Bash identifier before eval is invoked.
+#   Validation is all-or-nothing: no wrapper is created unless every token
+#   passes validation.
 guard() {
-    local quiet=false
-    local -a commands=()
+    local quiet=false resolver="cg_safe_resolver" prefix=""
+    local -a forward_opts=()
 
-    # Parse options
+    # Parse guard's own options with getopts; unknown flags are forwarded to
+    # the resolver after an arity probe. Guard options must precede resolver
+    # options: guard [-q] [-p prefix] [-f resolver] [resolver-opts] [--] tokens
     OPTIND=1
-    while getopts ":q" opt; do
+    while getopts ":qf:p:" opt; do
         case $opt in
             q) quiet=true ;;
-            \?) echo "[ERROR] guard: unknown option '-$OPTARG'" >&2; return "$CG_ERR_INVALID_NAME" ;;
+            f) resolver="$OPTARG" ;;
+            p) prefix="$OPTARG" ;;
+            \?)
+                local flag="-$OPTARG"
+                local next="${@:OPTIND:1}"
+                if [[ -n "$next" && "${next:0:1}" != "-" && "$next" != "--" ]]; then
+                    "$resolver" "${forward_opts[@]}" "$flag" "$next" >/dev/null 2>&1
+                    if [[ $? -eq "$CG_ERR_MISSING_ARGUMENT" ]]; then
+                        forward_opts+=("$flag" "$next")
+                        (( OPTIND++ ))
+                    else
+                        forward_opts+=("$flag")
+                    fi
+                else
+                    forward_opts+=("$flag")
+                fi
+                ;;
+            :)  echo "[ERROR] guard: option -$OPTARG requires an argument." >&2
+                return "$CG_ERR_INVALID_NAME" ;;
         esac
     done
     shift $((OPTIND - 1))
+    [[ "${1-}" == "--" ]] && shift
 
-    # Remaining args are commands
-    commands=("$@")
-
-    # Handle zero commands as a no-op with optional warning
-    if [ ${#commands[@]} -eq 0 ]; then
-        if [ "$quiet" = false ]; then
+    # Handle zero tokens
+    if [[ $# -eq 0 ]]; then
+        if [[ "$quiet" != true ]]; then
             echo "[WARNING] guard: no commands specified." >&2
         fi
         return 0
     fi
 
-    # First pass: validate all tokens (plain names and name=path pairs)
-    local cmd full_path name fixed_path
-    local -a valid_commands=()
-    local -a full_paths=()
+    # First pass: validate all tokens (all-or-nothing)
+    local token fname rhs bname full_path
+    local -a valid_fnames=()
+    local -a valid_paths=()
 
-    for cmd in "${commands[@]}"; do
-        if [[ "$cmd" == *=* ]]; then
-            name="${cmd%%=*}"
-            fixed_path="${cmd#*=}"
-            if ! [[ "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-                echo "[ERROR] guard: invalid command identifier '$name'." >&2
+    for token in "$@"; do
+        if [[ "${token:0:1}" == "/" ]]; then
+            # /abs/path form — prefix applied to basename
+            bname="${token##*/}"
+            fname="${prefix}${bname}"
+            if ! [[ "$fname" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+                echo "[ERROR] guard: '$bname' is not a valid identifier; use the 'fname=${token}' form." >&2
                 return "$CG_ERR_INVALID_NAME"
             fi
-            if [[ "${fixed_path:0:1}" != "/" ]]; then
-                echo "[ERROR] guard: '$name': path must be an absolute path." >&2
+            if [[ ! -x "$token" ]]; then
+                echo "[ERROR] guard: unable to resolve full path for '$token'. Use the full path." >&2
                 [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
             fi
-            if [[ ! -x "$fixed_path" ]]; then
-                echo "[ERROR] guard: unable to resolve full path for '$name'. Use the full path." >&2
-                [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
+            valid_fnames+=("$fname")
+            valid_paths+=("$token")
+
+        elif [[ "$token" == *=* ]]; then
+            # fname=rhs form — prefix NOT applied
+            fname="${token%%=*}"
+            rhs="${token#*=}"
+
+            if ! [[ "$fname" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+                echo "[ERROR] guard: invalid command identifier '$fname'." >&2
+                return "$CG_ERR_INVALID_NAME"
             fi
-            valid_commands+=("$name")
-            full_paths+=("$fixed_path")
-            continue
-        fi
 
-        if ! [[ "$cmd" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-            echo "[ERROR] guard: invalid command identifier '$cmd'." >&2
-            return "$CG_ERR_INVALID_NAME"
-        fi
-
-        full_path="$(_cg_resolve_command_path "$cmd")" || {
-            if [[ "$full_path" == "$cmd" ]]; then
-                # It's a builtin
-                echo "[BUG] guard: '$cmd' is a builtin and should not be guarded." >&2
-            elif [[ "$full_path" == alias\ * ]]; then
-                # it's an alias
-                echo "[BUG] guard: '$cmd' is an alias and should not be used in scripts." >&2
+            if [[ "${rhs:0:1}" == "/" ]]; then
+                # Absolute path — verbatim
+                if [[ ! -x "$rhs" ]]; then
+                    echo "[ERROR] guard: unable to resolve full path for '$fname'. Use the full path." >&2
+                    [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
+                fi
+                full_path="$rhs"
+            elif [[ "$rhs" == */* ]]; then
+                # Contains / but not absolute
+                echo "[ERROR] guard: '$rhs' must be an absolute path." >&2
+                [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
             else
-                echo "[ERROR] guard: unable to resolve full path for '$cmd'. Use the full path." >&2
+                # Plain name — resolve via resolver
+                full_path="$("$resolver" "${forward_opts[@]}" "$rhs")" || {
+                    if [[ "$full_path" == "$rhs" ]]; then
+                        echo "[BUG] guard: '$rhs' is a builtin and should not be guarded." >&2
+                    elif [[ "$full_path" == alias\ * ]]; then
+                        echo "[BUG] guard: '$rhs' is an alias and should not be used in scripts." >&2
+                    else
+                        echo "[ERROR] guard: unable to resolve full path for '$rhs'. Use the full path." >&2
+                    fi
+                    [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
+                }
             fi
-            [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
-        }
-        valid_commands+=("$cmd")
-        full_paths+=("$full_path")
+            valid_fnames+=("$fname")
+            valid_paths+=("$full_path")
+
+        else
+            # plain name — prefix applied, resolved via resolver
+            if ! [[ "$token" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+                echo "[ERROR] guard: invalid command identifier '$token'." >&2
+                return "$CG_ERR_INVALID_NAME"
+            fi
+
+            full_path="$("$resolver" "${forward_opts[@]}" "$token")" || {
+                if [[ "$full_path" == "$token" ]]; then
+                    echo "[BUG] guard: '$token' is a builtin and should not be guarded." >&2
+                elif [[ "$full_path" == alias\ * ]]; then
+                    echo "[BUG] guard: '$token' is an alias and should not be used in scripts." >&2
+                else
+                    echo "[ERROR] guard: unable to resolve full path for '$token'. Use the full path." >&2
+                fi
+                [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
+            }
+            fname="${prefix}${token}"
+            valid_fnames+=("$fname")
+            valid_paths+=("$full_path")
+        fi
     done
 
-    # Second pass: create functions for all valid commands
+    # Second pass: create wrapper functions
     local i
-    for ((i=0; i<${#valid_commands[@]}; i++)); do
-        eval "${valid_commands[i]}() { \"${full_paths[i]}\" \"\$@\"; }"
+    for ((i=0; i<${#valid_fnames[@]}; i++)); do
+        eval "${valid_fnames[i]}() { \"${valid_paths[i]}\" \"\$@\"; }"
     done
 }

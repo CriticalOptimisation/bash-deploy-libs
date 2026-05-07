@@ -247,7 +247,6 @@ setup_file() {
 
 # bats test_tags=guard,cg_safe_run
 @test "cg_safe_run executes a guarded function" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     source "$LIB"
@@ -260,7 +259,6 @@ setup_file() {
 
 # bats test_tags=guard,cg_safe_run
 @test "non-guarded external command fails inside cg_safe_run" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile --norc -lc '
     source "$LIB"
@@ -273,7 +271,6 @@ setup_file() {
 
 # bats test_tags=guard,cg_safe_run
 @test "cg_unsafe restores writable PATH inside cg_safe_run" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     source "$LIB"
@@ -286,7 +283,6 @@ setup_file() {
 
 # bats test_tags=guard,cg_safe_run
 @test "cg_safe_run rejects non-function argument" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -"$CG_ERR_INVALID_NAME" --separate-stderr bash --noprofile -lc '
     source "$LIB"
@@ -297,7 +293,6 @@ setup_file() {
 
 # bats test_tags=guard,cg_safe_run
 @test "CG_DEBUG=1 prints WARNING for non-guarded command" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile --norc -c '
     source "$LIB"
@@ -311,7 +306,6 @@ setup_file() {
 
 # bats test_tags=guard,cg_safe_run
 @test "CG_DEBUG=1 suggests guard path inside cg_safe_run" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile --norc -lc '
     source "$LIB"
@@ -325,7 +319,6 @@ setup_file() {
 
 # bats test_tags=guard,cg_safe_run
 @test "CG_DEBUG unset is silent for non-guarded command" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile --norc -lc '
     source "$LIB"
@@ -339,7 +332,6 @@ setup_file() {
 
 # bats test_tags=guard,cg_safe_run
 @test "command_not_found_handle not installed when already defined" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 bash --noprofile --norc -c '
     command_not_found_handle() { echo "CUSTOM_HANDLER"; return 127; }
@@ -352,7 +344,6 @@ setup_file() {
 
 # bats test_tags=guard,cg_safe_run
 @test "cg_command_not_found_handler is chainable" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 --separate-stderr bash --noprofile --norc -c '
     source "$LIB"
@@ -370,7 +361,6 @@ setup_file() {
 
 # bats test_tags=guard,cg_safe_run
 @test "guard -f resolver uses provided function for path resolution" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     source "$LIB"
@@ -439,7 +429,6 @@ setup_file() {
 
 # bats test_tags=guard,prefix
 @test "guard -p prefix_ creates prefixed wrapper for plain-name tokens" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     source "$LIB"
@@ -452,7 +441,6 @@ setup_file() {
 
 # bats test_tags=guard,prefix
 @test "guard -p does not apply prefix to fname=path tokens" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     source "$LIB"
@@ -466,7 +454,6 @@ setup_file() {
 
 # bats test_tags=guard,tokens
 @test "guard fname=name resolves name via active resolver" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     source "$LIB"
@@ -479,7 +466,6 @@ setup_file() {
 
 # bats test_tags=guard,tokens
 @test "guard /abs/path creates wrapper with prefixed basename" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     source "$LIB"
@@ -493,7 +479,6 @@ setup_file() {
 
 # bats test_tags=guard,tokens
 @test "guard fname=name with relative rhs is rejected" {
-  skip "Feature not yet implemented"
   # shellcheck disable=SC2016
   run -"$CG_ERR_NOT_FOUND" bash --noprofile -lc '
     source "$LIB"
