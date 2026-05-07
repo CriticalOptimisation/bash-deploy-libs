@@ -7,6 +7,7 @@
 [[ -z ${__COMMAND_GUARD_SH_INCLUDED:-} ]] && __COMMAND_GUARD_SH_INCLUDED=1 || return 0
 
 # --- Public error codes --------------------------------------------------------
+# shellcheck disable=SC2034  # used by test assertions, not by library code
 readonly CG_ERR_PATH_VIOLATION=1
 readonly CG_ERR_NOT_FOUND=3
 readonly CG_ERR_INVALID_NAME=5
@@ -14,6 +15,7 @@ readonly CG_ERR_MISSING_ARGUMENT=8
 readonly CG_ERR_SYNTAX_ERROR=9
 
 # --- Compiled-in default PATH (discovered once; used by cg_unsafe) ------------
+# shellcheck disable=SC2016  # $PATH intentionally unexpanded here; expands inside the subshell
 _CG_DEFAULT_PATH="$(unset PATH; "$(command -pv bash)" -c 'echo "$PATH"')"
 readonly _CG_DEFAULT_PATH
 
@@ -54,6 +56,7 @@ cg_safe_resolver() {
 #   cg_path_resolver [-d dir-or-colon-list] ... <cmd-name>
 cg_path_resolver() {
     local extra_path=""
+    # Option processing without getopts
     while [[ $# -gt 1 ]]; do
         case "$1" in
             -d) extra_path="${extra_path:+$extra_path:}$2"; shift 2 ;;
@@ -180,7 +183,7 @@ guard() {
                opt_p=true; prefix="$OPTARG" ;;
             \?)
                 local flag="-$OPTARG"
-                local next="${@:OPTIND:1}"
+                local next="${*:OPTIND:1}"
                 # When $next does not start with a dash and is not --, it is either
                 # an option parameter to the resolver, or the first token to convert.
                 # We test it first as an option parameter, verbatim, and reach
