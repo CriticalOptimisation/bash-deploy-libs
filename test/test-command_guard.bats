@@ -18,7 +18,7 @@ setup_file() {
   # New functions added in issue #112 (present after Task 5; silently skip if absent)
   export -f cg_safe_resolver cg_path_resolver cg_safe_run cg_unsafe cg_command_not_found_handler 2>/dev/null || true
   export CG_ERR_INVALID_NAME CG_ERR_NOT_FOUND
-  export CG_ERR_MISSING_ARGUMENT CG_ERR_PATH_VIOLATION _CG_DEFAULT_PATH
+  export CG_ERR_MISSING_ARGUMENT CG_ERR_PATH_VIOLATION CG_ERR_SYNTAX_ERROR _CG_DEFAULT_PATH
 }
 
 # bats test_tags=guard,issue-24
@@ -228,7 +228,7 @@ setup_file() {
 # bats test_tags=guard,pr2
 @test "custom path with relative path fails" {
   # shellcheck disable=SC2016
-  run -"$CG_ERR_NOT_FOUND" bash --noprofile -lc '
+  run -"$CG_ERR_SYNTAX_ERROR" bash --noprofile -lc '
     guard "cmd=../bin/cmd"
   '
   [[ "$output" == *"absolute path"* ]]
@@ -480,7 +480,7 @@ setup_file() {
 # bats test_tags=guard,tokens
 @test "guard fname=name with relative rhs is rejected" {
   # shellcheck disable=SC2016
-  run -"$CG_ERR_NOT_FOUND" bash --noprofile -lc '
+  run -"$CG_ERR_SYNTAX_ERROR" bash --noprofile -lc '
     source "$LIB"
     guard "mybash=../bin/bash"
   '

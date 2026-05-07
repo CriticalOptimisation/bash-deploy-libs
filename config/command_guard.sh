@@ -8,9 +8,10 @@
 
 # --- Public error codes --------------------------------------------------------
 readonly CG_ERR_PATH_VIOLATION=1
-readonly CG_ERR_INVALID_NAME=2
 readonly CG_ERR_NOT_FOUND=3
-readonly CG_ERR_MISSING_ARGUMENT=4
+readonly CG_ERR_INVALID_NAME=5
+readonly CG_ERR_MISSING_ARGUMENT=8
+readonly CG_ERR_SYNTAX_ERROR=9
 
 # --- Compiled-in default PATH (discovered once; used by cg_unsafe) ------------
 _CG_DEFAULT_PATH="$(unset PATH; "$(command -pv bash)" -c 'echo "$PATH"')"
@@ -32,7 +33,7 @@ cg_safe_resolver() {
     [[ $# -eq 0 ]] && return "$CG_ERR_MISSING_ARGUMENT"
     if [[ $# -ne 1 ]]; then
         echo "[ERROR] cg_safe_resolver: accepts exactly one argument (command name); use -r with cg_path_resolver to pass options." >&2
-        return "$CG_ERR_INVALID_NAME"
+        return "$CG_ERR_SYNTAX_ERROR"
     fi
     local cmd="$1"
     local resolved
@@ -56,7 +57,8 @@ cg_path_resolver() {
     while [[ $# -gt 1 ]]; do
         case "$1" in
             -d) extra_path="${extra_path:+$extra_path:}$2"; shift 2 ;;
-            *)  return "$CG_ERR_NOT_FOUND" ;;
+            *)  echo "[ERROR] cg_path_resolver: unexpected token '$1'; use -d for each directory." >&2
+                return "$CG_ERR_SYNTAX_ERROR" ;;
         esac
     done
     [[ $# -eq 0 ]] && return "$CG_ERR_MISSING_ARGUMENT"
@@ -151,8 +153,10 @@ fi
 #   /abs/path        function name = <prefix>basename, path verbatim
 #   name             function name = <prefix>name, resolved via resolver
 # Errors:
-#   CG_ERR_INVALID_NAME  invalid identifier or unrecognised guard option
-#   CG_ERR_NOT_FOUND     command not found or path invalid/non-executable
+#   CG_ERR_INVALID_NAME      invalid Bash identifier in a token
+#   CG_ERR_MISSING_ARGUMENT  guard option -r or -p is missing its argument
+#   CG_ERR_NOT_FOUND         command not found or path invalid/non-executable
+#   CG_ERR_SYNTAX_ERROR      relative path used where an absolute path is required
 # Notes:
 #   Validation is all-or-nothing: no wrapper is created unless every token
 #   passes validation.
@@ -185,7 +189,7 @@ guard() {
                 fi
                 ;;
             :)  echo "[ERROR] guard: option -$OPTARG requires an argument." >&2
-                return "$CG_ERR_INVALID_NAME" ;;
+                return "$CG_ERR_MISSING_ARGUMENT" ;;
         esac
     done
     shift $((OPTIND - 1))
@@ -240,7 +244,7 @@ guard() {
             elif [[ "$rhs" == */* ]]; then
                 # Contains / but not absolute
                 echo "[ERROR] guard: '$rhs' must be an absolute path." >&2
-                [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_NOT_FOUND" || return "$CG_ERR_NOT_FOUND"
+                [[ "$BASHPID" != "$$" ]] && exit "$CG_ERR_SYNTAX_ERROR" || return "$CG_ERR_SYNTAX_ERROR"
             else
                 # Plain name — resolve via resolver
                 full_path="$("$resolver" "${forward_opts[@]}" "$rhs")" || {

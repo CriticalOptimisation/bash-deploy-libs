@@ -103,8 +103,13 @@ full path.
 - Returns:
 
   - ``0`` on success, including when zero tokens are provided (with optional warning).
-  - ``CG_ERR_INVALID_NAME`` when an option or identifier is invalid.
-  - ``CG_ERR_NOT_FOUND`` when a command cannot be resolved or a path is invalid.
+  - ``CG_ERR_INVALID_NAME`` when a token contains an invalid Bash identifier.
+  - ``CG_ERR_MISSING_ARGUMENT`` when a guard option (``-r`` or ``-p``) is
+    present but its required argument is missing.
+  - ``CG_ERR_NOT_FOUND`` when a command cannot be resolved or a path is
+    invalid or non-executable.
+  - ``CG_ERR_SYNTAX_ERROR`` when a relative path is used in the ``fname=rhs``
+    form (absolute path required).
 
 - Validation is all-or-nothing: no wrapper functions are created unless every
   token passes validation.
@@ -158,7 +163,7 @@ options; pass all arguments directly to ``guard``.
 - Returns ``CG_ERR_NOT_FOUND`` on failure (also prints the raw ``command -pv``
   output, which may be ``exec`` for builtins or ``alias …`` for aliases; guard
   uses this to produce specific diagnostics).
-- Returns ``CG_ERR_INVALID_NAME`` with a diagnostic message when called with
+- Returns ``CG_ERR_SYNTAX_ERROR`` with a diagnostic message when called with
   more than one argument (structural misuse; guard never passes options to this
   resolver).
 - Returns ``CG_ERR_MISSING_ARGUMENT`` when called with no arguments.
@@ -179,8 +184,11 @@ of the POSIX default PATH.
 - Builds a ``local PATH`` from the accumulated directories, then uses
   ``command -v`` to resolve the command.
 - Returns ``0`` and prints the absolute path on success.
-- Returns ``CG_ERR_NOT_FOUND`` on failure or when an unexpected positional
-  argument precedes the command name.
+- Returns ``CG_ERR_NOT_FOUND`` on failure (command not resolved in the given
+  directories).
+- Returns ``CG_ERR_SYNTAX_ERROR`` with a diagnostic message when an unexpected
+  token appears before the command name (positional paths without ``-d`` are
+  not accepted).
 - Returns ``CG_ERR_MISSING_ARGUMENT`` when called with no command name.
 
 Example — guard a snap binary:
@@ -300,10 +308,16 @@ Error Codes
 - ``CG_ERR_PATH_VIOLATION=1``: Bash readonly-assignment failure exit code.
   Produced by the Bash runtime, not by library code. The constant is provided
   for documentation and test assertions only.
-- ``CG_ERR_INVALID_NAME=2``: invalid Bash identifier or unrecognised guard option.
 - ``CG_ERR_NOT_FOUND=3``: command not found, path invalid, or non-executable.
-- ``CG_ERR_MISSING_ARGUMENT=4``: no command name supplied to a resolver. Required
-  by the resolver protocol; also used for missing guard option arguments.
+- ``CG_ERR_INVALID_NAME=5``: invalid Bash identifier (aligned with
+  ``HS_ERR_INVALID_VAR_NAME``).
+- ``CG_ERR_MISSING_ARGUMENT=8``: required argument missing — no command name
+  supplied to a resolver, or a guard option ``-r``/``-p`` is missing its
+  argument (aligned with ``HS_ERR_MISSING_ARGUMENT``).
+- ``CG_ERR_SYNTAX_ERROR=9``: structural calling-convention violation — function
+  called with the wrong number or type of arguments, or a path that violates a
+  structural constraint (e.g. relative path where absolute is required) (aligned
+  with ``HS_ERR_INVALID_ARGUMENT_TYPE``).
 
 Behavior Details
 ----------------
