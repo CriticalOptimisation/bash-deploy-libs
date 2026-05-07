@@ -53,9 +53,9 @@ guard
 Defines a function named ``<command>`` that forwards to the external command by
 full path.
 
-- Usage: ``guard [-q] [-p <prefix>] [-f <resolver>] [resolver-opts] [--] [token ...]``
+- Usage: ``guard [-q] [-p <prefix>] [-r <resolver>] [resolver-opts] [--] [token ...]``
 - **Guard options must precede resolver options.** The recommended order is
-  ``-p prefix -f resolver resolver-opts tokens``, but ``-f`` and ``-p`` may be
+  ``-p prefix -r resolver resolver-opts tokens``, but ``-r`` and ``-p`` may be
   swapped. All ``-X`` flags that guard does not recognise are forwarded to the
   active resolver (see *Resolver Protocol*).
 - Options:
@@ -64,7 +64,7 @@ full path.
   - ``-p <prefix>``: Prepend ``prefix`` to the generated function name for
     **plain-name** and **absolute-path** tokens. Has no effect on tokens that
     use the explicit ``fname=…`` form.
-  - ``-f <resolver>``: Use ``resolver`` instead of ``cg_safe_resolver`` to
+  - ``-r <resolver>``: Use ``resolver`` instead of ``cg_safe_resolver`` to
     resolve plain-name and ``fname=name`` (non-absolute RHS) tokens.
   - ``--``: End of options; required when a token name starts with ``-``.
 
@@ -149,15 +149,17 @@ cg_safe_resolver
 ~~~~~~~~~~~~~~~~
 
 The default resolver used by ``guard``. Resolves a command name to its absolute
-path using ``command -pv`` (Bash builtin, POSIX default PATH).
+path using ``command -pv`` (Bash builtin, POSIX default PATH). Accepts no
+options; pass all arguments directly to ``guard``.
 
-- Protocol: ``cg_safe_resolver [forwarded-opts] <cmd-name>``
+- Protocol: ``cg_safe_resolver <cmd-name>``
   (see *Resolver Protocol* for the calling convention).
 - Returns ``0`` and prints the absolute path on success.
 - Returns ``CG_ERR_NOT_FOUND`` on failure (also prints the raw ``command -pv``
   output, which may be ``exec`` for builtins or ``alias …`` for aliases; guard
-  uses this to produce specific diagnostics).
-- Returns ``CG_ERR_MISSING_ARGUMENT`` when called with no command name.
+  uses this to produce specific diagnostics). Also returned when called with
+  more than one argument.
+- Returns ``CG_ERR_MISSING_ARGUMENT`` when called with no arguments.
 
 cg_path_resolver
 ~~~~~~~~~~~~~~~~
@@ -165,34 +167,35 @@ cg_path_resolver
 An extended resolver that searches a caller-specified set of directories instead
 of the POSIX default PATH.
 
-- Protocol: ``cg_path_resolver [-d dir | dir:dir:...] ... <cmd-name>``
+- Protocol: ``cg_path_resolver [-d dir-or-colon-list] ... <cmd-name>``
   (see *Resolver Protocol*).
-- ``-d <dir>``: add ``dir`` to the search PATH (cumulative; multiple ``-d``
-  options are allowed).
-- Colon-separated path strings (``/a:/b:/c``) passed as positional arguments
-  before the command name are also accepted and appended to the search PATH.
-  Both forms may be combined.
+- ``-d <dir-or-colon-list>``: add one or more directories to the search PATH
+  (cumulative; ``-d`` may be repeated; its value may be a single directory or a
+  colon-separated list such as ``/a:/b:/c``).
+- Positional path strings without ``-d`` are not accepted and cause
+  ``CG_ERR_NOT_FOUND``.
 - Builds a ``local PATH`` from the accumulated directories, then uses
   ``command -v`` to resolve the command.
 - Returns ``0`` and prints the absolute path on success.
-- Returns ``CG_ERR_NOT_FOUND`` on failure.
+- Returns ``CG_ERR_NOT_FOUND`` on failure or when an unexpected positional
+  argument precedes the command name.
 - Returns ``CG_ERR_MISSING_ARGUMENT`` when called with no command name.
 
 Example — guard a snap binary:
 
 .. code-block:: bash
 
-   guard -f cg_path_resolver -d /snap/bin snapd
+   guard -r cg_path_resolver -d /snap/bin snapd
 
 Example — mix of custom and default resolution in one call:
 
 .. code-block:: bash
 
-   guard -f cg_path_resolver -d /snap/bin snapd uname  # uname not in /snap/bin → fails
+   guard -r cg_path_resolver -d /snap/bin snapd uname  # uname not in /snap/bin → fails
 
    # Use cg_safe_resolver (default) for standard commands:
    guard uname
-   guard -f cg_path_resolver -d /snap/bin snapd
+   guard -r cg_path_resolver -d /snap/bin snapd
 
 cg_command_not_found_handler
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -250,7 +253,7 @@ Custom resolver example:
        [[ -x "$resolved" ]] || return "$CG_ERR_NOT_FOUND"
    }
 
-   guard -f my_resolver mytool
+   guard -r my_resolver mytool
 
 PATH Enforcement
 ----------------

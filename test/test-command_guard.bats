@@ -360,7 +360,7 @@ setup_file() {
 }
 
 # bats test_tags=guard,cg_safe_run
-@test "guard -f resolver uses provided function for path resolution" {
+@test "guard -r resolver uses provided function for path resolution" {
   # shellcheck disable=SC2016
   run -0 bash --noprofile -lc '
     source "$LIB"
@@ -369,7 +369,7 @@ setup_file() {
       [[ "$cmd" == "uname" ]] || return 3
       printf "/usr/bin/uname"
     }
-    guard -f my_resolver uname
+    guard -r my_resolver uname
     [ "$(type -t uname)" = "function" ]
     out=$(uname)
     [ -n "$out" ]

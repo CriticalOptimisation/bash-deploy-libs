@@ -24,13 +24,14 @@ readonly _CG_DEFAULT_PATH
 #   Default resolver: resolves a command name to its absolute path using
 #   command -pv (POSIX default PATH, independent of $PATH).
 #   Prints the command -pv output (even on failure, so guard can diagnose
-#   builtins and aliases). Returns CG_ERR_MISSING_ARGUMENT when called
-#   with no command name (required by the resolver protocol).
+#   builtins and aliases). Accepts no options; returns CG_ERR_MISSING_ARGUMENT
+#   when called with no arguments (required by the resolver protocol).
 # Usage:
-#   cg_safe_resolver [forwarded-opts...] <cmd-name>
+#   cg_safe_resolver <cmd-name>
 cg_safe_resolver() {
     [[ $# -eq 0 ]] && return "$CG_ERR_MISSING_ARGUMENT"
-    local cmd="${@: -1}"
+    [[ $# -ne 1 ]] && return "$CG_ERR_NOT_FOUND"
+    local cmd="$1"
     local resolved
     resolved="$(command -pv -- "$cmd")" || return "$CG_ERR_NOT_FOUND"
     printf '%s' "$resolved"
@@ -40,18 +41,19 @@ cg_safe_resolver() {
 # Function:
 #   cg_path_resolver
 # Description:
-#   Extended resolver: builds a local PATH from -d options and colon-separated
-#   positional path strings, then resolves via command -v.
+#   Extended resolver: builds a local PATH from -d options, then resolves
+#   via command -v. The -d option may be repeated; its value may be a single
+#   directory or a colon-separated list of directories.
 #   Prints the command -v output (even on failure). Returns
 #   CG_ERR_MISSING_ARGUMENT when called with no command name.
 # Usage:
-#   cg_path_resolver [-d dir | dir:dir:...] ... <cmd-name>
+#   cg_path_resolver [-d dir-or-colon-list] ... <cmd-name>
 cg_path_resolver() {
     local extra_path=""
     while [[ $# -gt 1 ]]; do
         case "$1" in
             -d) extra_path="${extra_path:+$extra_path:}$2"; shift 2 ;;
-            *)  extra_path="${extra_path:+$extra_path:}$1"; shift ;;
+            *)  return "$CG_ERR_NOT_FOUND" ;;
         esac
     done
     [[ $# -eq 0 ]] && return "$CG_ERR_MISSING_ARGUMENT"
@@ -130,12 +132,12 @@ fi
 #   Defines a wrapper function for each token that dispatches to the
 #   resolved full path with all arguments forwarded.
 # Usage:
-#   guard [-q] [-p <prefix>] [-f <resolver>] [resolver-opts] [--] [token ...]
+#   guard [-q] [-p <prefix>] [-r <resolver>] [resolver-opts] [--] [token ...]
 # Options:
 #   -q          Quiet: suppress warnings for zero tokens.
 #   -p prefix   Prepend prefix to generated function names for plain-name
 #               and /abs/path tokens. Has no effect on fname=... tokens.
-#   -f resolver Use resolver instead of cg_safe_resolver. All unrecognised
+#   -r resolver Use resolver instead of cg_safe_resolver. All unrecognised
 #               option flags are forwarded to the resolver; guard probes the
 #               resolver to determine which flags take an argument.
 #               Guard options must precede resolver options.
@@ -157,12 +159,12 @@ guard() {
 
     # Parse guard's own options with getopts; unknown flags are forwarded to
     # the resolver after an arity probe. Guard options must precede resolver
-    # options: guard [-q] [-p prefix] [-f resolver] [resolver-opts] [--] tokens
+    # options: guard [-q] [-p prefix] [-r resolver] [resolver-opts] [--] tokens
     OPTIND=1
-    while getopts ":qf:p:" opt; do
+    while getopts ":qr:p:" opt; do
         case $opt in
             q) quiet=true ;;
-            f) resolver="$OPTARG" ;;
+            r) resolver="$OPTARG" ;;
             p) prefix="$OPTARG" ;;
             \?)
                 local flag="-$OPTARG"
