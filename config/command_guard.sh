@@ -164,6 +164,7 @@ fi
 guard() {
     local quiet=false resolver="cg_safe_resolver" prefix=""
     local -a forward_opts=()
+    local opt_q=false opt_r=false opt_p=false
 
     # Parse guard's own options with getopts; unknown flags are forwarded to
     # the resolver after an arity probe. Guard options must precede resolver
@@ -171,12 +172,20 @@ guard() {
     OPTIND=1
     while getopts ":qr:p:" opt; do
         case $opt in
-            q) quiet=true ;;
-            r) resolver="$OPTARG" ;;
-            p) prefix="$OPTARG" ;;
+            q) [[ "$opt_q" == true ]] && { echo "[ERROR] guard: option -q specified more than once." >&2; return "$CG_ERR_SYNTAX_ERROR"; }
+               opt_q=true; quiet=true ;;
+            r) [[ "$opt_r" == true ]] && { echo "[ERROR] guard: option -r specified more than once." >&2; return "$CG_ERR_SYNTAX_ERROR"; }
+               opt_r=true; resolver="$OPTARG" ;;
+            p) [[ "$opt_p" == true ]] && { echo "[ERROR] guard: option -p specified more than once." >&2; return "$CG_ERR_SYNTAX_ERROR"; }
+               opt_p=true; prefix="$OPTARG" ;;
             \?)
                 local flag="-$OPTARG"
                 local next="${@:OPTIND:1}"
+                # When $next does not start with a dash and is not --, it is either
+                # an option parameter to the resolver, or the first token to convert.
+                # We test it first as an option parameter, verbatim, and reach
+                # a conclusion if the resolver complains that the name to resolve is
+                # missing.
                 if [[ -n "$next" && "${next:0:1}" != "-" && "$next" != "--" ]]; then
                     "$resolver" "${forward_opts[@]}" "$flag" "$next" >/dev/null 2>&1
                     if [[ $? -eq "$CG_ERR_MISSING_ARGUMENT" ]]; then

@@ -390,6 +390,29 @@ setup() {
   run -"$CG_ERR_NOT_FOUND" f
 }
 
+# --- Duplicate option rejection ---
+
+# bats test_tags=guard,options
+@test "guard rejects duplicate -q" {
+  f() { guard -q -q uname; }
+  run -"$CG_ERR_SYNTAX_ERROR" --separate-stderr f
+  [[ "$stderr" == *"[ERROR] guard: option -q specified more than once."* ]]
+}
+
+# bats test_tags=guard,options
+@test "guard rejects duplicate -r" {
+  f() { guard -r cg_safe_resolver -r cg_safe_resolver uname; }
+  run -"$CG_ERR_SYNTAX_ERROR" --separate-stderr f
+  [[ "$stderr" == *"[ERROR] guard: option -r specified more than once."* ]]
+}
+
+# bats test_tags=guard,options
+@test "guard rejects duplicate -p" {
+  f() { guard -p foo_ -p bar_ uname; }
+  run -"$CG_ERR_SYNTAX_ERROR" --separate-stderr f
+  [[ "$stderr" == *"[ERROR] guard: option -p specified more than once."* ]]
+}
+
 # --- Zero commands and options support ---
 
 # bats test_tags=guard,pr4

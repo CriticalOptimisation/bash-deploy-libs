@@ -67,6 +67,8 @@ full path.
   - ``-r <resolver>``: Use ``resolver`` instead of ``cg_safe_resolver`` to
     resolve plain-name and ``fname=name`` (non-absolute RHS) tokens.
   - ``--``: End of options; required when a token name starts with ``-``.
+  - Each of ``-q``, ``-p``, and ``-r`` may appear **at most once**; repeating
+    any of them is a ``CG_ERR_SYNTAX_ERROR``.
 
 - Token forms (all forms may be mixed in a single call):
 
@@ -95,7 +97,7 @@ full path.
   - ``fname`` and plain ``name`` must be valid Bash identifiers
     (``^[a-zA-Z_][a-zA-Z0-9_]*$``).
   - For ``fname=rhs``: if ``rhs`` contains ``/`` but is not absolute, the token
-    is rejected (``CG_ERR_NOT_FOUND``).
+    is rejected (``CG_ERR_SYNTAX_ERROR``).
   - For ``/abs/path``: the basename of the path must be a valid Bash identifier;
     if not (e.g. ``/usr/local/bin/my-cmd``), use the ``fname=/abs/path`` form
     with an explicit identifier.
@@ -109,7 +111,8 @@ full path.
   - ``CG_ERR_NOT_FOUND`` when a command cannot be resolved or a path is
     invalid or non-executable.
   - ``CG_ERR_SYNTAX_ERROR`` when a relative path is used in the ``fname=rhs``
-    form (absolute path required).
+    form (absolute path required), or when a guard option (``-q``, ``-r``,
+    ``-p``) is repeated.
 
 - Validation is all-or-nothing: no wrapper functions are created unless every
   token passes validation.
