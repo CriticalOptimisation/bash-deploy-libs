@@ -100,6 +100,9 @@ cg_safe_run() {
 #   Executes a function with a writable local PATH set to the compiled-in
 #   Bash default. Use inside cg_safe_run to allow library guard calls.
 #   The local PATH in cg_unsafe shadows the local -r PATH from cg_safe_run.
+#   Typical use: wrapping init of third-party (unsafe) libraries that call
+#   external commands not guarded by cg_guard. cg_guard with cg_path_resolver
+#   also works inside cg_unsafe (e.g. to guard tools installed via apt or snap).
 # Usage:
 #   cg_unsafe <fn> [args...]
 cg_unsafe() {

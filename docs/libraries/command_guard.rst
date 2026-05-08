@@ -167,6 +167,17 @@ default (discovered once at source time via a subshell; never hardcoded).
   ``cg_safe_run`` context. Because ``local PATH`` in the callee creates a
   new binding that shadows the ``local -r PATH`` from ``cg_safe_run``, no
   error occurs.
+- Typical use: initialisation wrappers for third-party (unsafe) libraries
+  that call external commands not guarded by ``cg_guard``.
+- ``cg_guard`` with ``cg_path_resolver`` also works inside ``cg_unsafe``.
+  For tools that may be installed via an ordinary package (e.g. apt) **or**
+  a snap, this is the recommended pattern — ``cg_path_resolver`` finds the
+  tool in either case:
+
+  .. code-block:: bash
+
+     cg_unsafe cg_guard -r cg_path_resolver -d /snap/bin -s docker-compose
+
 - Returns: whatever ``fn`` returns.
 
 cg_safe_resolver
@@ -470,6 +481,26 @@ Full ``cg_safe_run`` pattern with library initialisation:
    }
 
    CG_DEBUG=1 cg_safe_run _my_main
+
+Guarding a tool that may be installed via apt or snap inside ``cg_safe_run``:
+
+.. code-block:: bash
+
+   source "$(dirname "$0")/config/command_guard.sh"
+
+   _my_init() {
+       cg_unsafe cg_guard uname date
+       # docker-compose may be an apt package or a snap; cg_path_resolver finds it either way
+       cg_unsafe cg_guard -r cg_path_resolver -d /snap/bin -s docker-compose
+   }
+
+   _my_main() {
+       _my_init
+       uname -s
+       docker-compose version
+   }
+
+   cg_safe_run _my_main
 
 Source Listing
 --------------
