@@ -113,8 +113,9 @@ see *guard alias* below).
   - ``CG_ERR_NOT_FOUND`` when a command cannot be resolved or a path is
     invalid or non-executable.
   - ``CG_ERR_SYNTAX_ERROR`` when a relative path is used in the ``fname=rhs``
-    form (absolute path required), or when a guard option (``-q``, ``-r``,
-    ``-p``) is repeated.
+    form (absolute path required); when a guard option (``-q``, ``-r``,
+    ``-p``) is repeated; or when a forwarded option flag is rejected by the
+    active resolver as unrecognised (probe returns ``CG_ERR_SYNTAX_ERROR``).
 
 - Validation is all-or-nothing: no wrapper functions are created unless every
   token passes validation.
@@ -167,6 +168,16 @@ default (discovered once at source time via a subshell; never hardcoded).
   ``cg_safe_run`` context. Because ``local PATH`` in the callee creates a
   new binding that shadows the ``local -r PATH`` from ``cg_safe_run``, no
   error occurs.
+- **Why it is needed inside** ``cg_safe_run``: third-party libraries
+  sometimes set or rely on ``$PATH`` during initialisation; under
+  ``cg_safe_run`` the PATH is read-only and such libraries would abort.
+  ``cg_unsafe`` locally reverses the restriction for the duration of the
+  called function, then the restriction is reinstated automatically when
+  the function returns.
+- **Safe to call outside** ``cg_safe_run``: if there is no enclosing
+  ``cg_safe_run`` context, ``local PATH="$_CG_DEFAULT_PATH"`` simply
+  creates a function-scoped variable with the compiled-in default. No
+  error occurs and the surrounding environment is unaffected.
 - Typical use: initialisation wrappers for third-party (unsafe) libraries
   that call external commands not guarded by ``cg_guard``.
 - ``cg_guard`` with ``cg_path_resolver`` also works inside ``cg_unsafe``.

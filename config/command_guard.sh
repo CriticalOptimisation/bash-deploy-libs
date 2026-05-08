@@ -74,6 +74,37 @@ cg_path_resolver() {
     [[ -x "$resolved" && "${resolved:0:1}" == "/" ]] || return "$CG_ERR_NOT_FOUND"
 }
 
+# --- Internal helpers ---------------------------------------------------------
+
+# Function:
+#   _cg_guard_resolve
+# Description:
+#   Resolve <cmd_name> via <resolver> with forwarded options.
+#   Prints the resolved path to stdout (even on failure, so the caller can
+#   inspect it). Prints a diagnostic to stderr and returns the resolver's
+#   error code on failure — CG_ERR_NOT_FOUND for missing commands,
+#   CG_ERR_SYNTAX_ERROR when the resolver rejects the call.
+# Usage:
+#   _cg_guard_resolve <resolver> [forward_opts...] <cmd_name>
+_cg_guard_resolve() {
+    local _cgr_resolver="$1"; shift
+    local _cgr_name="${!#}"
+    local _cgr_path _cgr_rc
+    _cgr_path="$("$_cgr_resolver" "$@")"
+    _cgr_rc=$?
+    printf '%s' "$_cgr_path"
+    if [[ $_cgr_rc -ne 0 ]]; then
+        if [[ "$_cgr_path" == "$_cgr_name" ]]; then
+            echo "[BUG] cg_guard: '$_cgr_name' is a builtin and should not be guarded." >&2
+        elif [[ "$_cgr_path" == alias\ * ]]; then
+            echo "[BUG] cg_guard: '$_cgr_name' is an alias and should not be used in scripts." >&2
+        else
+            echo "[ERROR] cg_guard: unable to resolve full path for '$_cgr_name'. Use the full path." >&2
+        fi
+        return "$_cgr_rc"
+    fi
+}
+
 # --- Public API ---------------------------------------------------------------
 
 # Function:
@@ -114,7 +145,7 @@ cg_unsafe() {
 #   cg_command_not_found_handler
 # Description:
 #   Public handler for the command_not_found_handle hook. When CG_DEBUG is
-#   set (non-empty), prints a [WARNING] and a guard suggestion to stderr.
+#   set (non-empty), prints a [WARNING] and a cg_guard suggestion to stderr.
 #   Always returns 127. Applications can chain to this from their own handler.
 # Usage:
 #   cg_command_not_found_handler <cmd>
@@ -163,7 +194,9 @@ fi
 #   CG_ERR_INVALID_NAME      invalid Bash identifier in a token
 #   CG_ERR_MISSING_ARGUMENT  cg_guard option -r or -p is missing its argument
 #   CG_ERR_NOT_FOUND         command not found or path invalid/non-executable
-#   CG_ERR_SYNTAX_ERROR      relative path used where an absolute path is required
+#   CG_ERR_SYNTAX_ERROR      relative path where absolute required; a guard option
+#                            (-q, -r, -p) repeated; or a forwarded option rejected
+#                            by the resolver (not recognised)
 # Notes:
 #   Validation is all-or-nothing: no wrapper is created unless every token
 #   passes validation.
@@ -191,12 +224,17 @@ cg_guard() {
                 # an option parameter to the resolver, or the first token to convert.
                 # We test it first as an option parameter, verbatim, and reach
                 # a conclusion if the resolver complains that the name to resolve is
-                # missing.
+                # missing.  If the resolver rejects the flag as a syntax error, the
+                # option is not recognised and cg_guard returns immediately.
                 if [[ -n "$next" && "${next:0:1}" != "-" && "$next" != "--" ]]; then
                     "$resolver" "${forward_opts[@]}" "$flag" "$next" >/dev/null 2>&1
-                    if [[ $? -eq "$CG_ERR_MISSING_ARGUMENT" ]]; then
+                    local probe_rc=$?
+                    if [[ $probe_rc -eq "$CG_ERR_MISSING_ARGUMENT" ]]; then
                         forward_opts+=("$flag" "$next")
                         (( OPTIND++ ))
+                    elif [[ $probe_rc -eq "$CG_ERR_SYNTAX_ERROR" ]]; then
+                        echo "[ERROR] cg_guard: option '$flag' is not recognised by resolver '$resolver'." >&2
+                        return "$CG_ERR_SYNTAX_ERROR"
                     else
                         forward_opts+=("$flag")
                     fi
@@ -263,16 +301,7 @@ cg_guard() {
                 return "$CG_ERR_SYNTAX_ERROR"
             else
                 # Plain name — resolve via resolver
-                full_path="$("$resolver" "${forward_opts[@]}" "$rhs")" || {
-                    if [[ "$full_path" == "$rhs" ]]; then
-                        echo "[BUG] cg_guard: '$rhs' is a builtin and should not be guarded." >&2
-                    elif [[ "$full_path" == alias\ * ]]; then
-                        echo "[BUG] cg_guard: '$rhs' is an alias and should not be used in scripts." >&2
-                    else
-                        echo "[ERROR] cg_guard: unable to resolve full path for '$rhs'. Use the full path." >&2
-                    fi
-                    return "$CG_ERR_NOT_FOUND"
-                }
+                full_path="$(_cg_guard_resolve "$resolver" "${forward_opts[@]}" "$rhs")" || return $?
             fi
             valid_fnames+=("$fname")
             valid_paths+=("$full_path")
@@ -284,16 +313,7 @@ cg_guard() {
                 return "$CG_ERR_INVALID_NAME"
             fi
 
-            full_path="$("$resolver" "${forward_opts[@]}" "$token")" || {
-                if [[ "$full_path" == "$token" ]]; then
-                    echo "[BUG] cg_guard: '$token' is a builtin and should not be guarded." >&2
-                elif [[ "$full_path" == alias\ * ]]; then
-                    echo "[BUG] cg_guard: '$token' is an alias and should not be used in scripts." >&2
-                else
-                    echo "[ERROR] cg_guard: unable to resolve full path for '$token'. Use the full path." >&2
-                fi
-                return "$CG_ERR_NOT_FOUND"
-            }
+            full_path="$(_cg_guard_resolve "$resolver" "${forward_opts[@]}" "$token")" || return $?
             fname="${prefix}${token}"
             valid_fnames+=("$fname")
             valid_paths+=("$full_path")

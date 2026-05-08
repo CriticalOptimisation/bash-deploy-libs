@@ -438,6 +438,22 @@ setup() {
   [[ "$stderr" == *"[ERROR] cg_guard: option -p specified more than once."* ]]
 }
 
+# --- Unrecognised option rejection (T09) ---
+
+# bats test_tags=guard,options
+@test "cg_guard rejects option not recognised by default resolver" {
+  f() { cg_guard -x uname; }
+  run -"$CG_ERR_SYNTAX_ERROR" --separate-stderr f
+  [[ "$stderr" == *"not recognised"* ]]
+}
+
+# bats test_tags=guard,options
+@test "cg_guard rejects option not recognised by cg_path_resolver" {
+  f() { cg_guard -r cg_path_resolver -x uname; }
+  run -"$CG_ERR_SYNTAX_ERROR" --separate-stderr f
+  [[ "$stderr" == *"not recognised"* ]]
+}
+
 # --- Zero commands and options support ---
 
 # bats test_tags=guard,pr4
@@ -633,4 +649,18 @@ setup() {
   }
   run -0 f
   [[ "$output" == *"evaled"* ]]
+}
+
+# --- cg_unsafe outside cg_safe_run (T13) ---
+
+# bats test_tags=guard,cg_unsafe
+@test "cg_unsafe outside cg_safe_run is harmless" {
+  # cg_unsafe sets local PATH to the compiled-in default. When called outside
+  # any cg_safe_run context there is no readonly PATH to shadow, so the local
+  # declaration is a no-op and the call succeeds normally.
+  f() {
+    cg_unsafe cg_guard uname
+    [[ "$(type -t uname)" == "function" ]]
+  }
+  run -0 f
 }
