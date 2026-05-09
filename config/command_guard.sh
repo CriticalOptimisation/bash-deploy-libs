@@ -105,6 +105,19 @@ _cg_guard_resolve() {
     fi
 }
 
+# Function:
+#   _cg_guard_mkfname
+# Description:
+#   Compute the wrapper function name from <prefix> and <bare-name>.
+#   Currently: fname = prefix + bare_name (literal concatenation).
+#   Isolated here so a future name-to-fname filter (issue #116) replaces
+#   only this one function rather than every call site.
+# Usage:
+#   _cg_guard_mkfname <prefix> <bare-name>
+_cg_guard_mkfname() {
+    printf '%s' "${1}${2}"
+}
+
 # --- Public API ---------------------------------------------------------------
 
 # Function:
@@ -266,7 +279,7 @@ cg_guard() {
         if [[ "${token:0:1}" == "/" ]]; then
             # /abs/path form — prefix applied to basename
             bname="${token##*/}"
-            fname="${prefix}${bname}"
+            fname="$(_cg_guard_mkfname "$prefix" "$bname")"
             if ! [[ "$fname" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
                 echo "[ERROR] cg_guard: '$bname' is not a valid identifier; use the 'fname=${token}' form." >&2
                 return "$CG_ERR_INVALID_NAME"
@@ -314,7 +327,7 @@ cg_guard() {
             fi
 
             full_path="$(_cg_guard_resolve "$resolver" "${forward_opts[@]}" "$token")" || return $?
-            fname="${prefix}${token}"
+            fname="$(_cg_guard_mkfname "$prefix" "$token")"
             valid_fnames+=("$fname")
             valid_paths+=("$full_path")
         fi
