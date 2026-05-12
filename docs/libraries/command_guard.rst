@@ -667,9 +667,10 @@ Guarding a tool that may be installed via apt or snap inside ``cg_safe_run``:
    source "$(dirname "$0")/config/command_guard.sh"
 
    _my_init() {
-       cg_unsafe cg_guard uname date
-       # docker-compose may be an apt package or a snap; cg_path_resolver finds it either way
-       cg_unsafe cg_guard -r cg_path_resolver -d /snap/bin -s docker-compose
+       # cg_guard uses command -pv internally; no cg_unsafe needed inside cg_safe_run.
+       cg_guard uname date
+       # docker-compose may be an apt or snap package; cg_search_snaps handles both.
+       cg_guard -r cg_path_resolver -s "$(cg_search_snaps)" docker-compose
    }
 
    _my_main() {
