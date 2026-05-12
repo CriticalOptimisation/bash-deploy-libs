@@ -479,21 +479,26 @@ and returns exit code 1 (``CG_ERR_PATH_VIOLATION``).
 Guarded commands are unaffected because their wrapper functions dispatch by
 absolute path and do not use PATH.
 
-Library authors should wrap their ``cg_guard`` initialisation in ``cg_unsafe``:
+The typical use case is wrapping a third-party library whose init modifies
+PATH to expose its binaries. Write an init wrapper that runs the library
+init under ``cg_unsafe`` (so PATH is writable and arbitrary commands can
+run), then guards the discovered binaries with ``cg_path_resolver -d``:
 
 .. code-block:: bash
 
-   my_lib_init() {
-       cg_unsafe cg_guard uname date hostname
-       # ... other initialisation
+   _my_lib_init_wrapper() {
+       # PATH is writable here; third_party_init may extend it freely.
+       third_party_init
+       # Guard the library's commands by the directory it installed to.
+       cg_guard -r cg_path_resolver -d /opt/mylib/bin cmd1 cmd2
    }
 
-   my_lib_main() {
-       my_lib_init
-       uname -s
+   my_main() {
+       cg_unsafe _my_lib_init_wrapper
+       cmd1 --version
    }
 
-   cg_safe_run my_lib_main
+   cg_safe_run my_main
 
 ``CG_DEBUG=1`` enables the ``command_not_found_handle`` warning and suggestion
 output. It is safe to enable in development but should be unset in production.
