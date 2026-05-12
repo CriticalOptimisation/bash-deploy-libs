@@ -226,8 +226,9 @@ options; pass all arguments directly to ``cg_guard``.
   output, which may be ``exec`` for builtins or ``alias …`` for aliases;
   ``cg_guard`` uses this to produce specific diagnostics).
 - Returns ``CG_ERR_SYNTAX_ERROR`` with a diagnostic message when called with
-  more than one argument (structural misuse; ``cg_guard`` never passes options
-  to this resolver).
+  more than one argument (structural misuse; any attempt to forward a resolver
+  option while ``cg_safe_resolver`` is active causes ``cg_guard`` to abort
+  with ``CG_ERR_SYNTAX_ERROR`` via the probe mechanism).
 - Returns ``CG_ERR_MISSING_ARGUMENT`` when called with no arguments.
 
 cg_path_resolver
