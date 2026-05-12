@@ -111,10 +111,8 @@ _cg_guard_resolve() {
 #   Unpack a packed-value string into the caller-visible array _cg_unpacked.
 #   Convention: first char in [a-zA-Z0-9_-] → single element, value as-is.
 #   Empty string → one empty-string element. Any other first character is
-#   the separator: strip it, split remainder on it, dropping empty segments.
-#   Consequence: empty strings cannot be encoded inside multi-element packed
-#   values (e.g. ":-p:" yields ["-p"], not ["-p" ""]). To pass a single
-#   empty string, use the empty packed value "" (one empty-string element).
+#   the separator: strip it, split remainder on it, preserving empty segments.
+#   Examples: ":−p" → ("-p"); ":-p:" → ("-p" ""); ":-p::" → ("-p" "" "").
 # Usage:
 #   local -a _cg_unpacked; _cg_unpack_args <packed>
 _cg_unpack_args() {
@@ -131,13 +129,7 @@ _cg_unpack_args() {
     fi
     local _cgu_rest="${_cgu_val:1}"
     [[ -z "$_cgu_rest" ]] && return 0
-    local IFS="$_cgu_sep"
-    local -a _cgu_parts
-    read -ra _cgu_parts <<< "$_cgu_rest"
-    local _cgu_part
-    for _cgu_part in "${_cgu_parts[@]}"; do
-        [[ -n "$_cgu_part" ]] && _cg_unpacked+=("$_cgu_part")
-    done
+    mapfile -t _cg_unpacked <<< "${_cgu_rest//"$_cgu_sep"/$'\n'}"
 }
 
 # Function:
