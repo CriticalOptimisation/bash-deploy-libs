@@ -745,7 +745,7 @@ setup() {
 @test "cg_mkfname_prefix: empty prefix + name yields name" {
   f() {
     local result
-    result="$(cg_mkfname_prefix "" "uname" || exit $?)"
+    result="$(cg_mkfname_prefix "" "uname")" || return $?
     [[ "$result" == "uname" ]]
   }
   run -0 f
@@ -755,7 +755,7 @@ setup() {
 @test "cg_mkfname_prefix: non-empty prefix prepended to name" {
   f() {
     local result
-    result="$(cg_mkfname_prefix "mylib_" "uname" || exit $?)"
+    result="$(cg_mkfname_prefix "mylib_" "uname")" || return $?
     [[ "$result" == "mylib_uname" ]]
   }
   run -0 f
