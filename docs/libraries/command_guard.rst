@@ -628,7 +628,7 @@ Guarding a tool that may be installed as a snap or system package:
 
 .. code-block:: bash
 
-   cg_guard -r cg_path_resolver "$(cg_search_snaps)" docker
+   cg_guard -r cg_path_resolver -s "$(cg_search_snaps)" docker
 
 Guarding a snap binary by absolute path token:
 
