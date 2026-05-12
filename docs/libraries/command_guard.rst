@@ -204,11 +204,13 @@ default (discovered once at source time via a subshell; never hardcoded).
   of ``cg_safe_run`` for the entire duration of the called function.
   Keep the scope as narrow as possible. Because any PATH extension made
   by the third-party init lives only inside the ``local PATH`` binding of
-  ``cg_unsafe`` — it is discarded when ``cg_unsafe`` returns — the wrapper
-  function must either call ``cg_guard`` from within that same scope, or
-  capture the modified PATH and return it for use as a ``-d`` argument to
-  ``cg_guard -r cg_path_resolver`` outside. Calling ``cg_guard`` after
-  ``cg_unsafe`` returns will not see the extended PATH.
+  ``cg_unsafe`` — it is discarded when ``cg_unsafe`` returns — ``$PATH``
+  must be captured while still inside that scope. ``cg_guard`` never reads
+  ``$PATH`` on its own; the extended directories must always be passed
+  explicitly via ``-d "$PATH"`` to ``cg_path_resolver``. The wrapper must
+  therefore either call ``cg_guard -r cg_path_resolver -d "$PATH" ...``
+  from within its own body, or capture ``$PATH`` into a variable and
+  return it so the caller can pass it as ``-d``.
 - Typical use: an init wrapper that calls the third-party init (which may
   extend PATH), then immediately calls ``cg_guard`` to register the
   commands it discovered — all inside the wrapper passed to ``cg_unsafe``.
