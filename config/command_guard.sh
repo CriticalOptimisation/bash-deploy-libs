@@ -109,10 +109,12 @@ _cg_guard_resolve() {
 #   _cg_unpack_args
 # Description:
 #   Unpack a packed-value string into the caller-visible array _cg_unpacked.
-#   Convention: first char in [a-zA-Z0-9_-] → single element, value as-is.
+#   Convention: first char in [a-zA-Z0-9_-] → single element, value as-is,
+#   except "-" alone which is the empty-list sentinel → zero elements.
 #   Empty string → one empty-string element. Any other first character is
 #   the separator: strip it, split remainder on it, preserving empty segments.
-#   Examples: ":−p" → ("-p"); ":-p:" → ("-p" ""); ":-p::" → ("-p" "" "").
+#   Examples: ":−p" → ("-p"); ":-p:" → ("-p" ""); ":-p::" → ("-p" "" "");
+#             ":"   → (""); ";;"  → ("" ""); "..a.." → ("" "a" "" "").
 # Usage:
 #   local -a _cg_unpacked; _cg_unpack_args <packed>
 _cg_unpack_args() {
@@ -124,11 +126,11 @@ _cg_unpack_args() {
     fi
     local _cgu_sep="${_cgu_val:0:1}"
     if [[ "$_cgu_sep" =~ [a-zA-Z0-9_-] ]]; then
+        [[ "$_cgu_val" == "-" ]] && return 0
         _cg_unpacked=("$_cgu_val")
         return 0
     fi
     local _cgu_rest="${_cgu_val:1}"
-    [[ -z "$_cgu_rest" ]] && return 0
     local _cgu_remaining="$_cgu_rest"
     while [[ "$_cgu_remaining" == *"$_cgu_sep"* ]]; do
         _cg_unpacked+=("${_cgu_remaining%%"$_cgu_sep"*}")
@@ -239,19 +241,19 @@ cg_mkfname_prefix() {
 # Description:
 #   Discovers the snap binary directory and returns it as a -z-packed argument
 #   suitable for passing directly to cg_guard -r cg_path_resolver.
-#   Always returns 0; outputs a no-op -z string when snap is absent or broken.
+#   Always returns 0; outputs -z- (empty-list sentinel) when snap is absent or
+#   broken, and -z<FS>-d<FS><dir> when snap is present.
 # Usage:
 #   cg_guard -r cg_path_resolver "$(cg_search_snaps)" <cmd>
 cg_search_snaps() {
-    local _cgs_noop=$'-z\x1F'
     if ! command -p snap >/dev/null 2>&1; then
-        printf '%s' "$_cgs_noop"
+        printf '%s' '-z-'
         return 0
     fi
     local _cgs_paths
     if ! _cgs_paths="$(command -p snap debug paths 2>/dev/null)"; then
         echo "[WARNING] cg_search_snaps: 'snap debug paths' failed; snap binary directory will not be discovered." >&2
-        printf '%s' "$_cgs_noop"
+        printf '%s' '-z-'
         return 0
     fi
     local _cgs_bin="" _cgs_line
@@ -263,7 +265,7 @@ cg_search_snaps() {
     done <<< "$_cgs_paths"
     if [[ -z "$_cgs_bin" || ! -d "$_cgs_bin" ]]; then
         echo "[WARNING] cg_search_snaps: SNAPD_BIN not found or not a directory; snap binary directory will not be discovered." >&2
-        printf '%s' "$_cgs_noop"
+        printf '%s' '-z-'
         return 0
     fi
     printf '%s' $'-z\x1F-d\x1F'"$_cgs_bin"

@@ -705,12 +705,13 @@ setup() {
 }
 
 # bats test_tags=guard,unpack_args,issue-116
-@test "_cg_unpack_args: separator with no content yields empty array" {
+@test "_cg_unpack_args: colon alone yields one empty string element" {
   f() {
 
     local -a _cg_unpacked
     _cg_unpack_args ":" || return $?
-    [[ "${#_cg_unpacked[@]}" -eq 0 ]]
+    [[ "${#_cg_unpacked[@]}" -eq 1 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "" ]]
   }
   run -0 f
 }
@@ -729,12 +730,52 @@ setup() {
 }
 
 # bats test_tags=guard,unpack_args,issue-117
-@test "_cg_unpack_args: x1F alone — snap-absent payload — yields empty array" {
+@test "_cg_unpack_args: x1F alone yields one empty string element" {
   f() {
 
     local -a _cg_unpacked
     _cg_unpack_args $'\x1F' || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 1 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "" ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,unpack_args,issue-117
+@test "_cg_unpack_args: dash alone is empty-list sentinel yields zero elements" {
+  f() {
+
+    local -a _cg_unpacked
+    _cg_unpack_args "-" || return $?
     [[ "${#_cg_unpacked[@]}" -eq 0 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,unpack_args,issue-116
+@test "_cg_unpack_args: semicolons alone yields two empty string elements" {
+  f() {
+
+    local -a _cg_unpacked
+    _cg_unpack_args ";;" || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 2 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "" ]] || return $?
+    [[ "${_cg_unpacked[1]}" == "" ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,unpack_args,issue-116
+@test "_cg_unpack_args: dot-separated with empty edges yields four elements" {
+  f() {
+
+    local -a _cg_unpacked
+    _cg_unpack_args "..a.." || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 4 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "" ]] || return $?
+    [[ "${_cg_unpacked[1]}" == "a" ]] || return $?
+    [[ "${_cg_unpacked[2]}" == "" ]] || return $?
+    [[ "${_cg_unpacked[3]}" == "" ]]
   }
   run -0 f
 }
@@ -854,10 +895,10 @@ setup() {
 }
 
 # bats test_tags=guard,packed_injection,issue-117,focus
-@test "cg_guard -z: empty payload snap-absent is a no-op injection" {
+@test "cg_guard -z: empty-list sentinel is a no-op injection" {
   f() {
     unset -f uname
-    cg_guard $'-z\x1F' uname || return $?
+    cg_guard -z- uname || return $?
     [[ "$(type -t uname)" == "function" ]]
   }
   run -0 f
@@ -889,7 +930,7 @@ setup() {
 # --- cg_search_snaps (issue #117) ---
 
 # bats test_tags=guard,cg_search_snaps,issue-117
-@test "cg_search_snaps: snap absent — output is a no-op -z string" {
+@test "cg_search_snaps: snap absent — output is the empty-list sentinel" {
   f() {
     declare -f cg_search_snaps >/dev/null 2>&1 || return $?
     declare -f _cg_unpack_args  >/dev/null 2>&1 || return $?
@@ -899,7 +940,7 @@ setup() {
     }
     local out
     out="$(cg_search_snaps)" || true
-    [[ "${out:0:2}" == "-z" ]] || return $?
+    [[ "$out" == "-z-" ]] || return $?
     local -a _cg_unpacked
     _cg_unpack_args "${out:2}" || return $?
     [[ "${#_cg_unpacked[@]}" -eq 0 ]]
