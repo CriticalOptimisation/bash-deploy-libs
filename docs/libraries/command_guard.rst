@@ -642,23 +642,23 @@ Guarding a binary whose filename is not a valid identifier:
 
    cg_guard "bash5=/usr/bin/bash5.0"
 
-Full ``cg_safe_run`` pattern with library initialisation:
+Full ``cg_safe_run`` pattern — guard at initialisation time, enforce at runtime:
 
 .. code-block:: bash
 
    source "$(dirname "$0")/config/command_guard.sh"
 
-   _my_init() {
-       cg_unsafe cg_guard uname date
-   }
+   # Guard external commands once, before entering the safe region.
+   # cg_safe_resolver uses command -pv, which reinstates the POSIX default
+   # PATH regardless of the local $PATH set by cg_safe_run.
+   cg_guard uname date hostname
 
    _my_main() {
-       _my_init
        uname -s
        date -u
    }
 
-   CG_DEBUG=1 cg_safe_run _my_main
+   cg_safe_run _my_main
 
 Guarding a tool that may be installed via apt or snap inside ``cg_safe_run``:
 
