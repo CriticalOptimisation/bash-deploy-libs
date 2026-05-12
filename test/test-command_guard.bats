@@ -163,7 +163,7 @@ setup() {
   run -0 f
 }
 
-# bats test_tags=guard,pr1,focus
+# bats test_tags=guard,pr1
 @test "failure in one command stops processing, acts as no-op" {
   f() {
     guard uname nonexistent_xyz date
@@ -350,12 +350,12 @@ setup() {
 }
 
 # bats test_tags=guard,cg_safe_run
-@test "cg_command_not_found_handler is chainable" {
+@test "cg_command_not_found_handle is chainable" {
   f() {
     CG_DEBUG=1
     command_not_found_handle() {
       echo "APP_HANDLER:$1"
-      cg_command_not_found_handler "$@"
+      cg_command_not_found_handle "$@"
     }
     nonexistent_cmd_cg_test_xyz
     echo "exit:$?"
@@ -661,6 +661,353 @@ setup() {
   f() {
     cg_unsafe cg_guard uname
     [[ "$(type -t uname)" == "function" ]]
+  }
+  run -0 f
+}
+
+# --- _cg_unpack_args (issues #116, #117) ---
+
+# bats test_tags=guard,unpack_args,issue-116
+@test "_cg_unpack_args: empty string passes through as one empty element" {
+  f() {
+
+    local -a _cg_unpacked
+    _cg_unpack_args "" || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 1 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "" ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,unpack_args,issue-116
+@test "_cg_unpack_args: plain word passes through unchanged" {
+  f() {
+
+    local -a _cg_unpacked
+    _cg_unpack_args "prefix_" || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 1 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "prefix_" ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,unpack_args,issue-116
+@test "_cg_unpack_args: separator-prefixed value splits into elements" {
+  f() {
+
+    local -a _cg_unpacked
+    _cg_unpack_args ":run_:_cb" || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 2 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "run_" ]] || return $?
+    [[ "${_cg_unpacked[1]}" == "_cb" ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,unpack_args,issue-116
+@test "_cg_unpack_args: colon alone yields one empty string element" {
+  f() {
+
+    local -a _cg_unpacked
+    _cg_unpack_args ":" || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 1 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "" ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,unpack_args,issue-116,issue-117
+@test "_cg_unpack_args: x1F-prefixed packed arg splits correctly" {
+  f() {
+
+    local -a _cg_unpacked
+    _cg_unpack_args $'\x1F-d\x1F/snap/bin' || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 2 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "-d" ]] || return $?
+    [[ "${_cg_unpacked[1]}" == "/snap/bin" ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,unpack_args,issue-117
+@test "_cg_unpack_args: x1F alone yields one empty string element" {
+  f() {
+
+    local -a _cg_unpacked
+    _cg_unpack_args $'\x1F' || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 1 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "" ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,unpack_args,issue-117
+@test "_cg_unpack_args: dash alone is empty-list sentinel yields zero elements" {
+  f() {
+
+    local -a _cg_unpacked
+    _cg_unpack_args "-" || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 0 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,unpack_args,issue-116
+@test "_cg_unpack_args: semicolons alone yields two empty string elements" {
+  f() {
+
+    local -a _cg_unpacked
+    _cg_unpack_args ";;" || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 2 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "" ]] || return $?
+    [[ "${_cg_unpacked[1]}" == "" ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,unpack_args,issue-116
+@test "_cg_unpack_args: dot-separated with empty edges yields four elements" {
+  f() {
+
+    local -a _cg_unpacked
+    _cg_unpack_args "..a.." || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 4 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "" ]] || return $?
+    [[ "${_cg_unpacked[1]}" == "a" ]] || return $?
+    [[ "${_cg_unpacked[2]}" == "" ]] || return $?
+    [[ "${_cg_unpacked[3]}" == "" ]]
+  }
+  run -0 f
+}
+
+# --- cg_mkfname_prefix (issue #116) ---
+
+# bats test_tags=guard,mkfname_prefix,issue-116
+@test "cg_mkfname_prefix: empty prefix + name yields name" {
+  f() {
+    local result
+    result="$(cg_mkfname_prefix "" "uname")" || return $?
+    [[ "$result" == "uname" ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,mkfname_prefix,issue-116
+@test "cg_mkfname_prefix: non-empty prefix prepended to name" {
+  f() {
+    local result
+    result="$(cg_mkfname_prefix "mylib_" "uname")" || return $?
+    [[ "$result" == "mylib_uname" ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,mkfname_prefix,issue-116
+@test "cg_mkfname_prefix: wrong argument count returns CG_ERR_SYNTAX_ERROR" {
+  f() { cg_mkfname_prefix "uname"; }
+  run -"$CG_ERR_SYNTAX_ERROR" f
+}
+
+# bats test_tags=guard,mkfname_prefix,issue-116
+@test "cg_mkfname_prefix: result not a valid identifier returns CG_ERR_INVALID_NAME" {
+  f() { cg_mkfname_prefix "bad-" "name"; }
+  run -"$CG_ERR_INVALID_NAME" f
+}
+
+# --- cg_guard -n custom name filter (issue #116) ---
+
+# bats test_tags=guard,name_filter,issue-116
+@test "cg_guard -n: custom filter is applied to plain-name tokens" {
+  f() {
+    my_suffix_filter() {
+      local prefix="$1" bare="$2"
+      printf '%s' "${bare}${prefix}"
+    }
+    cg_guard -n my_suffix_filter -p "_ns" uname || return $?
+    [[ "$(type -t uname_ns)" == "function" ]] || return $?
+    [[ "$(type -t _nsuname)" != "function" ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,name_filter,issue-116
+@test "cg_guard -n: duplicate -n returns CG_ERR_SYNTAX_ERROR with specific message" {
+  f() { cg_guard -n cg_mkfname_prefix -n cg_mkfname_prefix uname 2>&1; }
+  run -"$CG_ERR_SYNTAX_ERROR" f
+  [[ "$output" == *"more than once"* ]]
+}
+
+# bats test_tags=guard,name_filter,issue-116
+@test "cg_guard -n: filter rejection propagates the filter exit code" {
+  f() {
+    rejecting_filter() { return 42; }
+    cg_guard -n rejecting_filter uname
+  }
+  run -42 f
+}
+
+# --- cg_guard -p with default filter (issue #116) ---
+
+# bats test_tags=guard,name_filter,issue-116
+@test "cg_guard -p: empty -p with default filter emits warning" {
+  f() { cg_guard -p "" uname 2>&1; }
+  run f
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"[WARNING]"* ]]
+}
+
+# bats test_tags=guard,name_filter,issue-116
+@test "cg_guard -p: empty -p with -q suppresses warning" {
+  f() {
+    declare -f cg_mkfname_prefix >/dev/null 2>&1 || return $?
+    cg_guard -q -p "" uname 2>&1
+  }
+  run -0 f
+  [[ "$output" != *"[WARNING]"* ]]
+}
+
+# bats test_tags=guard,name_filter,issue-116
+@test "cg_guard -p: empty -p with custom -n does not warn" {
+  f() {
+    my_filter() { printf '%s' "${1}${2}"; }
+    cg_guard -n my_filter -p "" uname 2>&1
+  }
+  run -0 f
+  [[ "$output" != *"[WARNING]"* ]]
+}
+
+# --- cg_guard -z packed injection (issue #117) ---
+
+# bats test_tags=guard,packed_injection,issue-117
+@test "cg_guard -z: packed resolver option is injected and forwarded" {
+  f() {
+    local tmp cmd_name rc
+    tmp="$(mktemp -d)"
+    cmd_name="cg_test_uname_$$"
+    cp "$(command -pv uname)" "$tmp/$cmd_name"
+    cg_guard -r cg_path_resolver "-z:-d:${tmp}" "$cmd_name" \
+      || { rc=$?; rm -rf "$tmp"; return $rc; }
+    [[ "$(type -t "$cmd_name")" == "function" ]] \
+      || { rc=$?; rm -rf "$tmp"; return $rc; }
+    rm -rf "$tmp"
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,packed_injection,issue-117,focus
+@test "cg_guard -z: empty-list sentinel is a no-op injection" {
+  f() {
+    unset -f uname
+    cg_guard -z- uname || return $?
+    [[ "$(type -t uname)" == "function" ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,packed_injection,issue-117
+@test "cg_guard -z: repeated -z injects two independent batches" {
+  f() {
+    local tmp1 tmp2 name1 name2 out1 out2 rc
+    tmp1="$(mktemp -d)"; tmp2="$(mktemp -d)"
+    name1="cg_test_a_$$"; name2="cg_test_b_$$"
+    printf '#!/bin/bash\necho "%s"\n' "$tmp1" > "$tmp1/$name1"; chmod +x "$tmp1/$name1"
+    printf '#!/bin/bash\necho "%s"\n' "$tmp2" > "$tmp2/$name2"; chmod +x "$tmp2/$name2"
+    cg_guard -r cg_path_resolver "-z:-d:${tmp1}" "-z:-d:${tmp2}" "$name1" "$name2" \
+      || { rc=$?; rm -rf "$tmp1" "$tmp2"; return $rc; }
+    out1="$("$name1")" \
+      || { rc=$?; rm -rf "$tmp1" "$tmp2"; return $rc; }
+    [[ "$out1" == "$tmp1" ]] \
+      || { rc=$?; rm -rf "$tmp1" "$tmp2"; return $rc; }
+    out2="$("$name2")" \
+      || { rc=$?; rm -rf "$tmp1" "$tmp2"; return $rc; }
+    [[ "$out2" == "$tmp2" ]] \
+      || { rc=$?; rm -rf "$tmp1" "$tmp2"; return $rc; }
+    rm -rf "$tmp1" "$tmp2"
+  }
+  run -0 f
+}
+
+# --- cg_search_snaps (issue #117) ---
+
+# bats test_tags=guard,cg_search_snaps,issue-117
+@test "cg_search_snaps: snap absent — output is the empty-list sentinel" {
+  f() {
+    declare -f cg_search_snaps >/dev/null 2>&1 || return $?
+    declare -f _cg_unpack_args  >/dev/null 2>&1 || return $?
+    command() {
+      if [[ "$1" == "-p" && "$2" == "snap" ]]; then return 1; fi
+      builtin command "$@"
+    }
+    local out
+    out="$(cg_search_snaps)" || true
+    [[ "$out" == "-z-" ]] || return $?
+    local -a _cg_unpacked
+    _cg_unpack_args "${out:2}" || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 0 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,cg_search_snaps,issue-117
+@test "cg_search_snaps: snap present — output contains -d and the snap bin dir" {
+  f() {
+    declare -f cg_search_snaps >/dev/null 2>&1 || return $?
+    declare -f _cg_unpack_args  >/dev/null 2>&1 || return $?
+    local snap_dir
+    snap_dir="$(mktemp -d)"
+    snap() {
+      if [[ "$1 $2" == "debug paths" ]]; then
+        printf 'SNAPD_BIN=%s\n' "$snap_dir"
+        return 0
+      fi
+      return 1
+    }
+    command() {
+      if [[ "$1" == "-p" && "$2" == "snap" ]]; then
+        [[ $# -gt 2 ]] && { snap "${@:3}"; return $?; }
+        return 0
+      fi
+      builtin command "$@"
+    }
+    local out
+    out="$(cg_search_snaps)" || true
+    [[ "${out:0:2}" == "-z" ]] || { rm -rf "$snap_dir"; return 1; }
+    local -a _cg_unpacked
+    _cg_unpack_args "${out:2}" || { rm -rf "$snap_dir"; return 1; }
+    [[ "${#_cg_unpacked[@]}" -eq 2 ]] || { rm -rf "$snap_dir"; return 1; }
+    [[ "${_cg_unpacked[0]}" == "-d" ]] || { rm -rf "$snap_dir"; return 1; }
+    [[ "${_cg_unpacked[1]}" == "$snap_dir" ]]
+    rm -rf "$snap_dir"
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,cg_search_snaps,issue-117
+@test "cg_search_snaps: broken snap debug paths — warning emitted, output is no-op" {
+  f() {
+    declare -f cg_search_snaps >/dev/null 2>&1 || return $?
+    declare -f _cg_unpack_args  >/dev/null 2>&1 || return $?
+    snap() {
+      if [[ "$1 $2" == "debug paths" ]]; then return 1; fi
+      return 0
+    }
+    command() {
+      if [[ "$1" == "-p" && "$2" == "snap" ]]; then
+        [[ $# -gt 2 ]] && { snap "${@:3}"; return $?; }
+        return 0
+      fi
+      builtin command "$@"
+    }
+    local warn_file
+    warn_file="$(mktemp)"
+    local out
+    out="$(cg_search_snaps 2>"$warn_file")" || true
+    [[ "${out:0:2}" == "-z" ]] || { rm -f "$warn_file"; return 1; }
+    local -a _cg_unpacked
+    _cg_unpack_args "${out:2}" || { rm -f "$warn_file"; return 1; }
+    [[ "${#_cg_unpacked[@]}" -eq 0 ]] || { rm -f "$warn_file"; return 1; }
+    grep -q '\[WARNING\]' "$warn_file"
+    rm -f "$warn_file"
   }
   run -0 f
 }

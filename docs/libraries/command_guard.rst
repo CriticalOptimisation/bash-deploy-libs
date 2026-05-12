@@ -55,22 +55,41 @@ Defines a function named ``<command>`` that forwards to the external command by
 full path. Also available as ``guard`` (short alias, defined only if unclaimed —
 see *guard alias* below).
 
-- Usage: ``cg_guard [-q] [-p <prefix>] [-r <resolver>] [resolver-opts] [--] [token ...]``
+- Usage: ``cg_guard [-q] [-n <name_filter>] [-p <value>] [-r <resolver>] [-z <packed>] [resolver-opts] [--] [token ...]``
 - **Guard options must precede resolver options.** The recommended order is
-  ``-p prefix -r resolver resolver-opts tokens``, but ``-r`` and ``-p`` may be
-  swapped. All ``-X`` flags that ``cg_guard`` does not recognise are forwarded to the
-  active resolver (see *Resolver Protocol*).
+  ``-n filter -p value -r resolver resolver-opts tokens``. All ``-X`` flags that
+  ``cg_guard`` does not recognise are forwarded to the active resolver
+  (see *Resolver Protocol*).
 - Options:
 
-  - ``-q``: Quiet mode, suppresses warnings for zero tokens.
-  - ``-p <prefix>``: Prepend ``prefix`` to the generated function name for
-    **plain-name** and **absolute-path** tokens. Has no effect on tokens that
-    use the explicit ``fname=…`` form.
+  - ``-q``: Quiet mode, suppresses warnings.
+  - ``-n <name_filter>``: Use ``name_filter`` instead of the default
+    ``cg_mkfname_prefix`` to compute the wrapper function name for **plain-name**
+    and **absolute-path** tokens. Has no effect on ``fname=…`` tokens. See
+    *Name Filter Protocol*. May appear **at most once**.
+  - ``-p <value>``: Set the name filter parameter(s). For the default
+    ``cg_mkfname_prefix`` filter, ``value`` is the prefix string prepended to the
+    bare name. For custom filters, ``value`` is a packed parameter list (see
+    *Name Filter Protocol — packed value syntax*). An empty ``-p ""`` with the
+    default filter emits a ``[WARNING]`` unless ``-q`` is active. Has no effect
+    on ``fname=…`` tokens. May appear **at most once**.
   - ``-r <resolver>``: Use ``resolver`` instead of ``cg_safe_resolver`` to
     resolve plain-name and ``fname=name`` (non-absolute RHS) tokens.
+  - ``-z <packed>``: Unpack ``packed`` and inject the resulting tokens back into
+    the option-parsing loop at the current position, as if they had been written
+    on the command line. The value is parsed by the packed-value convention (see
+    *Name Filter Protocol — packed value syntax*). May be **repeated**; each
+    occurrence injects one independent batch. Primary use: pass
+    ``cg_search_snaps`` output to the active resolver:
+
+    .. code-block:: bash
+
+       cg_guard -r cg_path_resolver -s "$(cg_search_snaps)" docker
+
   - ``--``: End of options; required when a token name starts with ``-``.
-  - Each of ``-q``, ``-p``, and ``-r`` may appear **at most once**; repeating
-    any of them is a ``CG_ERR_SYNTAX_ERROR``.
+  - Each of ``-q``, ``-n``, ``-p``, and ``-r`` may appear **at most once**;
+    ``-z`` may be repeated. Repeating ``-q``, ``-n``, ``-p``, or ``-r`` is a
+    ``CG_ERR_SYNTAX_ERROR``.
 
 - Token forms (all forms may be mixed in a single call):
 
@@ -113,9 +132,11 @@ see *guard alias* below).
   - ``CG_ERR_NOT_FOUND`` when a command cannot be resolved or a path is
     invalid or non-executable.
   - ``CG_ERR_SYNTAX_ERROR`` when a relative path is used in the ``fname=rhs``
-    form (absolute path required); when a guard option (``-q``, ``-r``,
+    form (absolute path required); when a guard option (``-q``, ``-n``, ``-r``,
     ``-p``) is repeated; or when a forwarded option flag is rejected by the
     active resolver as unrecognised (probe returns ``CG_ERR_SYNTAX_ERROR``).
+  - The name filter's own exit code when the filter rejects a token. The filter
+    is responsible for its own diagnostic message.
 
 - Validation is all-or-nothing: no wrapper functions are created unless every
   token passes validation.
@@ -164,30 +185,56 @@ Executes a function with a writable local PATH set to the compiled-in Bash
 default (discovered once at source time via a subshell; never hardcoded).
 
 - Usage: ``cg_unsafe <fn> [args...]``
-- Intended for wrapping library ``cg_guard`` calls that must run inside a
-  ``cg_safe_run`` context. Because ``local PATH`` in the callee creates a
-  new binding that shadows the ``local -r PATH`` from ``cg_safe_run``, no
-  error occurs.
+- Intended for wrapping third-party init functions that modify or rely on
+  ``$PATH`` during initialisation — code the caller does not control and
+  that would fail under ``cg_safe_run``'s read-only PATH. ``cg_guard``
+  itself never needs ``cg_unsafe``: both ``cg_safe_resolver`` and
+  ``cg_path_resolver`` establish their own PATH independently.
 - **Why it is needed inside** ``cg_safe_run``: third-party libraries
   sometimes set or rely on ``$PATH`` during initialisation; under
   ``cg_safe_run`` the PATH is read-only and such libraries would abort.
   ``cg_unsafe`` locally reverses the restriction for the duration of the
   called function, then the restriction is reinstated automatically when
   the function returns.
-- **Safe to call outside** ``cg_safe_run``: if there is no enclosing
-  ``cg_safe_run`` context, ``local PATH="$_CG_DEFAULT_PATH"`` simply
-  creates a function-scoped variable with the compiled-in default. No
-  error occurs and the surrounding environment is unaffected.
-- Typical use: initialisation wrappers for third-party (unsafe) libraries
-  that call external commands not guarded by ``cg_guard``.
-- ``cg_guard`` with ``cg_path_resolver`` also works inside ``cg_unsafe``.
-  For tools that may be installed via an ordinary package (e.g. apt) **or**
-  a snap, this is the recommended pattern — ``cg_path_resolver`` finds the
-  tool in either case:
+- **Risk**: ``cg_unsafe`` restores a *writable* PATH set to the
+  compiled-in Bash default — not the full system PATH, but enough to
+  find most standard commands. Any unguarded command reachable on that
+  PATH will execute silently, without triggering
+  ``cg_command_not_found_handle``. This suspends the enforcement guarantee
+  of ``cg_safe_run`` for the entire duration of the called function.
+  Keep the scope as narrow as possible. Because any PATH extension made
+  by the third-party init lives only inside the ``local PATH`` binding of
+  ``cg_unsafe`` — it is discarded when ``cg_unsafe`` returns — ``$PATH``
+  must be captured while still inside that scope. ``cg_guard`` never reads
+  ``$PATH`` on its own; the extended directories must always be passed
+  explicitly via ``-d "$PATH"`` to ``cg_path_resolver``. The wrapper must
+  therefore either call ``cg_guard -r cg_path_resolver -d "$PATH" ...``
+  from within its own body, or capture ``$PATH`` into a variable and
+  return it so the caller can pass it as ``-d``.
+- Typical use: an init wrapper that calls the third-party init (which may
+  extend PATH), then immediately calls ``cg_guard -r cg_path_resolver -d "$PATH"``
+  to register the commands it discovered — all inside the wrapper passed
+  to ``cg_unsafe``. Example: a library whose binaries live in
+  ``/opt/optlib/bin`` but whose init script is installed in ``/usr/bin``:
 
   .. code-block:: bash
 
-     cg_unsafe cg_guard -r cg_path_resolver -d /snap/bin -s docker-compose
+     # optlib_wrapper.sh — source this to initialise optlib in a guarded app.
+
+     # Guard the init script via cg_safe_resolver (uses command -pv; no
+     # cg_unsafe needed even inside cg_safe_run).
+     cg_guard optlib_init
+
+     _optlib_init_wrapper() {
+         # optlib_init extends PATH to include /opt/optlib/bin.
+         optlib_init
+         # Guard its commands while the PATH extension is still live.
+         cg_guard -r cg_path_resolver -d "$PATH" optfoo optbar
+     }
+
+     # cg_unsafe makes PATH writable so optlib_init can extend it.
+     # Binaries guarded above are callable safely after this line.
+     cg_unsafe _optlib_init_wrapper
 
 - Returns: whatever ``fn`` returns.
 
@@ -205,8 +252,9 @@ options; pass all arguments directly to ``cg_guard``.
   output, which may be ``exec`` for builtins or ``alias …`` for aliases;
   ``cg_guard`` uses this to produce specific diagnostics).
 - Returns ``CG_ERR_SYNTAX_ERROR`` with a diagnostic message when called with
-  more than one argument (structural misuse; ``cg_guard`` never passes options
-  to this resolver).
+  more than one argument (structural misuse; any attempt to forward a resolver
+  option while ``cg_safe_resolver`` is active causes ``cg_guard`` to abort
+  with ``CG_ERR_SYNTAX_ERROR`` via the probe mechanism).
 - Returns ``CG_ERR_MISSING_ARGUMENT`` when called with no arguments.
 
 cg_path_resolver
@@ -234,18 +282,22 @@ of the POSIX default PATH.
   token appears before the command name.
 - Returns ``CG_ERR_MISSING_ARGUMENT`` when called with no command name.
 
-Example — guard a snap binary:
+Example — guard a binary installed in a custom directory:
 
 .. code-block:: bash
 
-   cg_guard -r cg_path_resolver -d /snap/bin snapd
+   cg_guard -r cg_path_resolver -d /opt/myapp/bin myapp
 
-Example — snap binary plus standard commands in one call:
+Example — custom directory plus standard commands in one call:
 
 .. code-block:: bash
 
-   # -s appends the safe path after /snap/bin, so standard commands are also found:
-   cg_guard -r cg_path_resolver -d /snap/bin -s snapd uname date
+   # -s appends the safe path after /opt/myapp/bin so both are reachable:
+   cg_guard -r cg_path_resolver -d /opt/myapp/bin -s myapp uname date
+
+.. note::
+   For snap binaries, use :func:`cg_search_snaps` to discover the snap bin
+   directory at runtime rather than hard-coding it here.
 
 Example — safe path searched first, custom directory as fallback:
 
@@ -253,7 +305,7 @@ Example — safe path searched first, custom directory as fallback:
 
    cg_guard -r cg_path_resolver -s -d /opt/myapp/bin uname myapp
 
-cg_command_not_found_handler
+cg_command_not_found_handle
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Public handler for the ``command_not_found_handle`` hook. When ``CG_DEBUG`` is
@@ -261,7 +313,7 @@ set (non-empty), prints a ``[WARNING]`` message and a ``guard`` suggestion to
 stderr; otherwise silent. Always returns 127 (Bash convention for
 command-not-found).
 
-- Usage: ``cg_command_not_found_handler <cmd>``
+- Usage: ``cg_command_not_found_handle <cmd>``
 - Applications that define their own ``command_not_found_handle`` may delegate
   to this function as a chaining call:
 
@@ -269,11 +321,64 @@ command-not-found).
 
      command_not_found_handle() {
          my_application_handler "$@"
-         cg_command_not_found_handler "$@"
+         cg_command_not_found_handle "$@"
      }
 
 - ``command_not_found_handle`` is installed automatically by the library **only**
   if no such function is already defined at source time.
+
+cg_mkfname_prefix
+~~~~~~~~~~~~~~~~~
+
+The default name filter used by ``cg_guard``. Prepends a fixed prefix to the
+bare command name and validates the result as a legal Bash identifier.
+
+- Usage: ``cg_mkfname_prefix <prefix> <bare-name>``
+- Always receives exactly 2 arguments: ``$1`` is the prefix (possibly empty)
+  and ``$2`` is the bare name. This matches the calling convention established
+  by ``cg_guard`` — the default ``-p ""`` always supplies an empty-string
+  prefix.
+- Prints the concatenated ``prefix + bare-name`` on success; returns 0.
+- Returns ``CG_ERR_SYNTAX_ERROR`` with a diagnostic if the argument count is
+  not exactly 2.
+- Returns ``CG_ERR_INVALID_NAME`` with a diagnostic if the result is not a
+  valid Bash identifier (``^[a-zA-Z_][a-zA-Z0-9_]*$``).
+
+When used as the default filter with no ``-p``, ``cg_guard`` passes ``""`` as
+the prefix, so the wrapper function name equals the bare command name.
+
+cg_search_snaps
+~~~~~~~~~~~~~~~
+
+Discovers the snap binary directory and returns it as a ``-z``-packed argument
+suitable for passing directly to ``cg_guard -r cg_path_resolver``.
+
+- Usage: ``"$(cg_search_snaps)"`` — always use quoted command substitution.
+- Always outputs a string starting with ``-z`` (never empty):
+
+  - ``$'-z\x1F'`` when snap is absent or ``snap debug paths`` does not yield a
+    usable ``SNAPD_BIN`` directory. This is a no-op injection: the ``-z`` case
+    in ``cg_guard`` injects nothing and processing continues normally.
+  - ``$'-z\x1F-d\x1F/snap/bin'`` (actual path from ``SNAPD_BIN``) when snap is
+    present and the directory exists.
+
+- Emits a ``[WARNING]`` to stderr when the ``snap`` binary is found but
+  ``snap debug paths`` fails or ``SNAPD_BIN`` is missing or not a directory.
+- Returns 0 in all cases.
+
+Typical usage:
+
+.. code-block:: bash
+
+   cg_guard -r cg_path_resolver "$(cg_search_snaps)" docker compose
+
+Because ``cg_search_snaps`` always outputs a ``-z``-prefixed value, it is safe
+to use unconditionally; when snap is absent the argument is a no-op.
+
+The snap binary directory is appended at the position ``cg_search_snaps``
+appears in the ``cg_guard`` argument list, **after** any preceding ``-d``
+options. This matches the snap convention: the snap paths directory is added
+at the end of PATH by the snap package itself.
 
 Resolver Protocol
 -----------------
@@ -313,39 +418,113 @@ Custom resolver example:
 
    cg_guard -r my_resolver mytool
 
+Name Filter Protocol
+--------------------
+
+A name filter is a function that computes the wrapper function name from a
+set of filter parameters and a bare command name. The calling convention is:
+
+.. code-block:: text
+
+   filter_fn [params...] <bare-name>
+
+- The **last positional argument** is always the bare name.
+- All preceding arguments are the filter parameters supplied via ``-p``.
+- On success: print the wrapper function name to stdout; return 0. The result
+  must be a valid Bash identifier (``^[a-zA-Z_][a-zA-Z0-9_]*$``).
+- On failure: print a diagnostic to stderr; return non-zero. The exit code is
+  propagated directly to the ``cg_guard`` caller.
+
+The default filter is ``cg_mkfname_prefix``. It always receives exactly 2
+arguments: an empty or non-empty prefix string, and the bare name.
+
+Packed value syntax (``-p`` and ``-z``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Both ``-p`` and ``-z`` use the same packed-value convention:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - First character of value
+     - Interpretation
+   * - ``[a-zA-Z0-9_-]``
+     - Single element; the whole value is passed through as-is.
+   * - ``""`` (empty string)
+     - Single empty-string element (one ``""`` argument to the filter).
+   * - Any other character (e.g. ``:``, ``\x1F``)
+     - That character is the separator. Strip it; split the remainder on it.
+       Empty results from splitting are dropped.
+
+Examples:
+
+.. code-block:: bash
+
+   # -p "pfx_"          → filter receives: "pfx_"  bare_name
+   # -p ""              → filter receives: ""       bare_name  (+ warning with default filter)
+   # -p ":run_:_cb"     → filter receives: "run_"  "_cb"  bare_name
+   # -p $'\x1Fa\x1Fb'  → filter receives: "a"     "b"    bare_name
+
+Custom name filter example:
+
+.. code-block:: bash
+
+   my_filter() {
+       local prefix="$1" bare_name="$2"
+       local fname="${prefix}${bare_name}"
+       [[ "$fname" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || {
+           echo "[ERROR] my_filter: '${fname}' is not a valid identifier." >&2
+           return "$CG_ERR_INVALID_NAME"
+       }
+       printf '%s' "$fname"
+   }
+
+   cg_guard -n my_filter -p "my_" uname date
+
 PATH Enforcement
 ----------------
 
 ``cg_safe_run`` restricts PATH to a non-existent random value for the duration
-of the called function. Any unguarded external command inside that function
-causes Bash to emit:
+of the called function.
+
+**Unguarded external commands** fail with exit code 127 (command not found).
+The installed ``command_not_found_handle`` is invoked; with ``CG_DEBUG=1`` it
+prints a warning and a ``cg_guard`` suggestion to stderr. The caller receives
+127 and may handle it normally.
+
+**Any attempt to assign to PATH** inside the called function causes Bash to
+emit:
 
 .. code-block:: text
 
    bash: PATH: readonly variable
 
-and abort the entire call stack back to the top-level script. This is a
-**hard abort** — it cannot be intercepted with ``|| true``, ``{ }`` grouping,
-or any amount of function nesting.
+and returns exit code 1 (``CG_ERR_PATH_VIOLATION``).
 
 Guarded commands are unaffected because their wrapper functions dispatch by
 absolute path and do not use PATH.
 
-Library authors should wrap their ``cg_guard`` initialisation in ``cg_unsafe``:
+The typical use case is wrapping a third-party library whose init modifies
+PATH to expose its binaries. Write an init wrapper that runs the library
+init under ``cg_unsafe`` (so PATH is writable and arbitrary commands can
+run), then guards the discovered binaries with ``cg_path_resolver -d``:
 
 .. code-block:: bash
 
-   my_lib_init() {
-       cg_unsafe cg_guard uname date hostname
-       # ... other initialisation
+   _my_lib_init_wrapper() {
+       # PATH is writable here; third_party_init may extend it freely.
+       third_party_init
+       # Guard the library's commands by the directory it installed to.
+       cg_guard -r cg_path_resolver -d /opt/mylib/bin cmd1 cmd2
    }
 
-   my_lib_main() {
-       my_lib_init
-       uname -s
+   my_main() {
+       cg_unsafe _my_lib_init_wrapper
+       cmd1 --version
    }
 
-   cg_safe_run my_lib_main
+   cg_safe_run my_main
 
 ``CG_DEBUG=1`` enables the ``command_not_found_handle`` warning and suggestion
 output. It is safe to enable in development but should be unset in production.
@@ -432,7 +611,7 @@ Known Limitations
 - The ``command_not_found_handle`` hook is a single global resource. The library
   installs it only if unclaimed; applications that need their own handler should
   define it before sourcing the library, or chain via
-  ``cg_command_not_found_handler``.
+  ``cg_command_not_found_handle``.
 - The ``guard`` alias is a single global resource. The library defines it only
   if unclaimed; applications that define their own ``guard`` function before
   sourcing the library will keep their version. Use ``cg_guard`` directly when
@@ -463,6 +642,20 @@ Guarding with a prefix (library namespace isolation):
    cg_guard -p mylib_ uname date
    mylib_uname -s
 
+Guarding with a custom name filter:
+
+.. code-block:: bash
+
+   my_filter() { printf '%s' "${1}${2}"; }   # same as default but custom
+   cg_guard -n my_filter -p "ns_" uname date
+   ns_uname -s
+
+Guarding a tool that may be installed as a snap or system package:
+
+.. code-block:: bash
+
+   cg_guard -r cg_path_resolver -s "$(cg_search_snaps)" docker
+
 Guarding a snap binary by absolute path token:
 
 .. code-block:: bash
@@ -475,23 +668,23 @@ Guarding a binary whose filename is not a valid identifier:
 
    cg_guard "bash5=/usr/bin/bash5.0"
 
-Full ``cg_safe_run`` pattern with library initialisation:
+Full ``cg_safe_run`` pattern — guard at initialisation time, enforce at runtime:
 
 .. code-block:: bash
 
    source "$(dirname "$0")/config/command_guard.sh"
 
-   _my_init() {
-       cg_unsafe cg_guard uname date
-   }
+   # Guard external commands once, before entering the safe region.
+   # cg_safe_resolver uses command -pv, which reinstates the POSIX default
+   # PATH regardless of the local $PATH set by cg_safe_run.
+   cg_guard uname date hostname
 
    _my_main() {
-       _my_init
        uname -s
        date -u
    }
 
-   CG_DEBUG=1 cg_safe_run _my_main
+   cg_safe_run _my_main
 
 Guarding a tool that may be installed via apt or snap inside ``cg_safe_run``:
 
@@ -500,9 +693,10 @@ Guarding a tool that may be installed via apt or snap inside ``cg_safe_run``:
    source "$(dirname "$0")/config/command_guard.sh"
 
    _my_init() {
-       cg_unsafe cg_guard uname date
-       # docker-compose may be an apt package or a snap; cg_path_resolver finds it either way
-       cg_unsafe cg_guard -r cg_path_resolver -d /snap/bin -s docker-compose
+       # cg_guard uses command -pv internally; no cg_unsafe needed inside cg_safe_run.
+       cg_guard uname date
+       # docker-compose may be an apt or snap package; cg_search_snaps handles both.
+       cg_guard -r cg_path_resolver -s "$(cg_search_snaps)" docker-compose
    }
 
    _my_main() {
