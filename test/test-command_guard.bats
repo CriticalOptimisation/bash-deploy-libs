@@ -857,7 +857,7 @@ setup() {
 @test "cg_guard -z: empty payload (snap-absent) is a no-op injection" {
   f() {
     unset -f uname
-    cg_guard -r cg_path_resolver $'-z\x1F' uname || return $?
+    cg_guard $'-z\x1F' uname || return $?
     [[ "$(type -t uname)" == "function" ]]
   }
   run -0 f
