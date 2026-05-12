@@ -279,7 +279,7 @@ Example — safe path searched first, custom directory as fallback:
 
    cg_guard -r cg_path_resolver -s -d /opt/myapp/bin uname myapp
 
-cg_command_not_found_handler
+cg_command_not_found_handle
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Public handler for the ``command_not_found_handle`` hook. When ``CG_DEBUG`` is
@@ -287,7 +287,7 @@ set (non-empty), prints a ``[WARNING]`` message and a ``guard`` suggestion to
 stderr; otherwise silent. Always returns 127 (Bash convention for
 command-not-found).
 
-- Usage: ``cg_command_not_found_handler <cmd>``
+- Usage: ``cg_command_not_found_handle <cmd>``
 - Applications that define their own ``command_not_found_handle`` may delegate
   to this function as a chaining call:
 
@@ -295,7 +295,7 @@ command-not-found).
 
      command_not_found_handle() {
          my_application_handler "$@"
-         cg_command_not_found_handler "$@"
+         cg_command_not_found_handle "$@"
      }
 
 - ``command_not_found_handle`` is installed automatically by the library **only**
@@ -575,7 +575,7 @@ Known Limitations
 - The ``command_not_found_handle`` hook is a single global resource. The library
   installs it only if unclaimed; applications that need their own handler should
   define it before sourcing the library, or chain via
-  ``cg_command_not_found_handler``.
+  ``cg_command_not_found_handle``.
 - The ``guard`` alias is a single global resource. The library defines it only
   if unclaimed; applications that define their own ``guard`` function before
   sourcing the library will keep their version. Use ``cg_guard`` directly when

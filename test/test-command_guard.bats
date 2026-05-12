@@ -350,12 +350,12 @@ setup() {
 }
 
 # bats test_tags=guard,cg_safe_run
-@test "cg_command_not_found_handler is chainable" {
+@test "cg_command_not_found_handle is chainable" {
   f() {
     CG_DEBUG=1
     command_not_found_handle() {
       echo "APP_HANDLER:$1"
-      cg_command_not_found_handler "$@"
+      cg_command_not_found_handle "$@"
     }
     nonexistent_cmd_cg_test_xyz
     echo "exit:$?"

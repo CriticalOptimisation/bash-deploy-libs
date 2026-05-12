@@ -155,14 +155,14 @@ cg_unsafe() {
 }
 
 # Function:
-#   cg_command_not_found_handler
+#   cg_command_not_found_handle
 # Description:
 #   Public handler for the command_not_found_handle hook. When CG_DEBUG is
 #   set (non-empty), prints a [WARNING] and a cg_guard suggestion to stderr.
 #   Always returns 127. Applications can chain to this from their own handler.
 # Usage:
-#   cg_command_not_found_handler <cmd>
-cg_command_not_found_handler() {
+#   cg_command_not_found_handle <cmd>
+cg_command_not_found_handle() {
     local cmd="$1"
     if [[ -n "${CG_DEBUG:-}" ]]; then
         local resolved
@@ -179,7 +179,7 @@ cg_command_not_found_handler() {
 
 # Install command_not_found_handle only if unclaimed.
 if ! declare -f command_not_found_handle >/dev/null 2>&1; then
-    command_not_found_handle() { cg_command_not_found_handler "$@"; }
+    command_not_found_handle() { cg_command_not_found_handle "$@"; }
 fi
 
 # Function:
