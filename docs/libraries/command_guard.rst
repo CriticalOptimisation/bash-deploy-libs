@@ -196,10 +196,15 @@ default (discovered once at source time via a subshell; never hardcoded).
   ``cg_unsafe`` locally reverses the restriction for the duration of the
   called function, then the restriction is reinstated automatically when
   the function returns.
-- **Safe to call outside** ``cg_safe_run``: if there is no enclosing
-  ``cg_safe_run`` context, ``local PATH="$_CG_DEFAULT_PATH"`` simply
-  creates a function-scoped variable with the compiled-in default. No
-  error occurs and the surrounding environment is unaffected.
+- **Risk**: ``cg_unsafe`` restores a *writable* PATH set to the
+  compiled-in Bash default — not the full system PATH, but enough to
+  find most standard commands. Any unguarded command reachable on that
+  PATH will execute silently, without triggering
+  ``cg_command_not_found_handle``. This suspends the enforcement guarantee
+  of ``cg_safe_run`` for the entire duration of the called function.
+  Keep the scope as narrow as possible: pass only the third-party init
+  call itself to ``cg_unsafe``, then guard the commands it discovers
+  immediately after, outside ``cg_unsafe``.
 - Typical use: initialisation wrappers for third-party (unsafe) libraries
   that call external commands not guarded by ``cg_guard``.
 - Returns: whatever ``fn`` returns.
