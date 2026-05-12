@@ -129,7 +129,12 @@ _cg_unpack_args() {
     fi
     local _cgu_rest="${_cgu_val:1}"
     [[ -z "$_cgu_rest" ]] && return 0
-    mapfile -t _cg_unpacked <<< "${_cgu_rest//"$_cgu_sep"/$'\n'}"
+    local _cgu_remaining="$_cgu_rest"
+    while [[ "$_cgu_remaining" == *"$_cgu_sep"* ]]; do
+        _cg_unpacked+=("${_cgu_remaining%%"$_cgu_sep"*}")
+        _cgu_remaining="${_cgu_remaining#*"$_cgu_sep"}"
+    done
+    _cg_unpacked+=("$_cgu_remaining")
 }
 
 # Function:
