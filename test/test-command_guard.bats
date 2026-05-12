@@ -778,14 +778,13 @@ setup() {
 # bats test_tags=guard,name_filter,issue-116
 @test "cg_guard -n: custom filter is applied to plain-name tokens" {
   f() {
-    my_upper_filter() {
+    my_suffix_filter() {
       local prefix="$1" bare="$2"
-      printf '%s' "${prefix}${bare}"
+      printf '%s' "${bare}${prefix}"
     }
-    cg_guard -n my_upper_filter -p "ns_" uname || return $?
-    unset -f uname
-    cg_guard -n my_upper_filter -p "ns_" uname || return $?
-    [[ "$(type -t ns_uname)" == "function" ]]
+    cg_guard -n my_suffix_filter -p "_ns" uname || return $?
+    [[ "$(type -t uname_ns)" == "function" ]] || return $?
+    [[ "$(type -t _nsuname)" != "function" ]]
   }
   run -0 f
 }
