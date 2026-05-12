@@ -672,8 +672,8 @@ setup() {
   f() {
 
     local -a _cg_unpacked
-    _cg_unpack_args "" || return 1
-    [[ "${#_cg_unpacked[@]}" -eq 1 ]] || return 1
+    _cg_unpack_args "" || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 1 ]] || return $?
     [[ "${_cg_unpacked[0]}" == "" ]]
   }
   run -0 f
@@ -684,8 +684,8 @@ setup() {
   f() {
 
     local -a _cg_unpacked
-    _cg_unpack_args "prefix_" || return 1
-    [[ "${#_cg_unpacked[@]}" -eq 1 ]] || return 1
+    _cg_unpack_args "prefix_" || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 1 ]] || return $?
     [[ "${_cg_unpacked[0]}" == "prefix_" ]]
   }
   run -0 f
@@ -696,9 +696,9 @@ setup() {
   f() {
 
     local -a _cg_unpacked
-    _cg_unpack_args ":run_:_cb" || return 1
-    [[ "${#_cg_unpacked[@]}" -eq 2 ]] || return 1
-    [[ "${_cg_unpacked[0]}" == "run_" ]] || return 1
+    _cg_unpack_args ":run_:_cb" || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 2 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "run_" ]] || return $?
     [[ "${_cg_unpacked[1]}" == "_cb" ]]
   }
   run -0 f
@@ -709,7 +709,7 @@ setup() {
   f() {
 
     local -a _cg_unpacked
-    _cg_unpack_args ":" || return 1
+    _cg_unpack_args ":" || return $?
     [[ "${#_cg_unpacked[@]}" -eq 0 ]]
   }
   run -0 f
@@ -720,9 +720,9 @@ setup() {
   f() {
 
     local -a _cg_unpacked
-    _cg_unpack_args $'\x1F-d\x1F/snap/bin' || return 1
-    [[ "${#_cg_unpacked[@]}" -eq 2 ]] || return 1
-    [[ "${_cg_unpacked[0]}" == "-d" ]] || return 1
+    _cg_unpack_args $'\x1F-d\x1F/snap/bin' || return $?
+    [[ "${#_cg_unpacked[@]}" -eq 2 ]] || return $?
+    [[ "${_cg_unpacked[0]}" == "-d" ]] || return $?
     [[ "${_cg_unpacked[1]}" == "/snap/bin" ]]
   }
   run -0 f
@@ -733,7 +733,7 @@ setup() {
   f() {
 
     local -a _cg_unpacked
-    _cg_unpack_args $'\x1F' || return 1
+    _cg_unpack_args $'\x1F' || return $?
     [[ "${#_cg_unpacked[@]}" -eq 0 ]]
   }
   run -0 f
@@ -745,7 +745,7 @@ setup() {
 @test "cg_mkfname_prefix: empty prefix + name yields name" {
   f() {
     local result
-    result="$(cg_mkfname_prefix "" "uname")" || return 1
+    result="$(cg_mkfname_prefix "" "uname" || exit $?)"
     [[ "$result" == "uname" ]]
   }
   run -0 f
@@ -755,7 +755,7 @@ setup() {
 @test "cg_mkfname_prefix: non-empty prefix prepended to name" {
   f() {
     local result
-    result="$(cg_mkfname_prefix "mylib_" "uname")" || return 1
+    result="$(cg_mkfname_prefix "mylib_" "uname" || exit $?)"
     [[ "$result" == "mylib_uname" ]]
   }
   run -0 f
@@ -782,9 +782,9 @@ setup() {
       local prefix="$1" bare="$2"
       printf '%s' "${prefix}${bare}"
     }
-    cg_guard -n my_upper_filter -p "ns_" uname || return 1
+    cg_guard -n my_upper_filter -p "ns_" uname || return $?
     unset -f uname
-    cg_guard -n my_upper_filter -p "ns_" uname || return 1
+    cg_guard -n my_upper_filter -p "ns_" uname || return $?
     [[ "$(type -t ns_uname)" == "function" ]]
   }
   run -0 f
@@ -819,7 +819,7 @@ setup() {
 # bats test_tags=guard,name_filter,issue-116
 @test "cg_guard -p: empty -p with -q suppresses warning" {
   f() {
-    declare -f cg_mkfname_prefix >/dev/null 2>&1 || return 1
+    declare -f cg_mkfname_prefix >/dev/null 2>&1 || return $?
     cg_guard -q -p "" uname 2>&1
   }
   run -0 f
@@ -857,7 +857,7 @@ setup() {
 @test "cg_guard -z: empty payload (snap-absent) is a no-op injection" {
   f() {
     unset -f uname
-    cg_guard -r cg_path_resolver $'-z\x1F' uname || return 1
+    cg_guard -r cg_path_resolver $'-z\x1F' uname || return $?
     [[ "$(type -t uname)" == "function" ]]
   }
   run -0 f
@@ -887,14 +887,14 @@ setup() {
 # bats test_tags=guard,cg_search_snaps,issue-117
 @test "cg_search_snaps: snap absent — output is a no-op -z string" {
   f() {
-    declare -f cg_search_snaps >/dev/null 2>&1 || return 1
-    declare -f _cg_unpack_args  >/dev/null 2>&1 || return 1
+    declare -f cg_search_snaps >/dev/null 2>&1 || return $?
+    declare -f _cg_unpack_args  >/dev/null 2>&1 || return $?
     snap() { return 1; }
     local out
     out="$(cg_search_snaps)" || true
-    [[ "${out:0:2}" == "-z" ]] || return 1
+    [[ "${out:0:2}" == "-z" ]] || return $?
     local -a _cg_unpacked
-    _cg_unpack_args "${out:2}" || return 1
+    _cg_unpack_args "${out:2}" || return $?
     [[ "${#_cg_unpacked[@]}" -eq 0 ]]
   }
   run -0 f
@@ -903,8 +903,8 @@ setup() {
 # bats test_tags=guard,cg_search_snaps,issue-117
 @test "cg_search_snaps: snap present — output contains -d and the snap bin dir" {
   f() {
-    declare -f cg_search_snaps >/dev/null 2>&1 || return 1
-    declare -f _cg_unpack_args  >/dev/null 2>&1 || return 1
+    declare -f cg_search_snaps >/dev/null 2>&1 || return $?
+    declare -f _cg_unpack_args  >/dev/null 2>&1 || return $?
     local snap_dir
     snap_dir="$(mktemp -d)"
     snap() {
@@ -934,8 +934,8 @@ setup() {
 # bats test_tags=guard,cg_search_snaps,issue-117
 @test "cg_search_snaps: broken snap debug paths — warning emitted, output is no-op" {
   f() {
-    declare -f cg_search_snaps >/dev/null 2>&1 || return 1
-    declare -f _cg_unpack_args  >/dev/null 2>&1 || return 1
+    declare -f cg_search_snaps >/dev/null 2>&1 || return $?
+    declare -f _cg_unpack_args  >/dev/null 2>&1 || return $?
     snap() {
       if [[ "$1 $2" == "debug paths" ]]; then return 1; fi
       return 0
