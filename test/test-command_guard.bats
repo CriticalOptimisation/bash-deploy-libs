@@ -670,7 +670,7 @@ setup() {
 # bats test_tags=guard,unpack_args,issue-116
 @test "_cg_unpack_args: empty string passes through as one empty element" {
   f() {
-    declare -f _cg_unpack_args >/dev/null 2>&1 || return 1
+
     local -a _cg_unpacked
     _cg_unpack_args "" || return 1
     [[ "${#_cg_unpacked[@]}" -eq 1 ]] || return 1
@@ -682,7 +682,7 @@ setup() {
 # bats test_tags=guard,unpack_args,issue-116
 @test "_cg_unpack_args: plain word passes through unchanged" {
   f() {
-    declare -f _cg_unpack_args >/dev/null 2>&1 || return 1
+
     local -a _cg_unpacked
     _cg_unpack_args "prefix_" || return 1
     [[ "${#_cg_unpacked[@]}" -eq 1 ]] || return 1
@@ -694,7 +694,7 @@ setup() {
 # bats test_tags=guard,unpack_args,issue-116
 @test "_cg_unpack_args: separator-prefixed value splits into elements" {
   f() {
-    declare -f _cg_unpack_args >/dev/null 2>&1 || return 1
+
     local -a _cg_unpacked
     _cg_unpack_args ":run_:_cb" || return 1
     [[ "${#_cg_unpacked[@]}" -eq 2 ]] || return 1
@@ -707,7 +707,7 @@ setup() {
 # bats test_tags=guard,unpack_args,issue-116
 @test "_cg_unpack_args: separator with no content yields empty array" {
   f() {
-    declare -f _cg_unpack_args >/dev/null 2>&1 || return 1
+
     local -a _cg_unpacked
     _cg_unpack_args ":" || return 1
     [[ "${#_cg_unpacked[@]}" -eq 0 ]]
@@ -718,7 +718,7 @@ setup() {
 # bats test_tags=guard,unpack_args,issue-116,issue-117
 @test "_cg_unpack_args: x1F-prefixed packed arg splits correctly" {
   f() {
-    declare -f _cg_unpack_args >/dev/null 2>&1 || return 1
+
     local -a _cg_unpacked
     _cg_unpack_args $'\x1F-d\x1F/snap/bin' || return 1
     [[ "${#_cg_unpacked[@]}" -eq 2 ]] || return 1
@@ -731,7 +731,7 @@ setup() {
 # bats test_tags=guard,unpack_args,issue-117
 @test "_cg_unpack_args: x1F alone (snap-absent payload) yields empty array" {
   f() {
-    declare -f _cg_unpack_args >/dev/null 2>&1 || return 1
+
     local -a _cg_unpacked
     _cg_unpack_args $'\x1F' || return 1
     [[ "${#_cg_unpacked[@]}" -eq 0 ]]
