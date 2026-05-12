@@ -185,10 +185,11 @@ Executes a function with a writable local PATH set to the compiled-in Bash
 default (discovered once at source time via a subshell; never hardcoded).
 
 - Usage: ``cg_unsafe <fn> [args...]``
-- Intended for wrapping library ``cg_guard`` calls that must run inside a
-  ``cg_safe_run`` context. Because ``local PATH`` in the callee creates a
-  new binding that shadows the ``local -r PATH`` from ``cg_safe_run``, no
-  error occurs.
+- Intended for wrapping third-party init functions that modify or rely on
+  ``$PATH`` during initialisation — code the caller does not control and
+  that would fail under ``cg_safe_run``'s read-only PATH. ``cg_guard``
+  itself never needs ``cg_unsafe``: both ``cg_safe_resolver`` and
+  ``cg_path_resolver`` establish their own PATH independently.
 - **Why it is needed inside** ``cg_safe_run``: third-party libraries
   sometimes set or rely on ``$PATH`` during initialisation; under
   ``cg_safe_run`` the PATH is read-only and such libraries would abort.
@@ -201,15 +202,6 @@ default (discovered once at source time via a subshell; never hardcoded).
   error occurs and the surrounding environment is unaffected.
 - Typical use: initialisation wrappers for third-party (unsafe) libraries
   that call external commands not guarded by ``cg_guard``.
-- ``cg_guard`` with ``cg_path_resolver`` also works inside ``cg_unsafe``.
-  For tools that may be installed via an ordinary package (e.g. apt) **or**
-  a snap, this is the recommended pattern — ``cg_path_resolver`` finds the
-  tool in either case:
-
-  .. code-block:: bash
-
-     cg_unsafe cg_guard -r cg_path_resolver -d /snap/bin -s docker-compose
-
 - Returns: whatever ``fn`` returns.
 
 cg_safe_resolver
