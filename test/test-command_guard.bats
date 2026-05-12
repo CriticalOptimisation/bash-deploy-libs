@@ -163,7 +163,7 @@ setup() {
   run -0 f
 }
 
-# bats test_tags=guard,pr1,focus
+# bats test_tags=guard,pr1
 @test "failure in one command stops processing, acts as no-op" {
   f() {
     guard uname nonexistent_xyz date
@@ -729,7 +729,7 @@ setup() {
 }
 
 # bats test_tags=guard,unpack_args,issue-117
-@test "_cg_unpack_args: x1F alone (snap-absent payload) yields empty array" {
+@test "_cg_unpack_args: x1F alone — snap-absent payload — yields empty array" {
   f() {
 
     local -a _cg_unpacked
@@ -853,8 +853,8 @@ setup() {
   run -0 f
 }
 
-# bats test_tags=guard,packed_injection,issue-117
-@test "cg_guard -z: empty payload (snap-absent) is a no-op injection" {
+# bats test_tags=guard,packed_injection,issue-117,focus
+@test "cg_guard -z: empty payload snap-absent is a no-op injection" {
   f() {
     unset -f uname
     cg_guard $'-z\x1F' uname || return $?
