@@ -84,7 +84,7 @@ see *guard alias* below).
 
     .. code-block:: bash
 
-       cg_guard -r cg_path_resolver "$(cg_search_snaps)" docker
+       cg_guard -r cg_path_resolver -s "$(cg_search_snaps)" docker
 
   - ``--``: End of options; required when a token name starts with ``-``.
   - Each of ``-q``, ``-n``, ``-p``, and ``-r`` may appear **at most once**;

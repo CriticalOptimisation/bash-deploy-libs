@@ -112,6 +112,9 @@ _cg_guard_resolve() {
 #   Convention: first char in [a-zA-Z0-9_-] → single element, value as-is.
 #   Empty string → one empty-string element. Any other first character is
 #   the separator: strip it, split remainder on it, dropping empty segments.
+#   Consequence: empty strings cannot be encoded inside multi-element packed
+#   values (e.g. ":-p:" yields ["-p"], not ["-p" ""]). To pass a single
+#   empty string, use the empty packed value "" (one empty-string element).
 # Usage:
 #   local -a _cg_unpacked; _cg_unpack_args <packed>
 _cg_unpack_args() {
@@ -249,7 +252,7 @@ cg_search_snaps() {
         return 0
     fi
     local _cgs_paths
-    if ! _cgs_paths="$(snap debug paths 2>/dev/null)"; then
+    if ! _cgs_paths="$(command -p snap debug paths 2>/dev/null)"; then
         echo "[WARNING] cg_search_snaps: 'snap debug paths' failed; snap binary directory will not be discovered." >&2
         printf '%s' "$_cgs_noop"
         return 0

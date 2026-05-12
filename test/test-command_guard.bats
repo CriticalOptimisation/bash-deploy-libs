@@ -893,7 +893,10 @@ setup() {
   f() {
     declare -f cg_search_snaps >/dev/null 2>&1 || return $?
     declare -f _cg_unpack_args  >/dev/null 2>&1 || return $?
-    snap() { return 1; }
+    command() {
+      if [[ "$1" == "-p" && "$2" == "snap" ]]; then return 1; fi
+      builtin command "$@"
+    }
     local out
     out="$(cg_search_snaps)" || true
     [[ "${out:0:2}" == "-z" ]] || return $?
@@ -919,7 +922,10 @@ setup() {
       return 1
     }
     command() {
-      if [[ "$1" == "-p" && "$2" == "snap" ]]; then return 0; fi
+      if [[ "$1" == "-p" && "$2" == "snap" ]]; then
+        [[ $# -gt 2 ]] && { snap "${@:3}"; return $?; }
+        return 0
+      fi
       builtin command "$@"
     }
     local out
@@ -945,7 +951,10 @@ setup() {
       return 0
     }
     command() {
-      if [[ "$1" == "-p" && "$2" == "snap" ]]; then return 0; fi
+      if [[ "$1" == "-p" && "$2" == "snap" ]]; then
+        [[ $# -gt 2 ]] && { snap "${@:3}"; return $?; }
+        return 0
+      fi
       builtin command "$@"
     }
     local warn_file
