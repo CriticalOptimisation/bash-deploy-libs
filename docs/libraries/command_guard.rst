@@ -256,18 +256,22 @@ of the POSIX default PATH.
   token appears before the command name.
 - Returns ``CG_ERR_MISSING_ARGUMENT`` when called with no command name.
 
-Example — guard a snap binary:
+Example — guard a binary installed in a custom directory:
 
 .. code-block:: bash
 
-   cg_guard -r cg_path_resolver -d /snap/bin snapd
+   cg_guard -r cg_path_resolver -d /opt/myapp/bin myapp
 
-Example — snap binary plus standard commands in one call:
+Example — custom directory plus standard commands in one call:
 
 .. code-block:: bash
 
-   # -s appends the safe path after /snap/bin, so standard commands are also found:
-   cg_guard -r cg_path_resolver -d /snap/bin -s snapd uname date
+   # -s appends the safe path after /opt/myapp/bin so both are reachable:
+   cg_guard -r cg_path_resolver -d /opt/myapp/bin -s myapp uname date
+
+.. note::
+   For snap binaries, use :func:`cg_search_snaps` to discover the snap bin
+   directory at runtime rather than hard-coding it here.
 
 Example — safe path searched first, custom directory as fallback:
 
