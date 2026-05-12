@@ -55,22 +55,41 @@ Defines a function named ``<command>`` that forwards to the external command by
 full path. Also available as ``guard`` (short alias, defined only if unclaimed —
 see *guard alias* below).
 
-- Usage: ``cg_guard [-q] [-p <prefix>] [-r <resolver>] [resolver-opts] [--] [token ...]``
+- Usage: ``cg_guard [-q] [-n <name_filter>] [-p <value>] [-r <resolver>] [-z <packed>] [resolver-opts] [--] [token ...]``
 - **Guard options must precede resolver options.** The recommended order is
-  ``-p prefix -r resolver resolver-opts tokens``, but ``-r`` and ``-p`` may be
-  swapped. All ``-X`` flags that ``cg_guard`` does not recognise are forwarded to the
-  active resolver (see *Resolver Protocol*).
+  ``-n filter -p value -r resolver resolver-opts tokens``. All ``-X`` flags that
+  ``cg_guard`` does not recognise are forwarded to the active resolver
+  (see *Resolver Protocol*).
 - Options:
 
-  - ``-q``: Quiet mode, suppresses warnings for zero tokens.
-  - ``-p <prefix>``: Prepend ``prefix`` to the generated function name for
-    **plain-name** and **absolute-path** tokens. Has no effect on tokens that
-    use the explicit ``fname=…`` form.
+  - ``-q``: Quiet mode, suppresses warnings.
+  - ``-n <name_filter>``: Use ``name_filter`` instead of the default
+    ``cg_mkfname_prefix`` to compute the wrapper function name for **plain-name**
+    and **absolute-path** tokens. Has no effect on ``fname=…`` tokens. See
+    *Name Filter Protocol*. May appear **at most once**.
+  - ``-p <value>``: Set the name filter parameter(s). For the default
+    ``cg_mkfname_prefix`` filter, ``value`` is the prefix string prepended to the
+    bare name. For custom filters, ``value`` is a packed parameter list (see
+    *Name Filter Protocol — packed value syntax*). An empty ``-p ""`` with the
+    default filter emits a ``[WARNING]`` unless ``-q`` is active. Has no effect
+    on ``fname=…`` tokens. May appear **at most once**.
   - ``-r <resolver>``: Use ``resolver`` instead of ``cg_safe_resolver`` to
     resolve plain-name and ``fname=name`` (non-absolute RHS) tokens.
+  - ``-z <packed>``: Unpack ``packed`` and inject the resulting tokens back into
+    the option-parsing loop at the current position, as if they had been written
+    on the command line. The value is parsed by the packed-value convention (see
+    *Name Filter Protocol — packed value syntax*). May be **repeated**; each
+    occurrence injects one independent batch. Primary use: pass
+    ``cg_search_snaps`` output to the active resolver:
+
+    .. code-block:: bash
+
+       cg_guard -r cg_path_resolver "$(cg_search_snaps)" docker
+
   - ``--``: End of options; required when a token name starts with ``-``.
-  - Each of ``-q``, ``-p``, and ``-r`` may appear **at most once**; repeating
-    any of them is a ``CG_ERR_SYNTAX_ERROR``.
+  - Each of ``-q``, ``-n``, ``-p``, and ``-r`` may appear **at most once**;
+    ``-z`` may be repeated. Repeating ``-q``, ``-n``, ``-p``, or ``-r`` is a
+    ``CG_ERR_SYNTAX_ERROR``.
 
 - Token forms (all forms may be mixed in a single call):
 
@@ -113,9 +132,11 @@ see *guard alias* below).
   - ``CG_ERR_NOT_FOUND`` when a command cannot be resolved or a path is
     invalid or non-executable.
   - ``CG_ERR_SYNTAX_ERROR`` when a relative path is used in the ``fname=rhs``
-    form (absolute path required); when a guard option (``-q``, ``-r``,
+    form (absolute path required); when a guard option (``-q``, ``-n``, ``-r``,
     ``-p``) is repeated; or when a forwarded option flag is rejected by the
     active resolver as unrecognised (probe returns ``CG_ERR_SYNTAX_ERROR``).
+  - The name filter's own exit code when the filter rejects a token. The filter
+    is responsible for its own diagnostic message.
 
 - Validation is all-or-nothing: no wrapper functions are created unless every
   token passes validation.
@@ -275,6 +296,59 @@ command-not-found).
 - ``command_not_found_handle`` is installed automatically by the library **only**
   if no such function is already defined at source time.
 
+cg_mkfname_prefix
+~~~~~~~~~~~~~~~~~
+
+The default name filter used by ``cg_guard``. Prepends a fixed prefix to the
+bare command name and validates the result as a legal Bash identifier.
+
+- Usage: ``cg_mkfname_prefix <prefix> <bare-name>``
+- Always receives exactly 2 arguments: ``$1`` is the prefix (possibly empty)
+  and ``$2`` is the bare name. This matches the calling convention established
+  by ``cg_guard`` — the default ``-p ""`` always supplies an empty-string
+  prefix.
+- Prints the concatenated ``prefix + bare-name`` on success; returns 0.
+- Returns ``CG_ERR_SYNTAX_ERROR`` with a diagnostic if the argument count is
+  not exactly 2.
+- Returns ``CG_ERR_INVALID_NAME`` with a diagnostic if the result is not a
+  valid Bash identifier (``^[a-zA-Z_][a-zA-Z0-9_]*$``).
+
+When used as the default filter with no ``-p``, ``cg_guard`` passes ``""`` as
+the prefix, so the wrapper function name equals the bare command name.
+
+cg_search_snaps
+~~~~~~~~~~~~~~~
+
+Discovers the snap binary directory and returns it as a ``-z``-packed argument
+suitable for passing directly to ``cg_guard -r cg_path_resolver``.
+
+- Usage: ``"$(cg_search_snaps)"`` — always use quoted command substitution.
+- Always outputs a string starting with ``-z`` (never empty):
+
+  - ``$'-z\x1F'`` when snap is absent or ``snap debug paths`` does not yield a
+    usable ``SNAPD_BIN`` directory. This is a no-op injection: the ``-z`` case
+    in ``cg_guard`` injects nothing and processing continues normally.
+  - ``$'-z\x1F-d\x1F/snap/bin'`` (actual path from ``SNAPD_BIN``) when snap is
+    present and the directory exists.
+
+- Emits a ``[WARNING]`` to stderr when the ``snap`` binary is found but
+  ``snap debug paths`` fails or ``SNAPD_BIN`` is missing or not a directory.
+- Returns 0 in all cases.
+
+Typical usage:
+
+.. code-block:: bash
+
+   cg_guard -r cg_path_resolver "$(cg_search_snaps)" docker compose
+
+Because ``cg_search_snaps`` always outputs a ``-z``-prefixed value, it is safe
+to use unconditionally; when snap is absent the argument is a no-op.
+
+The snap binary directory is appended at the position ``cg_search_snaps``
+appears in the ``cg_guard`` argument list, **after** any preceding ``-d``
+options. This matches the snap convention: the snap paths directory is added
+at the end of PATH by the snap package itself.
+
 Resolver Protocol
 -----------------
 
@@ -312,6 +386,70 @@ Custom resolver example:
    }
 
    cg_guard -r my_resolver mytool
+
+Name Filter Protocol
+--------------------
+
+A name filter is a function that computes the wrapper function name from a
+set of filter parameters and a bare command name. The calling convention is:
+
+.. code-block:: text
+
+   filter_fn [params...] <bare-name>
+
+- The **last positional argument** is always the bare name.
+- All preceding arguments are the filter parameters supplied via ``-p``.
+- On success: print the wrapper function name to stdout; return 0. The result
+  must be a valid Bash identifier (``^[a-zA-Z_][a-zA-Z0-9_]*$``).
+- On failure: print a diagnostic to stderr; return non-zero. The exit code is
+  propagated directly to the ``cg_guard`` caller.
+
+The default filter is ``cg_mkfname_prefix``. It always receives exactly 2
+arguments: an empty or non-empty prefix string, and the bare name.
+
+Packed value syntax (``-p`` and ``-z``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Both ``-p`` and ``-z`` use the same packed-value convention:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - First character of value
+     - Interpretation
+   * - ``[a-zA-Z0-9_-]``
+     - Single element; the whole value is passed through as-is.
+   * - ``""`` (empty string)
+     - Single empty-string element (one ``""`` argument to the filter).
+   * - Any other character (e.g. ``:``, ``\x1F``)
+     - That character is the separator. Strip it; split the remainder on it.
+       Empty results from splitting are dropped.
+
+Examples:
+
+.. code-block:: bash
+
+   # -p "pfx_"          → filter receives: "pfx_"  bare_name
+   # -p ""              → filter receives: ""       bare_name  (+ warning with default filter)
+   # -p ":run_:_cb"     → filter receives: "run_"  "_cb"  bare_name
+   # -p $'\x1Fa\x1Fb'  → filter receives: "a"     "b"    bare_name
+
+Custom name filter example:
+
+.. code-block:: bash
+
+   my_filter() {
+       local prefix="$1" bare_name="$2"
+       local fname="${prefix}${bare_name}"
+       [[ "$fname" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || {
+           echo "[ERROR] my_filter: '${fname}' is not a valid identifier." >&2
+           return "$CG_ERR_INVALID_NAME"
+       }
+       printf '%s' "$fname"
+   }
+
+   cg_guard -n my_filter -p "my_" uname date
 
 PATH Enforcement
 ----------------
@@ -462,6 +600,20 @@ Guarding with a prefix (library namespace isolation):
 
    cg_guard -p mylib_ uname date
    mylib_uname -s
+
+Guarding with a custom name filter:
+
+.. code-block:: bash
+
+   my_filter() { printf '%s' "${1}${2}"; }   # same as default but custom
+   cg_guard -n my_filter -p "ns_" uname date
+   ns_uname -s
+
+Guarding a tool that may be installed as a snap or system package:
+
+.. code-block:: bash
+
+   cg_guard -r cg_path_resolver "$(cg_search_snaps)" docker
 
 Guarding a snap binary by absolute path token:
 
