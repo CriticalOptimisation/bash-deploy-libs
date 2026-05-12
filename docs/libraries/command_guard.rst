@@ -202,11 +202,16 @@ default (discovered once at source time via a subshell; never hardcoded).
   PATH will execute silently, without triggering
   ``cg_command_not_found_handle``. This suspends the enforcement guarantee
   of ``cg_safe_run`` for the entire duration of the called function.
-  Keep the scope as narrow as possible: pass only the third-party init
-  call itself to ``cg_unsafe``, then guard the commands it discovers
-  immediately after, outside ``cg_unsafe``.
-- Typical use: initialisation wrappers for third-party (unsafe) libraries
-  that call external commands not guarded by ``cg_guard``.
+  Keep the scope as narrow as possible. Because any PATH extension made
+  by the third-party init lives only inside the ``local PATH`` binding of
+  ``cg_unsafe`` — it is discarded when ``cg_unsafe`` returns — the wrapper
+  function must either call ``cg_guard`` from within that same scope, or
+  capture the modified PATH and return it for use as a ``-d`` argument to
+  ``cg_guard -r cg_path_resolver`` outside. Calling ``cg_guard`` after
+  ``cg_unsafe`` returns will not see the extended PATH.
+- Typical use: an init wrapper that calls the third-party init (which may
+  extend PATH), then immediately calls ``cg_guard`` to register the
+  commands it discovered — all inside the wrapper passed to ``cg_unsafe``.
 - Returns: whatever ``fn`` returns.
 
 cg_safe_resolver
