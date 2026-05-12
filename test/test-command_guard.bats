@@ -840,13 +840,14 @@ setup() {
 # bats test_tags=guard,packed_injection,issue-117
 @test "cg_guard -z: packed resolver option is injected and forwarded" {
   f() {
-    local tmp
+    local tmp cmd_name rc
     tmp="$(mktemp -d)"
-    cp "$(command -pv uname)" "$tmp/uname"
-    cg_guard -r cg_path_resolver "-z:-d:${tmp}" uname || { rm -rf "$tmp"; return 1; }
-    unset -f uname
-    cg_guard -r cg_path_resolver "-z:-d:${tmp}" uname || { rm -rf "$tmp"; return 1; }
-    [[ "$(type -t uname)" == "function" ]]
+    cmd_name="cg_test_uname_$$"
+    cp "$(command -pv uname)" "$tmp/$cmd_name"
+    cg_guard -r cg_path_resolver "-z:-d:${tmp}" "$cmd_name" \
+      || { rc=$?; rm -rf "$tmp"; return $rc; }
+    [[ "$(type -t "$cmd_name")" == "function" ]] \
+      || { rc=$?; rm -rf "$tmp"; return $rc; }
     rm -rf "$tmp"
   }
   run -0 f
@@ -865,17 +866,17 @@ setup() {
 # bats test_tags=guard,packed_injection,issue-117
 @test "cg_guard -z: repeated -z injects two independent batches" {
   f() {
-    local tmp1 tmp2
+    local tmp1 tmp2 name1 name2 rc
     tmp1="$(mktemp -d)"; tmp2="$(mktemp -d)"
-    cp "$(command -pv uname)" "$tmp1/uname"
-    cp "$(command -pv date)"  "$tmp2/date"
-    cg_guard -r cg_path_resolver "-z:-d:${tmp1}" "-z:-d:${tmp2}" uname date \
-      || { rm -rf "$tmp1" "$tmp2"; return 1; }
-    unset -f uname date
-    cg_guard -r cg_path_resolver "-z:-d:${tmp1}" "-z:-d:${tmp2}" uname date \
-      || { rm -rf "$tmp1" "$tmp2"; return 1; }
-    [[ "$(type -t uname)" == "function" ]] || { rm -rf "$tmp1" "$tmp2"; return 1; }
-    [[ "$(type -t date)"  == "function" ]]
+    name1="cg_test_u_$$"; name2="cg_test_d_$$"
+    cp "$(command -pv uname)" "$tmp1/$name1"
+    cp "$(command -pv date)"  "$tmp2/$name2"
+    cg_guard -r cg_path_resolver "-z:-d:${tmp1}" "-z:-d:${tmp2}" "$name1" "$name2" \
+      || { rc=$?; rm -rf "$tmp1" "$tmp2"; return $rc; }
+    [[ "$(type -t "$name1")" == "function" ]] \
+      || { rc=$?; rm -rf "$tmp1" "$tmp2"; return $rc; }
+    [[ "$(type -t "$name2")" == "function" ]] \
+      || { rc=$?; rm -rf "$tmp1" "$tmp2"; return $rc; }
     rm -rf "$tmp1" "$tmp2"
   }
   run -0 f
