@@ -460,16 +460,21 @@ PATH Enforcement
 ----------------
 
 ``cg_safe_run`` restricts PATH to a non-existent random value for the duration
-of the called function. Any unguarded external command inside that function
-causes Bash to emit:
+of the called function.
+
+**Unguarded external commands** fail with exit code 127 (command not found).
+The installed ``command_not_found_handle`` is invoked; with ``CG_DEBUG=1`` it
+prints a warning and a ``cg_guard`` suggestion to stderr. The caller receives
+127 and may handle it normally.
+
+**Any attempt to assign to PATH** inside the called function causes Bash to
+emit:
 
 .. code-block:: text
 
    bash: PATH: readonly variable
 
-and abort the entire call stack back to the top-level script. This is a
-**hard abort** — it cannot be intercepted with ``|| true``, ``{ }`` grouping,
-or any amount of function nesting.
+and returns exit code 1 (``CG_ERR_PATH_VIOLATION``).
 
 Guarded commands are unaffected because their wrapper functions dispatch by
 absolute path and do not use PATH.
