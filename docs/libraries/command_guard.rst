@@ -212,8 +212,30 @@ default (discovered once at source time via a subshell; never hardcoded).
   from within its own body, or capture ``$PATH`` into a variable and
   return it so the caller can pass it as ``-d``.
 - Typical use: an init wrapper that calls the third-party init (which may
-  extend PATH), then immediately calls ``cg_guard`` to register the
-  commands it discovered — all inside the wrapper passed to ``cg_unsafe``.
+  extend PATH), then immediately calls ``cg_guard -r cg_path_resolver -d "$PATH"``
+  to register the commands it discovered — all inside the wrapper passed
+  to ``cg_unsafe``. Example: a library whose binaries live in
+  ``/opt/optlib/bin`` but whose init script is installed in ``/usr/bin``:
+
+  .. code-block:: bash
+
+     # optlib_wrapper.sh — source this to initialise optlib in a guarded app.
+
+     # Guard the init script via cg_safe_resolver (uses command -pv; no
+     # cg_unsafe needed even inside cg_safe_run).
+     cg_guard optlib_init
+
+     _optlib_init_wrapper() {
+         # optlib_init extends PATH to include /opt/optlib/bin.
+         optlib_init
+         # Guard its commands while the PATH extension is still live.
+         cg_guard -r cg_path_resolver -d "$PATH" optfoo optbar
+     }
+
+     # cg_unsafe makes PATH writable so optlib_init can extend it.
+     # Binaries guarded above are callable safely after this line.
+     cg_unsafe _optlib_init_wrapper
+
 - Returns: whatever ``fn`` returns.
 
 cg_safe_resolver
