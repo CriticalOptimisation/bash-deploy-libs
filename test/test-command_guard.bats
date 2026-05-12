@@ -866,22 +866,21 @@ setup() {
 # bats test_tags=guard,packed_injection,issue-117
 @test "cg_guard -z: repeated -z injects two independent batches" {
   f() {
-    local tmp1 tmp2 name1 name2 uname_path date_path out1 out2 rc
+    local tmp1 tmp2 name1 name2 uname_path out1 out2 rc
     tmp1="$(mktemp -d)"; tmp2="$(mktemp -d)"
-    name1="cg_test_u_$$"; name2="cg_test_d_$$"
+    name1="cg_test_u_$$"; name2="cg_test_m_$$"
     uname_path="$(command -pv uname)"
-    date_path="$(command -pv date)"
     cp "$uname_path" "$tmp1/$name1"
-    cp "$date_path"  "$tmp2/$name2"
+    cp "$uname_path" "$tmp2/$name2"
     cg_guard -r cg_path_resolver "-z:-d:${tmp1}" "-z:-d:${tmp2}" "$name1" "$name2" \
       || { rc=$?; rm -rf "$tmp1" "$tmp2"; return $rc; }
     out1="$("$name1" -s)" \
       || { rc=$?; rm -rf "$tmp1" "$tmp2"; return $rc; }
     [[ "$out1" == "$("$uname_path" -s)" ]] \
       || { rc=$?; rm -rf "$tmp1" "$tmp2"; return $rc; }
-    out2="$("$name2" +%Y)" \
+    out2="$("$name2" -m)" \
       || { rc=$?; rm -rf "$tmp1" "$tmp2"; return $rc; }
-    [[ "$out2" == "$("$date_path" +%Y)" ]] \
+    [[ "$out2" == "$("$uname_path" -m)" ]] \
       || { rc=$?; rm -rf "$tmp1" "$tmp2"; return $rc; }
     rm -rf "$tmp1" "$tmp2"
   }
