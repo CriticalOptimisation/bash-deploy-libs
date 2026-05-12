@@ -799,10 +799,10 @@ setup() {
 # bats test_tags=guard,name_filter,issue-116
 @test "cg_guard -n: filter rejection propagates the filter exit code" {
   f() {
-    rejecting_filter() { return "$CG_ERR_INVALID_NAME"; }
+    rejecting_filter() { return 42; }
     cg_guard -n rejecting_filter uname
   }
-  run -"$CG_ERR_INVALID_NAME" f
+  run -42 f
 }
 
 # --- cg_guard -p with default filter (issue #116) ---
