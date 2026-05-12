@@ -106,16 +106,48 @@ _cg_guard_resolve() {
 }
 
 # Function:
+#   _cg_unpack_args
+# Description:
+#   Unpack a packed-value string into the caller-visible array _cg_unpacked.
+#   Convention: first char in [a-zA-Z0-9_-] → single element, value as-is.
+#   Empty string → one empty-string element. Any other first character is
+#   the separator: strip it, split remainder on it, dropping empty segments.
+# Usage:
+#   local -a _cg_unpacked; _cg_unpack_args <packed>
+_cg_unpack_args() {
+    local _cgu_val="$1"
+    _cg_unpacked=()
+    if [[ -z "$_cgu_val" ]]; then
+        _cg_unpacked=("")
+        return 0
+    fi
+    local _cgu_sep="${_cgu_val:0:1}"
+    if [[ "$_cgu_sep" =~ [a-zA-Z0-9_-] ]]; then
+        _cg_unpacked=("$_cgu_val")
+        return 0
+    fi
+    local _cgu_rest="${_cgu_val:1}"
+    [[ -z "$_cgu_rest" ]] && return 0
+    local IFS="$_cgu_sep"
+    local -a _cgu_parts
+    read -ra _cgu_parts <<< "$_cgu_rest"
+    local _cgu_part
+    for _cgu_part in "${_cgu_parts[@]}"; do
+        [[ -n "$_cgu_part" ]] && _cg_unpacked+=("$_cgu_part")
+    done
+}
+
+# Function:
 #   _cg_guard_mkfname
 # Description:
-#   Compute the wrapper function name from <prefix> and <bare-name>.
-#   Currently: fname = prefix + bare_name (literal concatenation).
-#   Isolated here so a future name-to-fname filter (issue #116) replaces
-#   only this one function rather than every call site.
+#   Dispatch to the active name filter, unpacking the packed p-value first.
+#   The filter receives: [unpacked_p_params...] <bare-name>.
 # Usage:
-#   _cg_guard_mkfname <prefix> <bare-name>
+#   _cg_guard_mkfname <filter_fn> <packed_p_value> <bare-name>
 _cg_guard_mkfname() {
-    printf '%s' "${1}${2}"
+    local -a _cg_unpacked
+    _cg_unpack_args "$2"
+    "$1" "${_cg_unpacked[@]}" "$3"
 }
 
 # --- Public API ---------------------------------------------------------------
@@ -183,46 +215,110 @@ if ! declare -f command_not_found_handle >/dev/null 2>&1; then
 fi
 
 # Function:
+#   cg_mkfname_prefix
+# Description:
+#   Default name filter used by cg_guard. Prepends a fixed prefix to the
+#   bare command name and validates the result as a legal Bash identifier.
+# Usage:
+#   cg_mkfname_prefix <prefix> <bare-name>
+cg_mkfname_prefix() {
+    if [[ $# -ne 2 ]]; then
+        echo "[ERROR] cg_mkfname_prefix: requires exactly 2 arguments (prefix, bare-name)." >&2
+        return "$CG_ERR_SYNTAX_ERROR"
+    fi
+    local _cgp_result="${1}${2}"
+    if ! [[ "$_cgp_result" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+        echo "[ERROR] cg_mkfname_prefix: '${_cgp_result}' is not a valid Bash identifier." >&2
+        return "$CG_ERR_INVALID_NAME"
+    fi
+    printf '%s' "$_cgp_result"
+}
+
+# Function:
+#   cg_search_snaps
+# Description:
+#   Discovers the snap binary directory and returns it as a -z-packed argument
+#   suitable for passing directly to cg_guard -r cg_path_resolver.
+#   Always returns 0; outputs a no-op -z string when snap is absent or broken.
+# Usage:
+#   cg_guard -r cg_path_resolver "$(cg_search_snaps)" <cmd>
+cg_search_snaps() {
+    local _cgs_noop=$'-z\x1F'
+    if ! command -p snap >/dev/null 2>&1; then
+        printf '%s' "$_cgs_noop"
+        return 0
+    fi
+    local _cgs_paths
+    if ! _cgs_paths="$(snap debug paths 2>/dev/null)"; then
+        echo "[WARNING] cg_search_snaps: 'snap debug paths' failed; snap binary directory will not be discovered." >&2
+        printf '%s' "$_cgs_noop"
+        return 0
+    fi
+    local _cgs_bin="" _cgs_line
+    while IFS= read -r _cgs_line; do
+        if [[ "$_cgs_line" == SNAPD_BIN=* ]]; then
+            _cgs_bin="${_cgs_line#SNAPD_BIN=}"
+            break
+        fi
+    done <<< "$_cgs_paths"
+    if [[ -z "$_cgs_bin" || ! -d "$_cgs_bin" ]]; then
+        echo "[WARNING] cg_search_snaps: SNAPD_BIN not found or not a directory; snap binary directory will not be discovered." >&2
+        printf '%s' "$_cgs_noop"
+        return 0
+    fi
+    printf '%s' $'-z\x1F-d\x1F'"$_cgs_bin"
+}
+
+# Function:
 #   cg_guard
 # Description:
 #   Defines a wrapper function for each token that dispatches to the
 #   resolved full path with all arguments forwarded.
 # Usage:
-#   cg_guard [-q] [-p <prefix>] [-r <resolver>] [resolver-opts] [--] [token ...]
+#   cg_guard [-q] [-n <filter>] [-p <value>] [-r <resolver>] [-z <packed>] [resolver-opts] [--] [token ...]
 # Options:
-#   -q          Quiet: suppress warnings for zero tokens.
-#   -p prefix   Prepend prefix to generated function names for plain-name
-#               and /abs/path tokens. Has no effect on fname=... tokens.
+#   -q          Quiet: suppress warnings for zero tokens and empty -p.
+#   -n filter   Use filter instead of cg_mkfname_prefix to compute wrapper
+#               function names for plain-name and /abs/path tokens.
+#               Has no effect on fname=... tokens. May appear at most once.
+#   -p value    Pass value as parameter(s) to the name filter. For the default
+#               cg_mkfname_prefix, value is the prefix string. For custom
+#               filters, value is a packed parameter list. An empty -p "" with
+#               the default filter emits a [WARNING] unless -q is active.
+#               Has no effect on fname=... tokens. May appear at most once.
 #   -r resolver Use resolver instead of cg_safe_resolver. All unrecognised
 #               option flags are forwarded to the resolver; cg_guard probes the
 #               resolver to determine which flags take an argument.
 #               Guard options must precede resolver options.
+#   -z packed   Unpack packed and inject the resulting tokens into forward_opts
+#               at the current position. May be repeated; each occurrence
+#               injects one independent batch. Primary use: cg_search_snaps.
 #   --          End of options; required when a token name starts with -.
 # Token forms:
 #   fname=/abs/path  explicit fname, absolute path verbatim
 #   fname=name       explicit fname, name resolved via resolver
-#   /abs/path        function name = <prefix>basename, path verbatim
-#   name             function name = <prefix>name, resolved via resolver
+#   /abs/path        function name = filter(prefix, basename), path verbatim
+#   name             function name = filter(prefix, name), resolved via resolver
 # Errors:
 #   CG_ERR_INVALID_NAME      invalid Bash identifier in a token
-#   CG_ERR_MISSING_ARGUMENT  cg_guard option -r or -p is missing its argument
+#   CG_ERR_MISSING_ARGUMENT  cg_guard option -r, -p, -n, or -z missing argument
 #   CG_ERR_NOT_FOUND         command not found or path invalid/non-executable
 #   CG_ERR_SYNTAX_ERROR      relative path where absolute required; a guard option
-#                            (-q, -r, -p) repeated; or a forwarded option rejected
-#                            by the resolver (not recognised)
+#                            (-q, -r, -p, -n) repeated; or a forwarded option
+#                            rejected by the resolver (not recognised)
 # Notes:
 #   Validation is all-or-nothing: no wrapper is created unless every token
 #   passes validation.
 cg_guard() {
-    local quiet=false resolver="cg_safe_resolver" prefix=""
-    local -a forward_opts=()
-    local opt_q=false opt_r=false opt_p=false
+    local quiet=false resolver="cg_safe_resolver" prefix="" name_filter_fn="cg_mkfname_prefix"
+    local -a forward_opts=() _cg_unpacked
+    local opt_q=false opt_r=false opt_p=false opt_n=false
 
     # Parse guard's own options with getopts; unknown flags are forwarded to
     # the resolver after an arity probe. Guard options must precede resolver
-    # options: guard [-q] [-p prefix] [-r resolver] [resolver-opts] [--] tokens
+    # options: guard [-q] [-n filter] [-p value] [-r resolver] [-z packed] [resolver-opts] [--] tokens
     OPTIND=1
-    while getopts ":qr:p:" opt; do
+    while getopts ":qr:p:n:z:" opt; do
         case $opt in
             q) [[ "$opt_q" == true ]] && { echo "[ERROR] cg_guard: option -q specified more than once." >&2; return "$CG_ERR_SYNTAX_ERROR"; }
                opt_q=true; quiet=true ;;
@@ -230,6 +326,10 @@ cg_guard() {
                opt_r=true; resolver="$OPTARG" ;;
             p) [[ "$opt_p" == true ]] && { echo "[ERROR] cg_guard: option -p specified more than once." >&2; return "$CG_ERR_SYNTAX_ERROR"; }
                opt_p=true; prefix="$OPTARG" ;;
+            n) [[ "$opt_n" == true ]] && { echo "[ERROR] cg_guard: option -n specified more than once." >&2; return "$CG_ERR_SYNTAX_ERROR"; }
+               opt_n=true; name_filter_fn="$OPTARG" ;;
+            z) _cg_unpack_args "$OPTARG"
+               forward_opts+=("${_cg_unpacked[@]}") ;;
             \?)
                 local flag="-$OPTARG"
                 local next="${*:OPTIND:1}"
@@ -262,6 +362,10 @@ cg_guard() {
     shift $((OPTIND - 1))
     [[ "${1-}" == "--" ]] && shift
 
+    if [[ "$opt_p" == true && -z "$prefix" && "$name_filter_fn" == "cg_mkfname_prefix" && "$quiet" != true ]]; then
+        echo "[WARNING] cg_guard: -p \"\" with the default filter has no effect; omit -p or specify a non-empty prefix." >&2
+    fi
+
     # Handle zero tokens
     if [[ $# -eq 0 ]]; then
         if [[ "$quiet" != true ]]; then
@@ -277,13 +381,9 @@ cg_guard() {
 
     for token in "$@"; do
         if [[ "${token:0:1}" == "/" ]]; then
-            # /abs/path form — prefix applied to basename
+            # /abs/path form — filter applied to basename
             bname="${token##*/}"
-            fname="$(_cg_guard_mkfname "$prefix" "$bname")"
-            if ! [[ "$fname" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-                echo "[ERROR] cg_guard: '$bname' is not a valid identifier; use the 'fname=${token}' form." >&2
-                return "$CG_ERR_INVALID_NAME"
-            fi
+            fname="$(_cg_guard_mkfname "$name_filter_fn" "$prefix" "$bname")" || return $?
             if [[ ! -x "$token" ]]; then
                 echo "[ERROR] cg_guard: unable to resolve full path for '$token'. Use the full path." >&2
                 return "$CG_ERR_NOT_FOUND"
@@ -327,7 +427,7 @@ cg_guard() {
             fi
 
             full_path="$(_cg_guard_resolve "$resolver" "${forward_opts[@]}" "$token")" || return $?
-            fname="$(_cg_guard_mkfname "$prefix" "$token")"
+            fname="$(_cg_guard_mkfname "$name_filter_fn" "$prefix" "$token")" || return $?
             valid_fnames+=("$fname")
             valid_paths+=("$full_path")
         fi
