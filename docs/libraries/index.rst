@@ -9,3 +9,12 @@ pieces they ship.
 
    handle_state
    command_guard
+
+..
+
+   Change History
+
+   PR     Summary
+   -----  -----------------------------------------------------------------
+   #8     add command_guard to library index
+   #109   reduce nameref collision surface [closes #104]

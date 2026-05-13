@@ -88,3 +88,58 @@ Related to #456
 - Common patterns
 - Troubleshooting
 - Best practices
+
+## Change History Section Templates
+
+Every file modified by a PR must carry a change history section. The format depends on the file type. Add one row per PR in ascending PR-number order. Use the GitHub API (`gh api repos/{owner}/{repo}/pulls/{n}/files`) to confirm which files a PR actually changed — do not rely on `git log`.
+
+### Shell and BATS files (`.sh`, `.bats`)
+
+Place after the last executable statement, before EOF. The `return 0` guards against accidental direct execution and marks the boundary between executable content and metadata.
+
+```bash
+return 0
+
+# --- Change History -------------------------------------------------------
+# | PR     | Summary                                                       |
+# |--------|---------------------------------------------------------------|
+# | #N     | one-line description                                          |
+```
+
+### RST documentation files (`.rst`)
+
+Place at the end of the file. The `..` RST comment directive causes Sphinx to discard the block entirely; it never surfaces in built HTML or PDF output.
+
+```rst
+..
+
+   Change History
+
+   PR     Summary
+   -----  -----------------------------------------------------------------
+   #N     one-line description
+```
+
+Note: pipe-table syntax (`| col |`) must not be used inside RST `..` comments — the RST parser expands `|...|` as substitution references even inside comment blocks. Use plain aligned text columns instead.
+
+### Skills `history.md` (SCM skill — tracks product→process causality)
+
+A standalone file in the skill directory, **never referenced from skill content**. Records which product or process PRs drove each change to the skill files.
+
+```markdown
+# Change History
+
+| PR  | Closes | Skill files changed | Process change |
+|-----|--------|---------------------|----------------|
+| #N  | #M     | filename.md         | one-line description |
+```
+
+### Skills `history.md` (all other skills)
+
+```markdown
+# Change History
+
+| PR  | Closes | Summary |
+|-----|--------|---------|
+| #N  | #M     | one-line description |
+```

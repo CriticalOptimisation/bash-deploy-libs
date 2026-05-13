@@ -1011,3 +1011,17 @@ setup() {
   }
   run -0 f
 }
+
+return 0
+
+# --- Change History -------------------------------------------------------
+# | PR    | Summary                                                        |
+# |-------|----------------------------------------------------------------|
+# | #8    | initial library                                                |
+# | #18   | multiple arguments support in guard function                   |
+# | #23   | feature/skills update                                          |
+# | #84   | remove unused CG_ERR_MISSING_COMMAND [closes #24]              |
+# | #86   | shellcheck: quote args, fix source annotations [closes #85]    |
+# | #113  | name=path guard token syntax [closes #111]                     |
+# | #114  | PATH enforcement API — cg_safe_run, cg_unsafe [closes #112]    |
+# | #118  | name filter and snap search API [closes #116, #117]            |

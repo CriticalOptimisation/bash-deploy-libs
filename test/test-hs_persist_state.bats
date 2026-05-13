@@ -1530,3 +1530,21 @@ hs2_corrupt_state() {
   [[ "$count" -ge 1 ]]  # guards against vacuous pass when --list-reserved is broken
   [[ "$count" -le 2 ]]  # regression guard: target is exactly 2 (__hs_remaining, __hs_processed)
 }
+
+return 0
+
+# --- Change History -------------------------------------------------------
+# | PR    | Summary                                                        |
+# |-------|----------------------------------------------------------------|
+# | #38   | do not return state via stdout                                 |
+# | #60   | use ${BASH:-bash} for collision-check subprocess [closes #59]  |
+# | #63   | refactor safer handle-state restoration flow [closes #62]      |
+# | #83   | fix hs_destroy_state rebuild subprocess helper [closes #82]    |
+# | #86   | shellcheck fixes [closes #85]                                  |
+# | #99   | error on undeclared variable names [closes #1]                 |
+# | #102  | guard nameref restore against undeclared variables [cls #100]  |
+# | #103  | reject function names with HS_ERR_UNKNOWN_VAR_NAME             |
+# | #105  | fix hs_persist_state dropping indexed array elements [cls #3]  |
+# | #108  | fix shellcheck linter errors in bats file [closes #107]        |
+# | #109  | reduce nameref collision surface [closes #104]                 |
+# | #110  | document HS_ERR_MULTIPLE_STATE_INPUTS for all entry points     |

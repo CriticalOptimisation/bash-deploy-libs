@@ -713,3 +713,15 @@ Source Listing
 .. literalinclude:: ../../config/command_guard.sh
    :language: bash
    :linenos:
+
+..
+
+   Change History
+
+   PR     Summary
+   -----  -----------------------------------------------------------------
+   #8     initial documentation
+   #23    feature/skills update
+   #113   name=path guard token syntax [closes #111]
+   #114   PATH enforcement API -- cg_safe_run, cg_unsafe [closes #112]
+   #118   name filter and snap search API [closes #116, #117]
