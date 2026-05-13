@@ -20,12 +20,6 @@ _last_code_line() {
 # Shell / BATS files — must end with "return 0" then a history block
 # ---------------------------------------------------------------------------
 
-SHELL_FILES=(
-  config/command_guard.sh
-  config/handle_state.sh
-  test/test-command_guard.bats
-  test/test-hs_persist_state.bats
-)
 
 # bats test_tags=structure,history,issue-43
 @test "config/command_guard.sh: last code line is return 0" {
@@ -90,15 +84,6 @@ SHELL_FILES=(
 # Skills directories — must each contain a history.md file
 # ---------------------------------------------------------------------------
 
-SKILL_DIRS=(
-  .github/skills/software-configuration-management
-  .github/skills/handle-state
-  .github/skills/bash-library-template
-  .github/skills/bash-path-prefix-scan
-  .github/skills/skill-creator
-  .github/skills/github-issues
-  .github/skills/sphinx-docs
-)
 
 # bats test_tags=structure,history,issue-43
 @test "software-configuration-management skill has history.md" {
@@ -134,3 +119,10 @@ SKILL_DIRS=(
 @test "sphinx-docs skill has history.md" {
   [[ -f "$ROOT/.github/skills/sphinx-docs/history.md" ]]
 }
+
+return 0
+
+# --- Change History -------------------------------------------------------
+# | PR    | Summary                                                        |
+# |-------|----------------------------------------------------------------|
+# | #43   | initial file — structural tests for PR change history sections |
