@@ -812,3 +812,25 @@ _hs_hs2_parse() {
     IFS=$'\001' read -ra __hs2p_out <<< "$__hs2p_payload"
     IFS="$__hs2p_old_ifs"
 }
+
+return 0
+
+# --- Change History -------------------------------------------------------
+# | PR    | Summary                                                        |
+# |-------|----------------------------------------------------------------|
+# | #32   | batch security fixes: guard commands [closes #7]               |
+# | #38   | do not return state via stdout                                 |
+# | #60   | use ${BASH:-bash} for collision-check subprocess [closes #59]  |
+# | #63   | refactor safer handle-state restoration flow [closes #62]      |
+# | #83   | fix hs_destroy_state rebuild subprocess helper [closes #82]    |
+# | #87   | fix top-of-file usage example, IFS-safe join [closes #64]      |
+# | #88   | clarify hs_persist_state_as_code as opaque token [closes #65]  |
+# | #89   | describe sandboxed eval and nameref restore [closes #68]       |
+# | #92   | replace non-standard hs_read_persisted_state example [cls #75] |
+# | #93   | rename probe-snippet to implicit local restore [closes #76]    |
+# | #99   | error on undeclared variable names [closes #1]                 |
+# | #102  | guard nameref restore against undeclared variables [cls #100]  |
+# | #103  | reject function names with HS_ERR_UNKNOWN_VAR_NAME             |
+# | #105  | fix hs_persist_state dropping indexed array elements [cls #3]  |
+# | #109  | reduce nameref collision surface [closes #104]                 |
+# | #110  | document HS_ERR_MULTIPLE_STATE_INPUTS for all entry points     |
