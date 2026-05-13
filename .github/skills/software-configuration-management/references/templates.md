@@ -115,10 +115,12 @@ Place at the end of the file. The `..` RST comment directive causes Sphinx to di
 
    Change History
 
-   | PR     | Summary                                                       |
-   |--------|---------------------------------------------------------------|
-   | #N     | one-line description                                          |
+   PR     Summary
+   -----  -----------------------------------------------------------------
+   #N     one-line description
 ```
+
+Note: pipe-table syntax (`| col |`) must not be used inside RST `..` comments — the RST parser expands `|...|` as substitution references even inside comment blocks. Use plain aligned text columns instead.
 
 ### Skills `history.md` (SCM skill — tracks product→process causality)
 

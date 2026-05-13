@@ -414,3 +414,28 @@ Source Listing
 .. literalinclude:: ../../config/handle_state.sh
    :language: bash
    :linenos:
+
+..
+
+   Change History
+
+   PR     Summary
+   -----  -----------------------------------------------------------------
+   #23    feature/skills update
+   #32    batch security fixes [closes #7]
+   #38    do not return state via stdout
+   #63    refactor safer handle-state restoration flow [closes #62]
+   #83    fix hs_destroy_state rebuild subprocess helper [closes #82]
+   #90    remove internal-format mention, convenience form non-preferred
+   #91    add forwarded-args eval example for probe-snippet mode
+   #93    rename probe-snippet to implicit local restore [closes #76]
+   #94    emphasize implicit restore snippet is safe local code
+   #95    clarify caller evaluates probe code, not transmitted state
+   #96    add -S calling context to Examples section [closes #80]
+   #98    remove caveat implying raw eval of state is valid [closes #81]
+   #99    error on undeclared variable names [closes #1]
+   #102   guard nameref restore against undeclared variables [closes #100]
+   #103   reject function names with HS_ERR_UNKNOWN_VAR_NAME
+   #105   fix hs_persist_state dropping indexed array elements [closes #3]
+   #109   reduce nameref collision surface [closes #104]
+   #110   document HS_ERR_MULTIPLE_STATE_INPUTS for all entry points
