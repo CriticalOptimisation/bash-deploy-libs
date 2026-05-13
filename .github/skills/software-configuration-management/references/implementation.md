@@ -31,6 +31,7 @@ This task covers source code implementation, edge-cases tests expansion, testing
 ## Prepare for Review
 - **Objective**: Surface the work for maintainers' review.
 - **Activities**:
+  - Update the change history section of every file modified by this PR, following the templates in `templates.md`. For skill files, update the skill directory's `history.md` instead of the skill file itself. Use `gh api repos/{owner}/{repo}/pulls/{n}/files` to confirm the exact set of changed files — do not rely on `git log`.
   - Open a PR with a descriptive title and body referencing the issue.
   - Assign the **maintainers team** as reviewers (@CriticalOptimisation/maintainers).
   - Link the original issue and summarize the changes.
