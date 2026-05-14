@@ -36,9 +36,10 @@ guard nc ssh base64 realpath mktemp dirname cat sleep
 #   number is returned as stdout by ssh -O forward — no stderr grep required.
 #
 # Step 3 — Bootstrap delivery and execution
-#   The bootstrap (shell fragment with _port baked in) is written to a local
-#   FIFO; the FIFO kernel buffer holds it until the remote bash drains it.
-#   ssh -T -S _ctl_sock host "bash --norc --noprofile" < _boot_fifo
+#   ssh -T -S _ctl_sock host "bash --norc --noprofile" \
+#       < <(_rr_bootstrap_fragment port flags pipefail script args...)
+#   Process substitution creates a pipe; the generator subshell exits after
+#   writing, closing the write end and delivering EOF to the remote bash.
 #   The remote bash opens /dev/tcp/127.0.0.1/_port as a bidirectional fd,
 #   installs source() and rr_resolve() overrides with the fd number baked in,
 #   and runs the user script.  No file is written to the remote filesystem.
@@ -63,9 +64,9 @@ guard nc ssh base64 realpath mktemp dirname cat sleep
 # REMOTE BOOTSTRAP SEQUENCE
 # ---------------------------------------------------------------------------
 #
-# The bootstrap is a shell fragment written to a local FIFO connected to the
-# remote bash's stdin.  The port is known before the bash session starts, so
-# the FIFO is written and closed before ssh runs the bash command.  The
+# The bootstrap is a shell fragment piped to the remote bash's stdin via
+# process substitution.  The write end closes automatically when the generator
+# exits, delivering EOF to remote bash after the last bootstrap command.  The
 # bootstrap:
 #
 #   1. Opens the protocol channel via a single bidirectional fd:
@@ -382,9 +383,9 @@ BOOTSTRAP
 # rr_init [-S <var>] [--allow <path>] [--ssh-opt <opt>]
 #
 # Optional.  Appends rr_init's own state (_rr_ssh_opts_str, _rr_whitelist_str)
-# to a shared application state vector managed by hs_persist_state_as_code.  Each
+# to a shared application state vector managed by hs_persist_state.  Each
 # library in a project appends its own variables to the same shared state;
-# hs_persist_state_as_code's collision detection prevents initialising the same library
+# hs_persist_state's collision detection prevents initialising the same library
 # twice on the same state variable (intentional error).
 #
 # -S <var>    Read-modify-write: read the current value of <var> as the input
@@ -415,7 +416,7 @@ rr_init() {
     done
 
     if [[ -n "$_out_var" ]]; then
-        hs_persist_state_as_code -S "$_out_var" -- _rr_ssh_opts_str _rr_whitelist_str || return $?
+        hs_persist_state -S "$_out_var" -- _rr_ssh_opts_str _rr_whitelist_str || return $?
     fi
 }
 
@@ -519,13 +520,6 @@ rr_run() {
 
     exec {_fd_in}>&- {_fd_out}>&-
 
-    # Bootstrap FIFO: remote bash reads the bootstrap script from its stdin.
-    # Open the write end O_RDWR so the open(2) does not block before SSH starts.
-    local _boot_fifo
-    _boot_fifo=$(mktemp -u) && mkfifo "$_boot_fifo"
-    local _boot_wfd
-    exec {_boot_wfd}<>"$_boot_fifo"
-
     # ControlMaster socket for this rr_run invocation.
     local _ctl_sock
     _ctl_sock=$(mktemp -u)
@@ -540,10 +534,9 @@ rr_run() {
             "${_ssh_opts[@]}" "$_host" 2>/dev/null
     then
         echo "[ERROR] rr_run: ControlMaster connection to $_host failed" >&2
-        exec {_boot_wfd}>&-
         kill "$_nc_pid" "$_srv_pid" 2>/dev/null
         wait "$_nc_pid" "$_srv_pid" 2>/dev/null
-        rm -f "$_fifo_in" "$_fifo_out" "$_local_sock" "$_boot_fifo" "$_ctl_sock"
+        rm -f "$_fifo_in" "$_fifo_out" "$_local_sock" "$_ctl_sock"
         return 1
     fi
 
@@ -557,35 +550,29 @@ rr_run() {
     if [[ $? -ne 0 || -z "$_port" ]]; then
         echo "[ERROR] rr_run: -O forward failed (AllowTcpForwarding enabled on remote sshd?)" >&2
         ssh -S "$_ctl_sock" -O exit "$_host" 2>/dev/null
-        exec {_boot_wfd}>&-
         kill "$_nc_pid" "$_srv_pid" 2>/dev/null
         wait "$_nc_pid" "$_srv_pid" 2>/dev/null
-        rm -f "$_fifo_in" "$_fifo_out" "$_local_sock" "$_boot_fifo" "$_ctl_sock"
+        rm -f "$_fifo_in" "$_fifo_out" "$_local_sock" "$_ctl_sock"
         return 1
     fi
 
-    # Step 3: Write bootstrap (port baked in) to FIFO, then close the write end.
-    # The kernel FIFO buffer holds the data until the remote bash drains it.
-    # Closing _boot_wfd delivers EOF to the remote bash after the bootstrap,
-    # terminating bash's stdin cleanly once the user script has been fetched.
-    _rr_bootstrap_fragment "$_port" "$_flags" "$_pipefail" \
-        "$_script" "${_args[@]}" >&"$_boot_wfd"
-    exec {_boot_wfd}>&-
-
-    # Step 4: Run remote bash via the ControlMaster session (no new TCP handshake).
-    # Remote stderr flows naturally back to our stderr through the mux.
+    # Step 3: Run remote bash via the ControlMaster session.
+    # Bootstrap is piped via process substitution: the generator subshell exits
+    # after writing, closing the write end and delivering EOF to remote bash
+    # stdin — no FIFO open-ordering race.
     local _rc
     ssh -T -S "$_ctl_sock" "$_host" \
         "bash --norc --noprofile" \
-        < "$_boot_fifo"
+        < <(_rr_bootstrap_fragment "$_port" "$_flags" "$_pipefail" \
+                "$_script" "${_args[@]}")
     _rc=$?
 
-    # Step 5: Tear down the ControlMaster (closes all port forwards and sessions).
+    # Step 4: Tear down the ControlMaster (closes all port forwards and sessions).
     ssh -S "$_ctl_sock" -O exit "$_host" 2>/dev/null
 
     kill "$_nc_pid" "$_srv_pid" 2>/dev/null
     wait "$_nc_pid" "$_srv_pid" 2>/dev/null
-    rm -f "$_fifo_in" "$_fifo_out" "$_local_sock" "$_boot_fifo" "$_ctl_sock"
+    rm -f "$_fifo_in" "$_fifo_out" "$_local_sock" "$_ctl_sock"
 
     return $_rc
 }
