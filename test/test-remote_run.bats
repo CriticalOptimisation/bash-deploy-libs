@@ -11,10 +11,21 @@
 # ---------------------------------------------------------------------------
 # setup_file — start the SSH test container
 # ---------------------------------------------------------------------------
+readonly RR_TEST_DOCKER_NOT_AVAILABLE=1
+readonly RR_TEST_DOCKER_INFO_FAILED=2
+readonly RR_TEST_CANNOT_SSH_KEYGEN=3
+readonly RR_TEST_DOCKER_NET_CREATE_ERROR=4
+readonly RR_TEST_DOCKER_RUN_FAILED=5
+readonly RR_TEST_UNABLE_TO_GET_SSH_SERVER_ADDRESS=6
+readonly RR_TEST_MKTEMP_DIR_FAILED=7
+readonly RR_TEST_SOURCE_LIB_FAILED=8
+readonly RR_TEST_RR_INIT_FAILED=9
+
+readonly RR_TEST_FLAG_FILEPATH="$BATS_FILE_TMPDIR/ssh_ready"
 
 setup_file() {
     bats_require_minimum_version 1.5.0
-    export BATS_TEST_TIMEOUT=30
+    export BATS_TEST_TIMEOUT=10
 
     export LIB="$BATS_TEST_DIRNAME/../config/remote_run.sh"
     if [[ ! -f "$LIB" ]]; then
@@ -25,13 +36,13 @@ setup_file() {
     export RR_DOCKER_AVAILABLE=0
 
     # Check Docker daemon
-    command -v docker &>/dev/null || return 0
-    docker info &>/dev/null 2>&1  || return 0
+    command -v docker &>/dev/null || return "$RR_TEST_DOCKER_NOT_AVAILABLE"
+    docker info &>/dev/null 2>&1  || return "$RR_TEST_DOCKER_INFO_FAILED"
 
     # Generate an ephemeral ed25519 key pair (no passphrase)
     export RR_KEY_DIR="$BATS_FILE_TMPDIR/ssh"
     mkdir -p "$RR_KEY_DIR"
-    ssh-keygen -t ed25519 -f "$RR_KEY_DIR/id_ed25519" -N "" -q || return 0
+    ssh-keygen -t ed25519 -f "$RR_KEY_DIR/id_ed25519" -N "" -q || return "$RR_TEST_CANNOT_SSH_KEYGEN"
 
     # Unique names for this test run
     export RR_CONTAINER="rr-test-$$"
@@ -39,7 +50,7 @@ setup_file() {
 
     # Isolated Docker network so the container gets its own IP and SSH is
     # reachable on port 22 directly — no host-port mapping needed.
-    docker network create "$RR_NETWORK" >/dev/null 2>&1 || return 0
+    docker network create "$RR_NETWORK" >/dev/null 2>&1 || return "$RR_TEST_DOCKER_NET_CREATE_ERROR"
 
     # Start Alpine with openssh-server; inject the public key via env var so
     # that the container can write it to the correct location with correct
@@ -63,7 +74,7 @@ setup_file() {
             sed -i "s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/" /etc/ssh/sshd_config &&
             sed -i "s/^.*AllowTcpForwarding.*/AllowTcpForwarding yes/" /etc/ssh/sshd_config &&
             exec /usr/sbin/sshd -D -e 2>&1
-        ' >/dev/null 2>&1 || { docker network rm "$RR_NETWORK" >/dev/null 2>&1; return 0; }
+        ' >/dev/null 2>&1 || { docker network rm "$RR_NETWORK" >/dev/null 2>&1; return "$RR_TEST_DOCKER_RUN_FAILED"; }
 
     # Resolve container IP on the dedicated network (no host-port translation).
     local _ip attempts=10
@@ -74,12 +85,8 @@ setup_file() {
         sleep 1
         (( attempts-- ))
     done
-    if [[ -z "${_ip:-}" ]]; then
-        docker rm -f "$RR_CONTAINER" >/dev/null 2>&1
-        docker network rm "$RR_NETWORK" >/dev/null 2>&1
-        return 0
-    fi
-
+    [[ -z "${_ip:-}" ]] && return "$RR_TEST_UNABLE_TO_GET_SSH_SERVER_ADDRESS"
+ 
     # SSH readiness check is deferred to _rr_require_docker so that local-only
     # test runs (e.g. a single test in the VS Code test explorer) are not blocked
     # by the container boot time.
@@ -87,9 +94,14 @@ setup_file() {
     export RR_CONTAINER_STARTED=1
 }
 
+# teardown_file runs even when setup_file fails.
 teardown_file() {
-    docker rm -f "${RR_CONTAINER:-}" >/dev/null 2>&1 || true
-    docker network rm "${RR_NETWORK:-}" >/dev/null 2>&1 || true
+    # 1. Flag file of deferred _rr_require_docker
+    rm -f "$RR_TEST_FLAG_FILEPATH"
+    # 2. SSH server container
+    [[ -n "${RR_CONTAINER:-}" ]] && docker rm -f "${RR_CONTAINER:-}" >/dev/null 2>&1 || true
+    # 3. Dedicated Docker network
+    [[ -n "${RR_NETWORK:-}" ]] && docker network rm "${RR_NETWORK:-}" >/dev/null 2>&1 || true
 }
 
 # ---------------------------------------------------------------------------
@@ -100,12 +112,12 @@ teardown_file() {
 
 setup() {
     export RR_TMP RR_INIT_STATE=""
-    RR_TMP=$(mktemp -d)
+    RR_TMP=$(mktemp -d) || return "$RR_TEST_MKTEMP_DIR_FAILED"
     # shellcheck source=config/remote_run.sh
     # shellcheck disable=SC1091
-    source "$LIB"
+    source "$LIB" || return "$RR_TEST_SOURCE_LIB_FAILED"
     if [[ "$BATS_TEST_NAME" != *"-5bno-2dsetup-5d"* ]]; then
-        rr_init -S RR_INIT_STATE
+        rr_init -S RR_INIT_STATE || "$RR_TEST_RR_INIT_FAILED"
     fi
 }
 
@@ -132,8 +144,7 @@ _rr_require_docker() {
     if [[ "${RR_CONTAINER_STARTED:-0}" != 1 ]]; then
         skip "Docker SSH container not available"
     fi
-    local _flag="$BATS_FILE_TMPDIR/ssh_ready"
-    if [[ ! -f "$_flag" ]]; then
+    if [[ ! -f "$RR_TEST_FLAG_FILEPATH" ]]; then
         local attempts=20
         while [[ $attempts -gt 0 ]]; do
             ssh -o BatchMode=yes \
@@ -142,11 +153,11 @@ _rr_require_docker() {
                 -o UserKnownHostsFile=/dev/null \
                 -i "$RR_KEY_DIR/id_ed25519" \
                 root@"$RR_CONTAINER_IP" true 2>/dev/null \
-                && { touch "$_flag"; break; }
+                && { touch "$RR_TEST_FLAG_FILEPATH"; break; }
             sleep 1
             (( attempts-- ))
         done
-        if [[ ! -f "$_flag" ]]; then
+        if [[ ! -f "$RR_TEST_FLAG_FILEPATH" ]]; then
             docker logs "$RR_CONTAINER" >&2 2>/dev/null
             skip "SSH not ready in time"
         fi
@@ -201,17 +212,16 @@ _rr_fixture() {
 # bats test_tags=remote_run,local
 @test "rr_init: -S reads existing state from var and appends rr state [no-setup]" {
     _rr_init_state_accumulates() {
-        # Pre-load another library's state into the variable, then let rr_init
-        # read it via -S (read-modify-write). hs_persist_state_as_code -S already
-        # reads the current value of the variable, so no pass-by-value state is
-        # needed or allowed here.
-        local combined_state=""
-        printf -v combined_state 'if local -p other_lib_var >/dev/null 2>&1; then\n  other_lib_var=%q\nfi\n' "kept"
+        # Pre-load another library's state using hs_persist_state, then let
+        # rr_init read it via -S (read-modify-write accumulation pattern).
+        local combined_state="" other_lib_var="kept"
+        hs_persist_state -S combined_state -- other_lib_var || return 1
+        unset other_lib_var
 
         rr_init -S combined_state --ssh-opt "-i ~/.ssh/test_key" || return 1
 
-        local _rr_ssh_opts_str="" _rr_whitelist_str="" other_lib_var=""
-        eval "$combined_state"
+        local _rr_ssh_opts_str _rr_whitelist_str other_lib_var
+        hs_read_persisted_state -S combined_state -- _rr_ssh_opts_str _rr_whitelist_str other_lib_var || return 1
 
         [[ "$other_lib_var" == "kept" ]]
         [[ "$_rr_ssh_opts_str" == "-i ~/.ssh/test_key" ]]
@@ -228,20 +238,16 @@ _rr_fixture() {
 
 # bats test_tags=remote_run,local
 @test "rr_cleanup: -S strips rr vars from state (read-modify-write) [no-setup]" {
-    # Simulate multi-library state accumulation: another library persists
-    # other_lib_var first, then rr_init appends its own vars.  After
-    # rr_cleanup -S combined_state, the rr vars must be gone but other_lib_var
-    # must survive.
-    #
-    # Use a simplified state format (no inner overwrite-check block, no double
-    # quotes) so the hs_persist_state_as_code collision-check subshell can safely embed
-    # it in a double-quoted -c string.
-    local combined_state=""
-    printf -v combined_state 'if local -p other_lib_var >/dev/null 2>&1; then\n  other_lib_var=%q\nfi\n' "kept"
+    # Simulate multi-library state accumulation using hs_persist_state: another
+    # library persists other_lib_var first, then rr_init appends its own vars.
+    # After rr_cleanup -S combined_state, the rr vars must be gone but
+    # other_lib_var must survive (verified via literal name in HS2 payload).
+    local combined_state="" other_lib_var="kept"
+    hs_persist_state -S combined_state -- other_lib_var
     rr_init -S combined_state --ssh-opt "-i ~/.ssh/test_key"
     rr_cleanup -S combined_state
 
-    # rr vars must be gone; other_lib_var block must remain
+    # rr vars must be gone; other_lib_var name must remain in HS2 payload
     [[ "$combined_state" != *"_rr_ssh_opts_str"* ]]
     [[ "$combined_state" != *"_rr_whitelist_str"* ]]
     [[ "$combined_state" == *"other_lib_var"* ]]
@@ -614,15 +620,20 @@ EOF
 # 7. Local prerequisite checks (no Docker required)
 # ---------------------------------------------------------------------------
 
-# bats test_tags=remote_run,prerequisites
-@test "rr_run: missing nc causes early exit with an error message" {
+# bats test_tags=xfail,remote_run,prerequisites
+@test "remote_run.sh: fails to source with diagnostic when a dependency is unavailable [no-setup]" {
+    # Pre-source command_guard.sh to trigger its sentinel, then override cg_guard
+    # so that the guard call inside remote_run.sh fails.  guard() calls cg_guard,
+    # so mocking cg_guard is sufficient without touching the guard wrapper.
+    local cg="${LIB%/*}/command_guard.sh"
     run bash --noprofile --norc -c "
+        source '$cg'
+        cg_guard() { return 3; }
         source '$LIB'
-        unset -f nc
-        PATH=/dev/null rr_run user@host /tmp/nonexistent_rr_test_$$.sh
     "
-    [[ "$status" -ne 0 ]]
-    [[ "$output" == *"nc"* ]]
+    [[ "$status" -eq 19 ]]
+    [[ "$output" == *"remote_run.sh"* ]]
+    [[ "$output" == *"cannot load"* ]]
 }
 
 # bats test_tags=remote_run,prerequisites
@@ -634,3 +645,66 @@ EOF
     [[ "$status" -ne 0 ]]
     [[ "$output" == *"/no/such/script.sh"* || "$output" == *"not found"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# 8. Named error codes (issue #123)
+# All tests in this section are tagged xfail: the RR_ERR_* constants and the
+# named-return implementation do not exist yet.  Numeric literals are used
+# because $RR_ERR_* variables are undefined until Task 5 adds the constants.
+# After implementation the literals will be replaced with the named constants.
+# ---------------------------------------------------------------------------
+
+# bats test_tags=xfail,remote_run,error_codes
+@test "rr_init: unknown argument returns RR_ERR_UNKNOWN_ARGUMENT [no-setup]" {
+    run rr_init --no-such-option
+    [[ "$status" -eq 9 ]]
+}
+
+# bats test_tags=xfail,remote_run,error_codes
+@test "rr_run: unknown argument returns RR_ERR_UNKNOWN_ARGUMENT [no-setup]" {
+    run rr_run --no-such-option
+    [[ "$status" -eq 9 ]]
+}
+
+# bats test_tags=xfail,remote_run,error_codes
+@test "rr_cleanup: unknown argument returns RR_ERR_UNKNOWN_ARGUMENT [no-setup]" {
+    run rr_cleanup --no-such-option
+    [[ "$status" -eq 9 ]]
+}
+
+# bats test_tags=xfail,remote_run,error_codes
+@test "rr_run: missing host argument returns RR_ERR_MISSING_ARGUMENT [no-setup]" {
+    run rr_run
+    [[ "$status" -eq 8 ]]
+}
+
+# bats test_tags=xfail,remote_run,error_codes
+@test "rr_run: missing script argument returns RR_ERR_MISSING_ARGUMENT [no-setup]" {
+    run rr_run user@host
+    [[ "$status" -eq 8 ]]
+}
+
+# bats test_tags=xfail,remote_run,error_codes
+@test "rr_run: script not found returns RR_ERR_SCRIPT_NOT_FOUND [no-setup]" {
+    run rr_run user@host /no/such/script_rr_$$.sh
+    [[ "$status" -eq 14 ]]
+}
+
+# bats test_tags=xfail,remote_run,error_codes,sshd
+@test "rr_run: unreachable host returns RR_ERR_SSH_CONNECT_FAILED" {
+    _rr_require_docker
+    run rr_run \
+        --ssh-opt "-o ConnectTimeout=1" \
+        --ssh-opt "-o StrictHostKeyChecking=no" \
+        --ssh-opt "-o UserKnownHostsFile=/dev/null" \
+        root@192.0.2.1 /dev/null
+    [[ "$status" -eq 15 ]]
+}
+
+return 0
+
+# --- Change History -------------------------------------------------------
+# | PR     | Summary                                                       |
+# |--------|---------------------------------------------------------------|
+# | #TBD   | replace dead nc test; add xfail error-code tests (issues      |
+# |        | #122, #123)                                                   |
