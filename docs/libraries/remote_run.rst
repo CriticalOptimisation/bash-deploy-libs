@@ -35,8 +35,9 @@ Dependencies
 | ``base64``       | Remote   | Standard on all major Linux distributions |
 +------------------+----------+-------------------------------------------+
 
-``nc`` availability is checked at startup.  If missing, ``rr_run`` prints an
-installation hint and returns 1.
+All dependencies are checked when the library is sourced via ``guard``.  If
+any required tool is absent the library fails to load, emits a diagnostic, and
+returns ``RR_ERR_DEPENDENCY_MISSING``.
 
 Architecture Overview
 ---------------------
@@ -183,18 +184,27 @@ against different hosts.
 
 **Exit code**
 
-Returns the exit code of the remote script, or one of the following local
-error codes:
+Returns the exit code of the remote script, or one of the named error
+constants defined in the **Error Codes** section below:
 
-+------+---------------------------------------------------+
-| Code | Meaning                                           |
-+======+===================================================+
-| 1    | Missing dependency (``nc``, ``ssh``)              |
-+------+---------------------------------------------------+
-| 1    | Script file not found or not readable             |
-+------+---------------------------------------------------+
-| 1    | SSH connection or port-forward setup failed       |
-+------+---------------------------------------------------+
++------------------------------------+-------------------------------------------+
+| Constant                           | Condition                                 |
++====================================+===========================================+
+| ``RR_ERR_UNKNOWN_ARGUMENT``        | Unrecognised option in the option loop    |
++------------------------------------+-------------------------------------------+
+| ``RR_ERR_MISSING_ARGUMENT``        | ``<user@host>`` or ``<script>`` absent    |
++------------------------------------+-------------------------------------------+
+| ``RR_ERR_PATH_RESOLUTION_FAILED``  | ``realpath`` failed on an ``--allow`` arg |
++------------------------------------+-------------------------------------------+
+| ``RR_ERR_SCRIPT_NOT_FOUND``        | Script file not found or not readable     |
++------------------------------------+-------------------------------------------+
+| ``RR_ERR_SSH_CONNECT_FAILED``      | ControlMaster connection failed           |
++------------------------------------+-------------------------------------------+
+| ``RR_ERR_PORT_FORWARD_FAILED``     | ``-O forward`` port allocation failed     |
++------------------------------------+-------------------------------------------+
+
+HS error codes 1–12 may also be returned when ``-S`` state-read operations
+propagate a failure via ``|| return $?``.
 
 rr_resolve
 ~~~~~~~~~~
@@ -372,3 +382,44 @@ The local file server enforces a **whitelist** of allowed paths:
 
 The system is designed for executing *already-approved local scripts*, not for
 sandboxing hostile code.
+
+Error Codes
+-----------
+
+All public functions return 0 on success and a named constant on failure.
+The constants are ``readonly`` globals available to callers after the library
+is sourced.  Values 1–12 are reserved for ``handle_state.sh`` error codes
+that may propagate via ``|| return $?``; no ``RR_ERR_*`` constant uses those
+values unless the semantics are identical and confusion is impossible.
+
+- ``RR_ERR_MISSING_STATE_VAR=7``: ``-S`` was required but not supplied.
+  Aligned with ``HS_ERR_STATE_VAR_UNINITIALIZED``.
+- ``RR_ERR_MISSING_ARGUMENT=8``: a required positional argument is absent.
+  Aligned with ``HS_ERR_MISSING_ARGUMENT`` and ``CG_ERR_MISSING_ARGUMENT``.
+- ``RR_ERR_UNKNOWN_ARGUMENT=9``: an unrecognised token appeared in the
+  option-parsing loop.  Not limited to dash-prefixed tokens.  Aligned with
+  ``CG_ERR_SYNTAX_ERROR`` (pending rename to ``CG_ERR_UNKNOWN_ARGUMENT``).
+- ``RR_ERR_PATH_RESOLUTION_FAILED=13``: ``realpath -m`` failed on an
+  ``--allow`` path argument.
+- ``RR_ERR_SCRIPT_NOT_FOUND=14``: the ``<script.sh>`` argument is not a
+  readable file.
+- ``RR_ERR_SSH_CONNECT_FAILED=15``: the ControlMaster SSH connection to the
+  target host could not be established.
+- ``RR_ERR_PORT_FORWARD_FAILED=16``: SSH ``-O forward`` failed to allocate a
+  remote TCP port for the protocol channel.
+- ``RR_ERR_FETCH_FAILED=17``: the remote bootstrap received an ``ERR``
+  response to a ``GET`` request.  Set by ``_rr_outer_wrapper`` on the remote.
+- ``RR_ERR_RESOLVE_FAILED=18``: the remote bootstrap received a
+  non-``RESOLVE_OK`` response.  Set by ``_rr_do_resolve`` on the remote.
+- ``RR_ERR_DEPENDENCY_MISSING=19``: a required tool (``nc``, ``ssh``,
+  ``base64``, ``realpath``, ``mktemp``, ``dirname``, ``cat``, or ``sleep``)
+  could not be resolved by ``guard`` at source time.  The library failed to
+  load entirely; no ``rr_*`` functions are available.
+
+..
+
+   Change History
+
+   PR     Summary
+   -----  -----------------------------------------------------------------
+   #TBD   add Error Codes section; fix nc dependency note; fix exit-code table
