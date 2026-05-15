@@ -42,30 +42,31 @@ returns ``RR_ERR_DEPENDENCY_MISSING``.
 Architecture Overview
 ---------------------
 
-Two channels are established per ``rr_run`` call.  Each concurrent
-``rr_resolve`` call adds a third channel for the duration of its file
-transfer, then closes it at EOF:
+``rr_run`` establishes a ControlMaster connection and multiplexes two
+operations over it.  Each concurrent ``rr_resolve`` call adds a third
+channel for the duration of its file transfer, then closes it at EOF:
 
-**Protocol channel (TCP via SSH** ``-R``\ **)** — carries the program feed and
-the file-serving protocol.  Each ``rr_run`` call starts a ``nc`` listener on
-an ephemeral port.  SSH forwards that port on the remote to the local listener.
-The remote shell opens the forwarded port as a bidirectional file descriptor.
+**Bootstrap channel (SSH stdin via** ``-T``\ **)** — delivers the bootstrap
+shell fragment to the remote bash.  The fragment is piped via process
+substitution; the write end closes when the generator exits, signalling EOF
+to remote bash stdin after the last bootstrap command.  No PTY is allocated;
+``ssh -T`` is always used.
 
-**Interactive channel (PTY via SSH** ``-tt``\ **)** — standard SSH
-pseudo-terminal.  Interactive commands (``read -p``, ``read -s``, readline
-programs) use ``/dev/tty``, which resolves to the PTY slave.  When
-``rr_run`` is called without a controlling terminal (CI, cron), SSH falls
-back to ``-T`` (no PTY); interactive commands will not have a terminal in
-that case.
+**Protocol channel (TCP via SSH** ``-R``\ **)** — carries the file-serving
+protocol after the bootstrap is running.  Each ``rr_run`` call starts a
+``nc`` listener on an ephemeral Unix-domain socket.  SSH forwards an
+auto-allocated remote TCP port to that socket.  The remote shell opens the
+forwarded port as a bidirectional file descriptor and uses it for all
+subsequent ``GET`` / ``RESOLVE`` / ``OK`` / ``ERR`` messages.
 
 ::
+
+    local bootstrap pipe ──► SSH -T stdin ──► remote bash stdin (bootstrap)
 
     local nc server ◄── SSH -R tunnel ◄── remote bash fd (protocol)
       (GET / RESOLVE / OK / ERR)
 
-    local terminal ──► SSH -tt PTY ──► remote /dev/tty (interactive)
-
-The remote bootstrap, delivered through the protocol channel, performs the
+The remote bootstrap, delivered via SSH stdin, performs the
 following steps before any user code runs:
 
 1. Allocates the protocol file descriptor dynamically (``exec {fd}<>``).
@@ -320,6 +321,12 @@ cannot intercept it.  Documented as an accepted limitation.
 
 Limitations
 -----------
+
+- **No PTY is allocated.**  ``rr_run`` always uses ``ssh -T``.  Remote
+  commands that require a controlling terminal (``sudo`` password prompts,
+  ``read -s``, readline programs) will fail or behave unexpectedly.  Use
+  key-based ``sudo NOPASSWD`` or pre-configure secrets before calling
+  ``rr_run``.
 
 - **``.`` (dot) is not overridden.**  Using ``.`` instead of ``source`` will
   attempt to read a file from the *remote* filesystem and will fail if the
