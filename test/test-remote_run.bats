@@ -11,8 +11,13 @@
 # ---------------------------------------------------------------------------
 # setup_file — start the SSH test container
 # ---------------------------------------------------------------------------
-readonly RR_TEST_DOCKER_NOT_AVAILABLE=1
-readonly RR_TEST_DOCKER_INFO_FAILED=2
+# Exit code policy:
+#   - "Docker not installed / not reachable" is a legitimate environment skip:
+#     setup_file calls `skip` so bats reports every test as skipped (no red).
+#   - Every other failure (keygen, network create, container start, IP lookup)
+#     is a broken fixture: setup_file returns a non-zero code identifying the
+#     step, bats reports a setup_file failure for the whole file, and tests
+#     never appear to "pass silently".
 readonly RR_TEST_CANNOT_SSH_KEYGEN=3
 readonly RR_TEST_DOCKER_NET_CREATE_ERROR=4
 readonly RR_TEST_DOCKER_RUN_FAILED=5
@@ -20,12 +25,37 @@ readonly RR_TEST_UNABLE_TO_GET_SSH_SERVER_ADDRESS=6
 readonly RR_TEST_MKTEMP_DIR_FAILED=7
 readonly RR_TEST_SOURCE_LIB_FAILED=8
 readonly RR_TEST_RR_INIT_FAILED=9
+readonly RR_TEST_SSH_NOT_READY=10
 
 readonly RR_TEST_FLAG_FILEPATH="$BATS_FILE_TMPDIR/ssh_ready"
 
+# Cross-instance debug log.  When several bats instances run in parallel
+# (VS Code "Run Tests"), each appends timestamped events here so that the
+# interleaving — and any conflict — can be reconstructed after the fact.
+# Override with RR_TEST_DEBUG_LOG=/path or RR_TEST_DEBUG_LOG=/dev/null.
+: "${RR_TEST_DEBUG_LOG:=/tmp/rr-test-debug.log}"
+export RR_TEST_DEBUG_LOG
+
+# _rr_log <step> <msg...> — emit a timestamped, PID-tagged event.
+# Writes to stderr (captured by BATS_OUT on failure) and appends to
+# $RR_TEST_DEBUG_LOG for cross-instance correlation.
+_rr_log() {
+    local _step=$1; shift
+    local _ts
+    printf -v _ts '%(%Y-%m-%dT%H:%M:%S)T.%03d' -1 "$((10#$(date +%N) / 1000000))"
+    local _line
+    printf -v _line '[%s pid=%d %s] %s' "$_ts" "$$" "$_step" "$*"
+    printf '%s\n' "$_line" >&2
+    printf '%s\n' "$_line" >> "$RR_TEST_DEBUG_LOG" 2>/dev/null || true
+}
+
 setup_file() {
     bats_require_minimum_version 1.5.0
-    export BATS_TEST_TIMEOUT=10
+    # Tests do real Docker / SSH I/O.  Must accommodate the deferred SSH
+    # readiness wait in _rr_require_docker (up to 20 s) plus the test body.
+    export BATS_TEST_TIMEOUT=60
+
+    _rr_log setup_file/start "BATS_FILE_TMPDIR=$BATS_FILE_TMPDIR"
 
     export LIB="$BATS_TEST_DIRNAME/../config/remote_run.sh"
     if [[ ! -f "$LIB" ]]; then
@@ -33,24 +63,29 @@ setup_file() {
         return 1
     fi
 
-    export RR_DOCKER_AVAILABLE=0
+    # Docker daemon: missing/unreachable → skip the whole file (legitimate).
+    command -v docker &>/dev/null  || { _rr_log setup_file/skip "docker not installed";       skip "docker not installed"; }
+    docker info &>/dev/null 2>&1   || { _rr_log setup_file/skip "docker daemon not reachable"; skip "docker daemon not reachable"; }
 
-    # Check Docker daemon
-    command -v docker &>/dev/null || return "$RR_TEST_DOCKER_NOT_AVAILABLE"
-    docker info &>/dev/null 2>&1  || return "$RR_TEST_DOCKER_INFO_FAILED"
+    # Past this point every failure is a broken fixture, not an environment skip.
 
     # Generate an ephemeral ed25519 key pair (no passphrase)
     export RR_KEY_DIR="$BATS_FILE_TMPDIR/ssh"
     mkdir -p "$RR_KEY_DIR"
     ssh-keygen -t ed25519 -f "$RR_KEY_DIR/id_ed25519" -N "" -q || return "$RR_TEST_CANNOT_SSH_KEYGEN"
 
-    # Unique names for this test run
+    # Unique names for this test run.  When several bats instances are launched
+    # in parallel by the VS Code test explorer, each has a distinct $$ so the
+    # container and network names do not collide.
     export RR_CONTAINER="rr-test-$$"
     export RR_NETWORK="rr-test-$$"
+    _rr_log setup_file/names "container=$RR_CONTAINER network=$RR_NETWORK"
 
     # Isolated Docker network so the container gets its own IP and SSH is
     # reachable on port 22 directly — no host-port mapping needed.
-    docker network create "$RR_NETWORK" >/dev/null 2>&1 || return "$RR_TEST_DOCKER_NET_CREATE_ERROR"
+    docker network create "$RR_NETWORK" >/dev/null 2>&1 \
+        || { _rr_log setup_file/net-fail "network create $RR_NETWORK failed"; return "$RR_TEST_DOCKER_NET_CREATE_ERROR"; }
+    _rr_log setup_file/net-ok "network $RR_NETWORK created"
 
     # Start Alpine with openssh-server; inject the public key via env var so
     # that the container can write it to the correct location with correct
@@ -74,7 +109,11 @@ setup_file() {
             sed -i "s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/" /etc/ssh/sshd_config &&
             sed -i "s/^.*AllowTcpForwarding.*/AllowTcpForwarding yes/" /etc/ssh/sshd_config &&
             exec /usr/sbin/sshd -D -e 2>&1
-        ' >/dev/null 2>&1 || { docker network rm "$RR_NETWORK" >/dev/null 2>&1; return "$RR_TEST_DOCKER_RUN_FAILED"; }
+        ' >/dev/null 2>&1 \
+        || { _rr_log setup_file/run-fail "docker run $RR_CONTAINER failed"
+             docker network rm "$RR_NETWORK" >/dev/null 2>&1
+             return "$RR_TEST_DOCKER_RUN_FAILED"; }
+    _rr_log setup_file/run-ok "docker run $RR_CONTAINER started"
 
     # Resolve container IP on the dedicated network (no host-port translation).
     local _ip attempts=10
@@ -85,23 +124,30 @@ setup_file() {
         sleep 1
         (( attempts-- ))
     done
-    [[ -z "${_ip:-}" ]] && return "$RR_TEST_UNABLE_TO_GET_SSH_SERVER_ADDRESS"
- 
+    if [[ -z "${_ip:-}" ]]; then
+        _rr_log setup_file/ip-fail "could not resolve IP for $RR_CONTAINER after 10 attempts"
+        return "$RR_TEST_UNABLE_TO_GET_SSH_SERVER_ADDRESS"
+    fi
+    _rr_log setup_file/ip-ok "container=$RR_CONTAINER ip=$_ip"
+
     # SSH readiness check is deferred to _rr_require_docker so that local-only
     # test runs (e.g. a single test in the VS Code test explorer) are not blocked
     # by the container boot time.
     export RR_CONTAINER_IP="$_ip"
     export RR_CONTAINER_STARTED=1
+    _rr_log setup_file/done "container=$RR_CONTAINER ip=$_ip ready"
 }
 
 # teardown_file runs even when setup_file fails.
 teardown_file() {
+    _rr_log teardown_file/start "container=${RR_CONTAINER:-?} network=${RR_NETWORK:-?}"
     # 1. Flag file of deferred _rr_require_docker
     rm -f "$RR_TEST_FLAG_FILEPATH"
     # 2. SSH server container
     [[ -n "${RR_CONTAINER:-}" ]] && docker rm -f "${RR_CONTAINER:-}" >/dev/null 2>&1 || true
     # 3. Dedicated Docker network
     [[ -n "${RR_NETWORK:-}" ]] && docker network rm "${RR_NETWORK:-}" >/dev/null 2>&1 || true
+    _rr_log teardown_file/done ""
 }
 
 # ---------------------------------------------------------------------------
@@ -117,7 +163,7 @@ setup() {
     # shellcheck disable=SC1091
     source "$LIB" || return "$RR_TEST_SOURCE_LIB_FAILED"
     if [[ "$BATS_TEST_NAME" != *"-5bno-2dsetup-5d"* ]]; then
-        rr_init -S RR_INIT_STATE || "$RR_TEST_RR_INIT_FAILED"
+        rr_init -S RR_INIT_STATE || return "$RR_TEST_RR_INIT_FAILED"
     fi
 }
 
@@ -136,16 +182,28 @@ teardown() {
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Skip when the Docker SSH container is not available.
-# Also owns the SSH readiness wait (deferred from setup_file) so that local
-# tests are never blocked by container boot time.  A flag file prevents
-# re-waiting on subsequent Docker tests within the same run.
+# Gate on the Docker SSH container being up.  Owns the SSH readiness wait
+# (deferred from setup_file) so that local tests are never blocked by
+# container boot time when only a single test is selected in the IDE.
+# A flag file prevents re-waiting on subsequent Docker tests within the same
+# bats run.
+#
+# Important — no `skip` here.  setup_file already calls `skip` when Docker is
+# not installed or not reachable (legitimate environment skip), so by the time
+# control reaches this helper the container is supposed to be up.  If the
+# readiness wait fails the fixture is broken; bats_failure surfaces the issue
+# instead of swallowing the test as "skipped".
 _rr_require_docker() {
     if [[ "${RR_CONTAINER_STARTED:-0}" != 1 ]]; then
-        skip "Docker SSH container not available"
+        # Should not happen: setup_file completed (else we wouldn't be here)
+        # but didn't set RR_CONTAINER_STARTED — that's a bats-driver bug.
+        _rr_log require_docker/bug "RR_CONTAINER_STARTED unset after setup_file"
+        echo "_rr_require_docker: RR_CONTAINER_STARTED unset after setup_file" >&2
+        return 1
     fi
     if [[ ! -f "$RR_TEST_FLAG_FILEPATH" ]]; then
-        local attempts=20
+        _rr_log require_docker/wait-start "ip=$RR_CONTAINER_IP test=$BATS_TEST_NAME"
+        local attempts=20 _start_ts=$EPOCHREALTIME
         while [[ $attempts -gt 0 ]]; do
             ssh -o BatchMode=yes \
                 -o ConnectTimeout=2 \
@@ -157,10 +215,15 @@ _rr_require_docker() {
             sleep 1
             (( attempts-- ))
         done
+        local _elapsed
+        printf -v _elapsed '%.2f' "$(awk "BEGIN { print $EPOCHREALTIME - $_start_ts }")"
         if [[ ! -f "$RR_TEST_FLAG_FILEPATH" ]]; then
+            _rr_log require_docker/wait-fail "ip=$RR_CONTAINER_IP elapsed=${_elapsed}s attempts_left=$attempts"
+            echo "_rr_require_docker: SSH on $RR_CONTAINER_IP not ready after 20 attempts (${_elapsed}s)" >&2
             docker logs "$RR_CONTAINER" >&2 2>/dev/null
-            skip "SSH not ready in time"
+            return "$RR_TEST_SSH_NOT_READY"
         fi
+        _rr_log require_docker/wait-ok "ip=$RR_CONTAINER_IP elapsed=${_elapsed}s attempts_left=$attempts"
     fi
     RR_SSH_TARGET="root@$RR_CONTAINER_IP"
 }
@@ -191,7 +254,7 @@ _rr_fixture() {
 # ---------------------------------------------------------------------------
 
 # bats test_tags=remote_run,local
-@test "rr_resolve: returns path unchanged on the originating machine" {
+@test "rr_resolve: returns path unchanged on the originating machine [no-setup]" {
     local result
     result=$(rr_resolve /some/local/file.sh)
     [[ "$result" == "/some/local/file.sh" ]]
@@ -314,15 +377,17 @@ EOF
     script=$(_rr_fixture trace.sh <<'EOF'
 #!/usr/bin/env bash
 MY_VAR=traced
+echo "complete"
 EOF
 )
     # set -x here so $- contains 'x' at the rr_run call site inside _rr.
     # The remote bootstrap runs set -x; trace lines ('+' prefix) appear on
     # the remote stderr which SSH forwards back to our stderr.
     set -x
-    run _rr "$RR_SSH_TARGET" "$script" 2>&1
+    run --separate-stderr _rr "$RR_SSH_TARGET" "$script" 2>&1
     set +x
-    [[ "$output" == *"MY_VAR=traced"* || "$output" == *"+"* ]]
+    [[ "$output" == *"complete"* ]]
+    [[ "$stderr" == *"MY_VAR=traced"* || "$stderr" == *"+"* ]]
 }
 
 # bats test_tags=remote_run,flags
