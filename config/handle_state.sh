@@ -22,7 +22,7 @@ readonly HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12
 readonly HS_ERR_DEPENDENCY_MISSING=19
 
 # Source command guard for secure external command usage
-## shellcheck disable=SC2317  # Linter complains that the error handler is unreachable.
+# shellcheck disable=SC2317  # Linter complains that the error handler is unreachable.
 # shellcheck source=command_guard.sh
 if ! source "${BASH_SOURCE%/*}/command_guard.sh"; then
     echo "[ERROR] handle_state.sh: Unable to load required library 'command_guard.sh'" >&2
