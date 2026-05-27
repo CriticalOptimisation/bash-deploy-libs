@@ -14,8 +14,16 @@ setup_file() {
   export BATS_TEST_TIMEOUT=30
 }
 setup() {
+  # `builtin source` bypasses any test-installed override of `source` (the
+  # dependency-check tests at the end of this file replace `source` with a
+  # fault-injector).  Surface load failures with a dedicated exit code and a
+  # diagnostic line so the bats log identifies *why* setup aborted, instead
+  # of the generic "$status == 1" a bare failed source would yield.
   # shellcheck source=../config/handle_state.sh
-  source "$LIB"
+  if ! builtin source "$LIB"; then
+    echo "[BATS setup] failed to load $LIB" >&2
+    return 2
+  fi
 }
 
 # Helper: return a non-HS2 string for corrupt-state tests.
@@ -1529,6 +1537,54 @@ hs2_corrupt_state() {
   done < <(hs_persist_state --list-reserved)
   [[ "$count" -ge 1 ]]  # guards against vacuous pass when --list-reserved is broken
   [[ "$count" -le 2 ]]  # regression guard: target is exactly 2 (__hs_remaining, __hs_processed)
+}
+
+# ---------------------------------------------------------------------------
+# Library load-time dependency checks
+# ---------------------------------------------------------------------------
+
+# bats test_tags=handle_state,dependency
+@test "handle_state.sh: source fails with HS_ERR_DEPENDENCY_MISSING when command_guard.sh cannot be loaded" {
+  # Overload `source` in a fresh child shell so that handle_state.sh's internal
+  # load of command_guard.sh fails as if the file were missing or broken; every
+  # other source call (including the outer load of $LIB) delegates to the real
+  # builtin so the body of handle_state.sh actually runs and reaches the
+  # dependency check.  The script is written to a file rather than piped
+  # because bats `run` wraps its argument in a command substitution and stdin
+  # propagation through that wrapper is brittle.
+  local script="$BATS_TEST_TMPDIR/source_override.sh"
+  cat > "$script" <<'OVERRIDE'
+source() {
+    if [[ "${1##*/}" == 'command_guard.sh' ]]; then
+        echo 'mock: command_guard.sh cannot be loaded' >&2
+        return 127
+    fi
+    builtin source "$@"
+}
+OVERRIDE
+  # Append the call that triggers the partial load (interpolates outer $LIB).
+  printf 'source %q\n' "$LIB" >> "$script"
+
+  run -"$HS_ERR_DEPENDENCY_MISSING" --separate-stderr bash --noprofile --norc "$script"
+  [[ "$stderr" == *"handle_state.sh"* ]]
+  [[ "$stderr" == *"command_guard.sh"* ]]
+  [[ "$stderr" == *"Unable to load"* ]]
+}
+
+# bats test_tags=handle_state,dependency
+@test "handle_state.sh: source returns cg_guard exit code when cg_guard reports a missing command" {
+  # Pre-source command_guard.sh so its sentinel is set (handle_state.sh's
+  # `source command_guard.sh` then becomes a no-op).  Override cg_guard so the
+  # subsequent `cg_guard cksum || return $?` propagates CG_ERR_NOT_FOUND.  The
+  # current handler is intentionally a one-liner without a diagnostic; the
+  # contract this test pins is "the cg error code reaches the caller verbatim".
+  local script="$BATS_TEST_TMPDIR/cg_guard_override.sh"
+  cat > "$script" <<EOF
+builtin source $(printf %q "${LIB%/*}/command_guard.sh")
+cg_guard() { return "\$CG_ERR_NOT_FOUND"; }
+builtin source $(printf %q "$LIB")
+EOF
+  run -"$CG_ERR_NOT_FOUND" bash --noprofile --norc "$script"
 }
 
 return 0
