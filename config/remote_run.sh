@@ -9,15 +9,63 @@
 # Sentinel
 [[ -z ${__REMOTE_RUN_SH_INCLUDED:-} ]] && __REMOTE_RUN_SH_INCLUDED=1 || return 0
 
-# shellcheck source=config/command_guard.sh
-# shellcheck disable=SC1091
-source "${BASH_SOURCE%/*}/command_guard.sh"
+# --- Public error codes ------------------------------------------------------
+# Discoverable by callers after the library is sourced.  Conventions:
+#   * Codes 1–12 are reserved for handle_state.sh; HS errors propagate
+#     verbatim via `|| return $?` and must not be reused for distinct
+#     RR-specific conditions.
+#   * Codes 8 and 9 are deliberately aligned with HS/CG so that a "missing
+#     argument" or "unknown option" reaches the caller as one well-known
+#     value regardless of which library detected it.
+#   * Code 19 aligns with HS_ERR_DEPENDENCY_MISSING for the same reason and
+#     is also returned at source time when this library cannot be loaded.
+#   * Within any single rr_* entry point, every distinct error path uses a
+#     distinct code (no aliasing) so the caller can pinpoint which check
+#     fired without parsing stderr.
+readonly RR_ERR_MISSING_ARGUMENT=8          # missing required positional (host)
+readonly RR_ERR_UNKNOWN_ARGUMENT=9          # unrecognised option in any rr_*
+readonly RR_ERR_PATH_RESOLUTION_FAILED=13   # realpath -m failed on --allow path
+readonly RR_ERR_SCRIPT_NOT_FOUND=14         # <script.sh> absent or unreadable
+readonly RR_ERR_SSH_CONNECT_FAILED=15       # ssh -MNf ControlMaster failed
+readonly RR_ERR_PORT_FORWARD_FAILED=16      # ssh -O forward failed
+readonly RR_ERR_FETCH_FAILED=17             # remote got ERR for a GET request
+readonly RR_ERR_RESOLVE_FAILED=18           # remote got non-RESOLVE_OK reply
+readonly RR_ERR_DEPENDENCY_MISSING=19       # source-time guard / load failed
+readonly RR_ERR_MISSING_SCRIPT_ARGUMENT=20  # missing <script.sh> arg (distinct from host)
+
+# Source command guard for secure external command usage
+# shellcheck disable=SC2317  # Linter complains that the error handler is unreachable.
+# shellcheck source=command_guard.sh
+if ! source "${BASH_SOURCE%/*}/command_guard.sh"; then
+    echo "[ERROR] remote_run.sh: Unable to load required library 'command_guard.sh'" >&2
+    return "$RR_ERR_DEPENDENCY_MISSING"
+fi
 
 # shellcheck source=config/handle_state.sh
-# shellcheck disable=SC1091
-source "${BASH_SOURCE%/*}/handle_state.sh"
+# shellcheck disable=SC2317
+if ! source "${BASH_SOURCE%/*}/handle_state.sh"; then
+    echo "[ERROR] remote_run.sh: Unable to load required library 'handle_state.sh'" >&2
+    return "$RR_ERR_DEPENDENCY_MISSING"
+fi
 
-guard nc ssh base64 realpath mktemp dirname cat sleep
+cg_guard ssh base64 realpath mktemp dirname cat sleep || return $?
+
+# nc is intentionally NOT routed through cg_guard.  cg_guard installs a bash
+# function wrapper (`nc() { "/path" "$@"; }`); when that function is
+# backgrounded (`nc ... &`), bash forks a subshell to run it and `$!` returns
+# the subshell's PID, not nc's.  The subshell exits while nc keeps running, so
+# `kill "$_nc_pid"` never reaches nc — leaking the process and (in `$()` or
+# bats `run` contexts) pinning the captured stdout/stderr pipe open until
+# someone kills nc out of band.  Resolving the path eagerly the same way
+# cg_guard does (`command -pv` against the POSIX default PATH) and invoking
+# the binary directly keeps `$!` equal to nc's real PID and preserves the
+# PATH-tampering protection cg_guard provides for the other commands.
+# See command_guard.sh issue: signal forwarding to subshell-wrapped binaries.
+_RR_NC_BIN=$(command -pv -- nc)
+if [[ ! -x "$_RR_NC_BIN" ]]; then
+    echo "[ERROR] remote_run.sh: cannot resolve nc binary via command -pv" >&2
+    return "$RR_ERR_DEPENDENCY_MISSING"
+fi
 
 # ---------------------------------------------------------------------------
 # DESIGN OVERVIEW — per rr_run invocation
@@ -226,42 +274,6 @@ _rr_serve_loop() {
     done
 }
 
-# _rr_serve_loop_fifo <read_fifo> <write_fifo> <whitelist_str>
-# Same as _rr_serve_loop but takes FIFO paths instead of fd numbers.
-# Used by rr_run to avoid coproc fd-inheritance races.
-_rr_serve_loop_fifo() {
-    local _rfifo=$1 _wfifo=$2 _wl=$3
-    local _req _path _norm _b64
-
-    # Open both ends of both FIFOs before entering the loop so that neither
-    # open(2) blocks indefinitely waiting for the other side.
-    exec {_rr_sl_rfd}<"$_rfifo" {_rr_sl_wfd}>"$_wfifo"
-
-    while IFS= read -r _req <&"$_rr_sl_rfd"; do
-        case "$_req" in
-            GET\ *)
-                _path="${_req#GET }"
-                _norm=$(realpath -m "$_path" 2>/dev/null) || _norm=""
-                if [[ -z "$_norm" ]] || ! _rr_path_allowed "$_norm" "$_wl"; then
-                    printf 'ERR path not in whitelist: %s\n' "$_path" >&"$_rr_sl_wfd"
-                elif [[ ! -r "$_norm" ]]; then
-                    printf 'ERR file not readable: %s\n' "$_norm" >&"$_rr_sl_wfd"
-                else
-                    _b64=$(base64 -w0 < "$_norm")
-                    printf 'OK %s\n' "$_b64" >&"$_rr_sl_wfd"
-                fi
-                ;;
-            RESOLVE\ *)
-                printf 'ERR RESOLVE not yet implemented\n' >&"$_rr_sl_wfd"
-                ;;
-            "")
-                break
-                ;;
-        esac
-    done
-    exec {_rr_sl_rfd}>&- {_rr_sl_wfd}>&-
-}
-
 # ---------------------------------------------------------------------------
 # REMOTE-SIDE FUNCTIONS
 # These are defined here so declare -f can serialise them into the bootstrap.
@@ -286,7 +298,7 @@ _rr_outer_wrapper() {
 
     if [[ "$_rr_ow_status" != "OK" ]]; then
         printf '[rr] ERROR fetching %s: %s\n' "$_rr_ow_path" "$_rr_ow_b64" >&2
-        return 1
+        return "$RR_ERR_FETCH_FAILED"
     fi
 
     # Decode
@@ -325,7 +337,7 @@ _rr_do_resolve() {
 
     if [[ "$_rr_dr_status" != "RESOLVE_OK" ]]; then
         printf '[rr] ERROR resolving %s: %s\n' "$_rr_dr_file" "$_rr_dr_port" >&2
-        return 1
+        return "$RR_ERR_RESOLVE_FAILED"
     fi
 
     local _rr_dr_newfd
@@ -407,11 +419,11 @@ rr_init() {
                 shift ;;
             --allow) shift
                 local _p
-                _p=$(realpath -m "$1") || { echo "[ERROR] rr_init: cannot resolve path '$1'" >&2; return 1; }
+                _p=$(realpath -m "$1") || { echo "[ERROR] rr_init: cannot resolve path '$1'" >&2; return "$RR_ERR_PATH_RESOLUTION_FAILED"; }
                 _rr_whitelist_str+="${_rr_whitelist_str:+$'\n'}$_p"
                 shift ;;
             --) shift; break ;;
-            *) echo "[ERROR] rr_init: unknown option '$1'" >&2; return 1 ;;
+            *) echo "[ERROR] rr_init: unknown option '$1'" >&2; return "$RR_ERR_UNKNOWN_ARGUMENT" ;;
         esac
     done
 
@@ -440,11 +452,11 @@ rr_run() {
                 shift ;;
             --allow) shift
                 local _p
-                _p=$(realpath -m "$1") || { echo "[ERROR] rr_run: cannot resolve '$1'" >&2; return 1; }
+                _p=$(realpath -m "$1") || { echo "[ERROR] rr_run: cannot resolve '$1'" >&2; return "$RR_ERR_PATH_RESOLUTION_FAILED"; }
                 _rr_whitelist_str+="${_rr_whitelist_str:+$'\n'}$_p"
                 shift ;;
             --) shift; break ;;
-            -*) echo "[ERROR] rr_run: unknown option '$1'" >&2; return 1 ;;
+            -*) echo "[ERROR] rr_run: unknown option '$1'" >&2; return "$RR_ERR_UNKNOWN_ARGUMENT" ;;
             *) break ;;
         esac
     done
@@ -457,22 +469,19 @@ rr_run() {
     shift 2
     local -a _args=("$@")
 
-    # Check hard dependencies at call time (guard provides full-path wrappers,
-    # but nc may have been absent at source time on systems without it).
-    if ! command -v nc &>/dev/null; then
-        echo "[ERROR] rr_run: nc is required but not found. Install netcat (e.g. apt install netcat-openbsd)." >&2
-        return 1
-    fi
-
-    # Validate mandatory arguments
+    # Validate mandatory arguments.
+    # No runtime `command -v nc` check: cg_guard at source time installs nc as
+    # a full-path function wrapper, so the call here uses the resolved path and
+    # is not affected by later PATH changes — the very tampering vector guard
+    # is designed to defend against.
     if [[ -z "$_host" ]]; then
-        echo "[ERROR] rr_run: missing host argument" >&2; return 1
+        echo "[ERROR] rr_run: missing host argument" >&2; return "$RR_ERR_MISSING_ARGUMENT"
     fi
     if [[ -z "$_script" ]]; then
-        echo "[ERROR] rr_run: missing script argument" >&2; return 1
+        echo "[ERROR] rr_run: missing script argument" >&2; return "$RR_ERR_MISSING_SCRIPT_ARGUMENT"
     fi
     if [[ "$_script" != /dev/fd/* && ! -f "$_script" ]]; then
-        echo "[ERROR] rr_run: script not found or not readable: $_script" >&2; return 1
+        echo "[ERROR] rr_run: script not found or not readable: $_script" >&2; return "$RR_ERR_SCRIPT_NOT_FOUND"
     fi
 
     # Add script directory to whitelist (unless it's an fd path)
@@ -512,7 +521,9 @@ rr_run() {
     local _fd_in _fd_out
     exec {_fd_in}<>"$_fifo_in" {_fd_out}<>"$_fifo_out"
 
-    nc -lU "$_local_sock" <&"$_fd_in" >&"$_fd_out" &
+    # Invoke nc via the absolute path (see _RR_NC_BIN resolution above) so that
+    # `$!` matches nc's real PID and `kill "$_nc_pid"` reaches it.
+    "$_RR_NC_BIN" -lU "$_local_sock" <&"$_fd_in" >&"$_fd_out" &
     local _nc_pid=$!
 
     _rr_serve_loop "$_fd_out" "$_fd_in" "$_rr_whitelist_str" &
@@ -531,13 +542,14 @@ rr_run() {
     if ! ssh -MNf \
             -S "$_ctl_sock" \
             -o ControlPersist=yes \
-            "${_ssh_opts[@]}" "$_host" 2>/dev/null
+            -o BatchMode=yes \
+            "${_ssh_opts[@]}" "$_host" </dev/null >/dev/null 2>/dev/null
     then
         echo "[ERROR] rr_run: ControlMaster connection to $_host failed" >&2
         kill "$_nc_pid" "$_srv_pid" 2>/dev/null
         wait "$_nc_pid" "$_srv_pid" 2>/dev/null
         rm -f "$_fifo_in" "$_fifo_out" "$_local_sock" "$_ctl_sock"
-        return 1
+        return "$RR_ERR_SSH_CONNECT_FAILED"
     fi
 
     # Step 2: Allocate a remote TCP port for the protocol channel.
@@ -553,7 +565,7 @@ rr_run() {
         kill "$_nc_pid" "$_srv_pid" 2>/dev/null
         wait "$_nc_pid" "$_srv_pid" 2>/dev/null
         rm -f "$_fifo_in" "$_fifo_out" "$_local_sock" "$_ctl_sock"
-        return 1
+        return "$RR_ERR_PORT_FORWARD_FAILED"
     fi
 
     # Step 3: Run remote bash via the ControlMaster session.
@@ -615,7 +627,7 @@ rr_cleanup() {
         case "$1" in
             -S) shift; _out_var=$1; shift ;;
             --) shift; break ;;
-            *) echo "[ERROR] rr_cleanup: unknown option '$1'" >&2; return 1 ;;
+            *) echo "[ERROR] rr_cleanup: unknown option '$1'" >&2; return "$RR_ERR_UNKNOWN_ARGUMENT" ;;
         esac
     done
 

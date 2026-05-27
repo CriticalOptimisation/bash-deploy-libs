@@ -51,9 +51,11 @@ _rr_log() {
 
 setup_file() {
     bats_require_minimum_version 1.5.0
-    # Tests do real Docker / SSH I/O.  Must accommodate the deferred SSH
-    # readiness wait in _rr_require_docker (up to 20 s) plus the test body.
-    export BATS_TEST_TIMEOUT=60
+    # BATS_TEST_TIMEOUT applies to setup + test + teardown (per bats docs).
+    # The SSH-ready probe (up to ~20 s on a cold container) is therefore done
+    # in setup_file, which is NOT subject to BATS_TEST_TIMEOUT; per-test
+    # _rr_require_docker calls then just check the resulting flag file.
+    export BATS_TEST_TIMEOUT=10
 
     _rr_log setup_file/start "BATS_FILE_TMPDIR=$BATS_FILE_TMPDIR"
 
@@ -130,9 +132,34 @@ setup_file() {
     fi
     _rr_log setup_file/ip-ok "container=$RR_CONTAINER ip=$_ip"
 
-    # SSH readiness check is deferred to _rr_require_docker so that local-only
-    # test runs (e.g. a single test in the VS Code test explorer) are not blocked
-    # by the container boot time.
+    # Wait for sshd inside the container to accept BatchMode connections.
+    # Done here (not in _rr_require_docker) because setup_file is NOT subject
+    # to BATS_TEST_TIMEOUT — the cold-start probe can legitimately exceed the
+    # per-test budget.  Result is cached via $RR_TEST_FLAG_FILEPATH so that
+    # _rr_require_docker, called from setup() and selected test bodies, is a
+    # cheap flag-file check.
+    _rr_log setup_file/ssh-wait-start "ip=$_ip"
+    local _attempts=20 _start_ts=$EPOCHREALTIME
+    while [[ $_attempts -gt 0 ]]; do
+        ssh -o BatchMode=yes \
+            -o ConnectTimeout=2 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -i "$RR_KEY_DIR/id_ed25519" \
+            root@"$_ip" true 2>/dev/null \
+            && { touch "$RR_TEST_FLAG_FILEPATH"; break; }
+        sleep 1
+        (( _attempts-- ))
+    done
+    local _elapsed
+    printf -v _elapsed '%.2f' "$(awk "BEGIN { print $EPOCHREALTIME - $_start_ts }")"
+    if [[ ! -f "$RR_TEST_FLAG_FILEPATH" ]]; then
+        _rr_log setup_file/ssh-fail "ip=$_ip elapsed=${_elapsed}s"
+        docker logs "$RR_CONTAINER" >&2 2>/dev/null
+        return "$RR_TEST_SSH_NOT_READY"
+    fi
+    _rr_log setup_file/ssh-ok "ip=$_ip elapsed=${_elapsed}s attempts_left=$_attempts"
+
     export RR_CONTAINER_IP="$_ip"
     export RR_CONTAINER_STARTED=1
     _rr_log setup_file/done "container=$RR_CONTAINER ip=$_ip ready"
@@ -141,8 +168,8 @@ setup_file() {
 # teardown_file runs even when setup_file fails.
 teardown_file() {
     _rr_log teardown_file/start "container=${RR_CONTAINER:-?} network=${RR_NETWORK:-?}"
-    # 1. Flag file of deferred _rr_require_docker
-    rm -f "$RR_TEST_FLAG_FILEPATH"
+    # 1. Flag file of deferred _rr_require_docker is backed up as /tmp/bats-run-XXXXXX/ssh_ready.bak
+    [ -f "$RR_TEST_FLAG_FILEPATH" ] && mv -f "$RR_TEST_FLAG_FILEPATH" "${RR_TEST_FLAG_FILEPATH}.bak"
     # 2. SSH server container
     [[ -n "${RR_CONTAINER:-}" ]] && docker rm -f "${RR_CONTAINER:-}" >/dev/null 2>&1 || true
     # 3. Dedicated Docker network
@@ -159,11 +186,14 @@ teardown_file() {
 setup() {
     export RR_TMP RR_INIT_STATE=""
     RR_TMP=$(mktemp -d) || return "$RR_TEST_MKTEMP_DIR_FAILED"
+    # `builtin source` bypasses any test-installed override of `source` (the
+    # dependency-check tests install one to fault-inject command_guard.sh).
     # shellcheck source=config/remote_run.sh
     # shellcheck disable=SC1091
-    source "$LIB" || return "$RR_TEST_SOURCE_LIB_FAILED"
+    builtin source "$LIB" || return "$RR_TEST_SOURCE_LIB_FAILED"
     if [[ "$BATS_TEST_NAME" != *"-5bno-2dsetup-5d"* ]]; then
         rr_init -S RR_INIT_STATE || return "$RR_TEST_RR_INIT_FAILED"
+        _rr_require_docker
     fi
 }
 
@@ -182,48 +212,26 @@ teardown() {
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Gate on the Docker SSH container being up.  Owns the SSH readiness wait
-# (deferred from setup_file) so that local tests are never blocked by
-# container boot time when only a single test is selected in the IDE.
-# A flag file prevents re-waiting on subsequent Docker tests within the same
-# bats run.
+# Gate on the Docker SSH container being up.  setup_file does the actual
+# SSH-ready probe and creates $RR_TEST_FLAG_FILEPATH; this helper only checks
+# the resulting state, so it is cheap and safe to call from setup() — keeps
+# per-test BATS_TEST_TIMEOUT realistic.
 #
 # Important — no `skip` here.  setup_file already calls `skip` when Docker is
-# not installed or not reachable (legitimate environment skip), so by the time
-# control reaches this helper the container is supposed to be up.  If the
-# readiness wait fails the fixture is broken; bats_failure surfaces the issue
-# instead of swallowing the test as "skipped".
+# not installed or not reachable (legitimate environment skip).  By the time
+# control reaches this helper the container is supposed to be up; if the flag
+# file is missing the fixture is broken and the test must surface a failure
+# rather than be swallowed as "skipped".
 _rr_require_docker() {
     if [[ "${RR_CONTAINER_STARTED:-0}" != 1 ]]; then
-        # Should not happen: setup_file completed (else we wouldn't be here)
-        # but didn't set RR_CONTAINER_STARTED — that's a bats-driver bug.
         _rr_log require_docker/bug "RR_CONTAINER_STARTED unset after setup_file"
         echo "_rr_require_docker: RR_CONTAINER_STARTED unset after setup_file" >&2
         return 1
     fi
     if [[ ! -f "$RR_TEST_FLAG_FILEPATH" ]]; then
-        _rr_log require_docker/wait-start "ip=$RR_CONTAINER_IP test=$BATS_TEST_NAME"
-        local attempts=20 _start_ts=$EPOCHREALTIME
-        while [[ $attempts -gt 0 ]]; do
-            ssh -o BatchMode=yes \
-                -o ConnectTimeout=2 \
-                -o StrictHostKeyChecking=no \
-                -o UserKnownHostsFile=/dev/null \
-                -i "$RR_KEY_DIR/id_ed25519" \
-                root@"$RR_CONTAINER_IP" true 2>/dev/null \
-                && { touch "$RR_TEST_FLAG_FILEPATH"; break; }
-            sleep 1
-            (( attempts-- ))
-        done
-        local _elapsed
-        printf -v _elapsed '%.2f' "$(awk "BEGIN { print $EPOCHREALTIME - $_start_ts }")"
-        if [[ ! -f "$RR_TEST_FLAG_FILEPATH" ]]; then
-            _rr_log require_docker/wait-fail "ip=$RR_CONTAINER_IP elapsed=${_elapsed}s attempts_left=$attempts"
-            echo "_rr_require_docker: SSH on $RR_CONTAINER_IP not ready after 20 attempts (${_elapsed}s)" >&2
-            docker logs "$RR_CONTAINER" >&2 2>/dev/null
-            return "$RR_TEST_SSH_NOT_READY"
-        fi
-        _rr_log require_docker/wait-ok "ip=$RR_CONTAINER_IP elapsed=${_elapsed}s attempts_left=$attempts"
+        _rr_log require_docker/flag-missing "expected $RR_TEST_FLAG_FILEPATH after setup_file"
+        echo "_rr_require_docker: $RR_TEST_FLAG_FILEPATH missing — setup_file did not confirm SSH" >&2
+        return "$RR_TEST_SSH_NOT_READY"
     fi
     RR_SSH_TARGET="root@$RR_CONTAINER_IP"
 }
@@ -685,20 +693,29 @@ EOF
 # 7. Local prerequisite checks (no Docker required)
 # ---------------------------------------------------------------------------
 
-# bats test_tags=xfail,remote_run,prerequisites
-@test "remote_run.sh: fails to source with diagnostic when a dependency is unavailable [no-setup]" {
-    # Pre-source command_guard.sh to trigger its sentinel, then override cg_guard
-    # so that the guard call inside remote_run.sh fails.  guard() calls cg_guard,
-    # so mocking cg_guard is sufficient without touching the guard wrapper.
-    local cg="${LIB%/*}/command_guard.sh"
-    run bash --noprofile --norc -c "
-        source '$cg'
-        cg_guard() { return 3; }
-        source '$LIB'
-    "
-    [[ "$status" -eq 19 ]]
-    [[ "$output" == *"remote_run.sh"* ]]
-    [[ "$output" == *"cannot load"* ]]
+# bats test_tags=remote_run,prerequisites
+@test "remote_run.sh: source fails with RR_ERR_DEPENDENCY_MISSING when command_guard.sh cannot be loaded [no-setup]" {
+    # Overload `source` in a fresh child shell so that remote_run.sh's internal
+    # load of command_guard.sh fails as if the file were missing or broken;
+    # every other source call (including the outer load of $LIB) delegates to
+    # the real builtin so the body of remote_run.sh actually runs and reaches
+    # the dependency check.
+    local script="$BATS_TEST_TMPDIR/source_override.sh"
+    cat > "$script" <<'OVERRIDE'
+source() {
+    if [[ "${1##*/}" == 'command_guard.sh' ]]; then
+        echo 'mock: command_guard.sh cannot be loaded' >&2
+        return 127
+    fi
+    builtin source "$@"
+}
+OVERRIDE
+    printf 'source %q\n' "$LIB" >> "$script"
+
+    run -"$RR_ERR_DEPENDENCY_MISSING" --separate-stderr bash --noprofile --norc "$script"
+    [[ "$stderr" == *"remote_run.sh"* ]]
+    [[ "$stderr" == *"command_guard.sh"* ]]
+    [[ "$stderr" == *"Unable to load"* ]]
 }
 
 # bats test_tags=remote_run,prerequisites
@@ -713,57 +730,68 @@ EOF
 
 # ---------------------------------------------------------------------------
 # 8. Named error codes (issue #123)
-# All tests in this section are tagged xfail: the RR_ERR_* constants and the
-# named-return implementation do not exist yet.  Numeric literals are used
-# because $RR_ERR_* variables are undefined until Task 5 adds the constants.
-# After implementation the literals will be replaced with the named constants.
+# Each rr_* entry point with multiple error paths returns a distinct code per
+# path; tests reference the RR_ERR_* constants directly so a future
+# renumbering only touches config/remote_run.sh.
 # ---------------------------------------------------------------------------
 
-# bats test_tags=xfail,remote_run,error_codes
+# bats test_tags=remote_run,error_codes
 @test "rr_init: unknown argument returns RR_ERR_UNKNOWN_ARGUMENT [no-setup]" {
     run rr_init --no-such-option
-    [[ "$status" -eq 9 ]]
+    [[ "$status" -eq "$RR_ERR_UNKNOWN_ARGUMENT" ]]
 }
 
-# bats test_tags=xfail,remote_run,error_codes
+# bats test_tags=remote_run,error_codes
 @test "rr_run: unknown argument returns RR_ERR_UNKNOWN_ARGUMENT [no-setup]" {
     run rr_run --no-such-option
-    [[ "$status" -eq 9 ]]
+    [[ "$status" -eq "$RR_ERR_UNKNOWN_ARGUMENT" ]]
 }
 
-# bats test_tags=xfail,remote_run,error_codes
+# bats test_tags=remote_run,error_codes
 @test "rr_cleanup: unknown argument returns RR_ERR_UNKNOWN_ARGUMENT [no-setup]" {
     run rr_cleanup --no-such-option
-    [[ "$status" -eq 9 ]]
+    [[ "$status" -eq "$RR_ERR_UNKNOWN_ARGUMENT" ]]
 }
 
-# bats test_tags=xfail,remote_run,error_codes
+# bats test_tags=remote_run,error_codes
 @test "rr_run: missing host argument returns RR_ERR_MISSING_ARGUMENT [no-setup]" {
     run rr_run
-    [[ "$status" -eq 8 ]]
+    [[ "$status" -eq "$RR_ERR_MISSING_ARGUMENT" ]]
 }
 
-# bats test_tags=xfail,remote_run,error_codes
-@test "rr_run: missing script argument returns RR_ERR_MISSING_ARGUMENT [no-setup]" {
+# bats test_tags=remote_run,error_codes
+@test "rr_run: missing script argument returns RR_ERR_MISSING_SCRIPT_ARGUMENT [no-setup]" {
+    # Distinct code from missing-host: discriminability requirement.
     run rr_run user@host
-    [[ "$status" -eq 8 ]]
+    [[ "$status" -eq "$RR_ERR_MISSING_SCRIPT_ARGUMENT" ]]
 }
 
-# bats test_tags=xfail,remote_run,error_codes
+# bats test_tags=remote_run,error_codes
 @test "rr_run: script not found returns RR_ERR_SCRIPT_NOT_FOUND [no-setup]" {
     run rr_run user@host /no/such/script_rr_$$.sh
-    [[ "$status" -eq 14 ]]
+    [[ "$status" -eq "$RR_ERR_SCRIPT_NOT_FOUND" ]]
 }
 
-# bats test_tags=xfail,remote_run,error_codes,sshd
+# bats test_tags=remote_run,error_codes,sshd
 @test "rr_run: unreachable host returns RR_ERR_SSH_CONNECT_FAILED" {
     _rr_require_docker
+    # A real (empty) script fixture is required: /dev/null is a character
+    # device, not a regular file, so it would fail the SCRIPT_NOT_FOUND check
+    # before reaching the SSH attempt.
+    local script
+    script=$(_rr_fixture noop.sh <<'EOF'
+#!/usr/bin/env bash
+:
+EOF
+)
+    # 192.0.2.0/24 is reserved (TEST-NET-1) and never routed, so ssh -MNf
+    # exits non-zero quickly without any name-resolution side effects.
     run rr_run \
         --ssh-opt "-o ConnectTimeout=1" \
         --ssh-opt "-o StrictHostKeyChecking=no" \
         --ssh-opt "-o UserKnownHostsFile=/dev/null" \
-        root@192.0.2.1 /dev/null
-    [[ "$status" -eq 15 ]]
+        root@192.0.2.1 "$script"
+    [[ "$status" -eq "$RR_ERR_SSH_CONNECT_FAILED" ]]
 }
 
 return 0
