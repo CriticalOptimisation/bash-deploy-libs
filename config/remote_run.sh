@@ -41,7 +41,7 @@ if ! source "${BASH_SOURCE%/*}/command_guard.sh"; then
     return "$RR_ERR_DEPENDENCY_MISSING"
 fi
 
-# shellcheck source=config/handle_state.sh
+# shellcheck source=handle_state.sh
 # shellcheck disable=SC2317
 if ! source "${BASH_SOURCE%/*}/handle_state.sh"; then
     echo "[ERROR] remote_run.sh: Unable to load required library 'handle_state.sh'" >&2
@@ -586,7 +586,7 @@ rr_run() {
     wait "$_nc_pid" "$_srv_pid" 2>/dev/null
     rm -f "$_fifo_in" "$_fifo_out" "$_local_sock" "$_ctl_sock"
 
-    return $_rc
+    return "$_rc"
 }
 
 # rr_resolve [-S <state>] <file>
