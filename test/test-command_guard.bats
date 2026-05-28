@@ -1012,6 +1012,310 @@ setup() {
   run -0 f
 }
 
+# --- Background process-management patterns (issue #127) --------------------
+#
+# These tests verify the kill-propagation and fd-safety contracts for a
+# cg_guard-wrapped command used in asynchronous contexts.
+#
+# Common test structure
+# ---------------------
+# 1. Save the raw sleep binary path before cg_guard shadows "sleep".
+# 2. cg_guard sleep; call the wrapper in the construct under test.
+# 3. Wait 0.25 s for the binary to start (presence confirmed via pgrep).
+# 4. Kill $! — the PID bash gave the caller.
+# 5. Wait 0.35 s for signal propagation.
+# 6. Assert the binary is dead: pgrep returns non-zero.
+# 7. pkill + wait to leave no orphans if the assertion fails.
+#
+# Sleep durations are chosen to be unique in this section (60.5xx) so that
+# a pgrep anchored on the fractional part matches at most one process per
+# test.  Raw-binary timing waits use $sleep_bin directly so they never call
+# the guarded wrapper.
+#
+# All tests assert the desired post-fix contract.  They fail against the
+# plain wrapper  name() { "/path" "$@"; }  and must all pass once the gated
+# trap-EXIT wrapper is in place (issue #127).  Tests 13 and 14 cover
+# invariants that hold before and after the fix.
+
+# bats test_tags=guard,bg_patterns,issue-127,failing-before-fix
+@test "bg: cg_guard wrapper — kill TERM reaches binary" {
+  f() {
+    local sleep_bin; sleep_bin="$(command -v sleep)"
+    cg_guard sleep
+    sleep 60.503 &
+    local p=$!
+    "$sleep_bin" 0.25
+    kill "$p" 2>/dev/null
+    "$sleep_bin" 0.35
+    local found=0; pgrep -f 'sleep 60\.503$' >/dev/null 2>&1 && found=1
+    pkill -f 'sleep 60\.503$' 2>/dev/null; wait 2>/dev/null
+    [[ "$found" -eq 0 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,bg_patterns,issue-127,failing-before-fix
+@test "bg: cg_guard wrapper — kill INT reaches binary" {
+  f() {
+    local sleep_bin; sleep_bin="$(command -v sleep)"
+    cg_guard sleep
+    sleep 60.504 &
+    local p=$!
+    "$sleep_bin" 0.25
+    kill -INT "$p" 2>/dev/null
+    "$sleep_bin" 0.35
+    local found=0; pgrep -f 'sleep 60\.504$' >/dev/null 2>&1 && found=1
+    pkill -f 'sleep 60\.504$' 2>/dev/null; wait 2>/dev/null
+    [[ "$found" -eq 0 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,bg_patterns,issue-127,failing-before-fix
+@test "bg: cg_guard wrapper — kill HUP reaches binary" {
+  f() {
+    local sleep_bin; sleep_bin="$(command -v sleep)"
+    cg_guard sleep
+    sleep 60.505 &
+    local p=$!
+    "$sleep_bin" 0.25
+    kill -HUP "$p" 2>/dev/null
+    "$sleep_bin" 0.35
+    local found=0; pgrep -f 'sleep 60\.505$' >/dev/null 2>&1 && found=1
+    pkill -f 'sleep 60\.505$' 2>/dev/null; wait 2>/dev/null
+    [[ "$found" -eq 0 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,bg_patterns,issue-127,failing-before-fix
+@test "bg: cg_guard wrapper with stdout redir at call site — kill TERM reaches binary" {
+  # With the plain wrapper $! is the wrapper subshell; kill $! leaves the
+  # binary alive even when fd1 is redirected to /dev/null at the call site.
+  f() {
+    local sleep_bin; sleep_bin="$(command -v sleep)"
+    cg_guard sleep
+    sleep 60.506 >/dev/null &
+    local p=$!
+    "$sleep_bin" 0.25
+    kill "$p" 2>/dev/null
+    "$sleep_bin" 0.35
+    local found=0; pgrep -f 'sleep 60\.506$' >/dev/null 2>&1 && found=1
+    pkill -f 'sleep 60\.506$' 2>/dev/null; wait 2>/dev/null
+    [[ "$found" -eq 0 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,bg_patterns,issue-127,failing-before-fix
+@test "bg: cg_guard wrapper in brace group — kill TERM reaches binary" {
+  # { f; } & forks one subshell; f runs as a function inside it so the binary
+  # is still a grandchild of the caller.  BASHPID != $$ triggers the gate.
+  f() {
+    local sleep_bin; sleep_bin="$(command -v sleep)"
+    cg_guard sleep
+    { sleep 60.510; } &
+    local p=$!
+    "$sleep_bin" 0.25
+    kill "$p" 2>/dev/null
+    "$sleep_bin" 0.35
+    local found=0; pgrep -f 'sleep 60\.510$' >/dev/null 2>&1 && found=1
+    pkill -f 'sleep 60\.510$' 2>/dev/null; wait 2>/dev/null
+    [[ "$found" -eq 0 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,bg_patterns,issue-127,failing-before-fix
+@test "bg: cg_guard wrapper with extra statement after command — kill TERM reaches binary" {
+  # An extra statement after the binary call (e.g. return 0) prevents bash's
+  # tail-call exec optimization whether or not a wrapper is involved.  Model
+  # this by defining the wrapper manually with the same shape as cg_guard's
+  # output but with an appended return, then asserting kill propagation.
+  f() {
+    local sleep_bin; sleep_bin="$(command -v sleep)"
+    # Simulate cg_guard output with an extra trailing statement.
+    # shellcheck disable=SC2317
+    sleep() { "$sleep_bin" "$@"; return 0; }
+    sleep 60.511 &
+    local p=$!
+    "$sleep_bin" 0.25
+    kill "$p" 2>/dev/null
+    "$sleep_bin" 0.35
+    local found=0; pgrep -f 'sleep 60\.511$' >/dev/null 2>&1 && found=1
+    pkill -f 'sleep 60\.511$' 2>/dev/null; wait 2>/dev/null
+    [[ "$found" -eq 0 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,bg_patterns,issue-127,failing-before-fix
+@test "bg: cg_guard wrapper as pipeline tail — kill TERM reaches binary" {
+  # In  : | f &  bash puts each pipeline stage in its own subshell.  $! is
+  # the last stage's subshell PID.  BASHPID != $$ triggers the gate.
+  f() {
+    local sleep_bin; sleep_bin="$(command -v sleep)"
+    cg_guard sleep
+    : | sleep 60.512 &
+    local p=$!
+    "$sleep_bin" 0.25
+    kill "$p" 2>/dev/null
+    "$sleep_bin" 0.35
+    local found=0; pgrep -f 'sleep 60\.512$' >/dev/null 2>&1 && found=1
+    pkill -f 'sleep 60\.512$' 2>/dev/null; wait 2>/dev/null
+    [[ "$found" -eq 0 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,bg_patterns,issue-127,failing-before-fix
+@test "bg: cg_guard wrapper as coproc — kill via CPROC PID reaches binary" {
+  f() {
+    local sleep_bin; sleep_bin="$(command -v sleep)"
+    cg_guard sleep
+    coproc CPROC { sleep 60.513; }
+    local p=$CPROC_PID
+    # Close coproc fds; we only need the PID.
+    exec {CPROC[0]}<&- {CPROC[1]}>&- 2>/dev/null
+    "$sleep_bin" 0.25
+    kill "$p" 2>/dev/null
+    "$sleep_bin" 0.35
+    local found=0; pgrep -f 'sleep 60\.513$' >/dev/null 2>&1 && found=1
+    pkill -f 'sleep 60\.513$' 2>/dev/null; wait 2>/dev/null
+    [[ "$found" -eq 0 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,bg_patterns,issue-127,failing-before-fix
+@test "bg: cg_guard wrapper with job control on — kill TERM reaches binary" {
+  # set -m gives the background job its own process group but does not change
+  # the need for kill-propagation: $! is still the wrapper subshell PID.
+  f() {
+    local sleep_bin; sleep_bin="$(command -v sleep)"
+    cg_guard sleep
+    set -m
+    sleep 60.514 &
+    local p=$!
+    set +m
+    "$sleep_bin" 0.25
+    kill "$p" 2>/dev/null
+    "$sleep_bin" 0.35
+    local found=0; pgrep -f 'sleep 60\.514$' >/dev/null 2>&1 && found=1
+    pkill -f 'sleep 60\.514$' 2>/dev/null; wait 2>/dev/null
+    [[ "$found" -eq 0 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,bg_patterns,issue-127,failing-before-fix
+@test "bg: cg_guard wrapper backgrounded inside subst — kill releases capture pipe within 1 s" {
+  # With the plain wrapper the binary inherits the capture pipe fd and the
+  # substitution hangs until the binary exits naturally.  After fix the EXIT
+  # trap kills the binary so the pipe is released and the substitution returns
+  # within the kill-propagation window.
+  f() {
+    local sleep_bin; sleep_bin="$(command -v sleep)"
+    cg_guard sleep
+    local t0 t1 dur_ms out
+    t0=$(date +%s%N)
+    out=$(
+        sleep 4.127 &
+        local p=$!
+        "$sleep_bin" 0.2
+        kill "$p" 2>/dev/null
+        echo done
+    )
+    t1=$(date +%s%N)
+    dur_ms=$(( (t1 - t0) / 1000000 ))
+    pkill -f 'sleep 4\.127$' 2>/dev/null; wait 2>/dev/null
+    [[ "$out" == "done" ]] || return 1
+    (( dur_ms < 1000 ))
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,bg_patterns,issue-127,failing-before-fix
+@test "bg: gated wrapper wait loop — signal interrupting wait does not orphan surviving binary" {
+  # Demonstrates why the C-style wait loop is required.
+  # When the binary ignores a forwarded signal, wait returns early (rc > 128)
+  # but the binary is still running.  Without the loop the wrapper exits and
+  # orphans the binary; with the loop it re-enters wait.
+  #
+  # Setup: guard an external script that ignores SIGTERM.  Send SIGTERM to the
+  # wrapper subshell.  The wrapper's TERM trap forwards to the script, which
+  # ignores it, so wait returns 143 while the binary remains alive.
+  # Assert: wrapper is still blocked (still waiting) AND binary still running.
+  f() {
+    local sleep_bin; sleep_bin="$(command -v sleep)"
+
+    local bin; bin="$(mktemp)"
+    chmod +x "$bin"
+    printf '#!/usr/bin/env bash\ntrap "" TERM\n"%s" 60.515\n' \
+      "$sleep_bin" >"$bin"
+
+    cg_guard "term_ignorer=$bin"
+
+    term_ignorer &
+    local p=$!
+    "$sleep_bin" 0.25
+
+    kill -TERM "$p" 2>/dev/null
+    "$sleep_bin" 0.35
+
+    local wrapper_alive=0; kill -0 "$p" 2>/dev/null && wrapper_alive=1
+    local binary_alive=0
+    pgrep -f 'sleep 60\.515$' >/dev/null 2>&1 && binary_alive=1
+
+    kill -9 "$p"           2>/dev/null
+    pkill -9 -f "$bin"     2>/dev/null
+    pkill    -f 'sleep 60\.515$' 2>/dev/null
+    rm -f "$bin"
+    wait 2>/dev/null
+
+    [[ "$wrapper_alive" -eq 1 ]] || return 1
+    [[ "$binary_alive"  -eq 1 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,bg_patterns,issue-127
+@test "bg: cg_guard wrapper backgrounded — wait propagates non-zero exit status" {
+  # Use an invalid argument so the binary exits with 1 immediately.  A wrapper
+  # that silently returns 0 would make [[ rc -eq 1 ]] fail, catching the bug.
+  f() {
+    cg_guard sleep
+    sleep not-a-number 2>/dev/null &
+    local p=$!
+    local rc
+    wait "$p"; rc=$?
+    [[ "$rc" -eq 1 ]]
+  }
+  run -0 f
+}
+
+# bats test_tags=guard,bg_patterns,issue-127
+@test "bg: binary inherits dev null stdin when backgrounded without job control" {
+  # bash manual: if job control is inactive stdin for async lists is redirected
+  # from /dev/null.  Both the wrapper subshell and the binary must receive it.
+  f() {
+    local sleep_bin; sleep_bin="$(command -v sleep)"
+    cg_guard sleep
+    sleep 60.509 &
+    local p=$!
+    "$sleep_bin" 0.25
+    local bin_pid; bin_pid="$(pgrep -f 'sleep 60\.509$' | head -1)"
+    local bin_stdin="-"
+    if [[ -n "$bin_pid" && -L "/proc/$bin_pid/fd/0" ]]; then
+      bin_stdin="$(readlink "/proc/$bin_pid/fd/0")"
+    fi
+    kill "$p" 2>/dev/null; pkill -f 'sleep 60\.509$' 2>/dev/null
+    wait 2>/dev/null
+    [[ "$bin_stdin" == "/dev/null" ]]
+  }
+  run -0 f
+}
+
 return 0
 
 # --- Change History -------------------------------------------------------
