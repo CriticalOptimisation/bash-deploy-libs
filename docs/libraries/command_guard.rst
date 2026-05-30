@@ -648,10 +648,6 @@ pipe is released and the substitution returns:
 Without the trap the orphaned binary would hold fd 1 (the capture pipe) open
 until the sleep duration expired, blocking the substitution indefinitely.
 
-Redirecting the binary's stdout at the call site (``f >/dev/null &``) prevents
-the binary from inheriting the capture pipe fd, but ``kill $!`` still fails to
-reach the binary without the trap. Both problems are solved together.
-
 Constructs supported
 ~~~~~~~~~~~~~~~~~~~~
 
