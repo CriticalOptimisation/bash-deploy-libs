@@ -1127,24 +1127,28 @@ setup() {
 }
 
 # bats test_tags=guard,bg_patterns,issue-127,failing-before-fix
-@test "bg: cg_guard wrapper with extra statement after command — kill TERM reaches binary" {
-  # An extra statement after the binary call (e.g. return 0) prevents bash's
-  # tail-call exec optimization whether or not a wrapper is involved.  Model
-  # this by defining the wrapper manually with the same shape as cg_guard's
-  # output but with an appended return, then asserting kill propagation.
+@test "bg: multiple concurrent cg_guard wrappers backgrounded — kill TERM reaches each binary" {
+  # Two guarded commands backgrounded independently; kill $p1 and kill $p2
+  # must each reach their respective binary.  Verifies that concurrent wrapper
+  # subshells do not interfere with each other's trap state.
   f() {
     local sleep_bin; sleep_bin="$(command -v sleep)"
-    # Simulate cg_guard output with an extra trailing statement.
-    # shellcheck disable=SC2317
-    sleep() { "$sleep_bin" "$@"; return 0; }
+    cg_guard sleep
     sleep 60.511 &
-    local p=$!
+    local p1=$!
+    sleep 60.516 &
+    local p2=$!
     "$sleep_bin" 0.25
-    kill "$p" 2>/dev/null
+    kill "$p1" 2>/dev/null
+    kill "$p2" 2>/dev/null
     "$sleep_bin" 0.35
-    local found=0; pgrep -f 'sleep 60\.511$' >/dev/null 2>&1 && found=1
-    pkill -f 'sleep 60\.511$' 2>/dev/null; wait 2>/dev/null
-    [[ "$found" -eq 0 ]]
+    local found1=0; pgrep -f 'sleep 60\.511$' >/dev/null 2>&1 && found1=1
+    local found2=0; pgrep -f 'sleep 60\.516$' >/dev/null 2>&1 && found2=1
+    pkill -f 'sleep 60\.511$' 2>/dev/null
+    pkill -f 'sleep 60\.516$' 2>/dev/null
+    wait 2>/dev/null
+    [[ "$found1" -eq 0 ]] || return 1
+    [[ "$found2" -eq 0 ]]
   }
   run -0 f
 }
