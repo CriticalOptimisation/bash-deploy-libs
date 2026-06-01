@@ -496,8 +496,15 @@ rr_run() {
     # FIFOs avoid coproc fd-inheritance races.  Both are opened O_RDWR so that
     # neither open(2) blocks waiting for the other side.
     local _fifo_in _fifo_out
-    _fifo_in=$(mktemp -u) && mkfifo "$_fifo_in"
-    _fifo_out=$(mktemp -u) && mkfifo "$_fifo_out"
+    _fifo_in=$(mktemp -u) && mkfifo "$_fifo_in" || {
+        echo "[ERROR] rr_run: cannot create protocol FIFO" >&2
+        return 1
+    }
+    _fifo_out=$(mktemp -u) && mkfifo "$_fifo_out" || {
+        rm -f "$_fifo_in"
+        echo "[ERROR] rr_run: cannot create protocol FIFO" >&2
+        return 1
+    }
 
     local _fd_in _fd_out
     exec {_fd_in}<>"$_fifo_in" {_fd_out}<>"$_fifo_out"

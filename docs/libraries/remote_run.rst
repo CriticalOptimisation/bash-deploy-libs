@@ -25,19 +25,23 @@ Dependencies
 +------------------+----------+-------------------------------------------+
 | Dependency       | Side     | Notes                                     |
 +==================+==========+===========================================+
-| Bash ≥ 4.3       | Both     | Auto-assigned FDs; ``unset 'arr[-1]'``    |
+| Bash ≥ 4.3       | Both     | Nameref (``local -n``) in                 |
+|                  |          | ``handle_state.sh``; auto-assigned FDs    |
+|                  |          | (``exec {var}<>file``) in remote_run.sh   |
 +------------------+----------+-------------------------------------------+
-| OpenSSH client   | Local    | ``ssh``, ``-tt``/``-T``, ``-R`` required  |
+| OpenSSH client   | Local    | ``ssh``, ``-T``, ``-R`` required          |
 +------------------+----------+-------------------------------------------+
-| ``nc``           | Local    | OpenBSD nc (``-l PORT``); other variants  |
-|                  |          | using ``-l -p PORT`` are not supported    |
+| OpenSSH server   | Remote   | ``sshd`` must be running and reachable    |
++------------------+----------+-------------------------------------------+
+| ``nc``           | Local    | OpenBSD nc (``-lU socket``); other        |
+|                  |          | variants are not supported                |
 +------------------+----------+-------------------------------------------+
 | ``base64``       | Remote   | Standard on all major Linux distributions |
 +------------------+----------+-------------------------------------------+
 
-All dependencies are checked when the library is sourced via ``guard``.  If
-any required tool is absent the library fails to load, emits a diagnostic, and
-returns ``RR_ERR_DEPENDENCY_MISSING``.
+All local-side dependencies are checked when the library is sourced via
+``cg_guard``.  If any required tool is absent the library fails to load,
+emits a diagnostic, and returns ``RR_ERR_DEPENDENCY_MISSING``.
 
 Architecture Overview
 ---------------------
@@ -55,9 +59,11 @@ to remote bash stdin after the last bootstrap command.  No PTY is allocated;
 **Protocol channel (TCP via SSH** ``-R``\ **)** — carries the file-serving
 protocol after the bootstrap is running.  Each ``rr_run`` call starts a
 ``nc`` listener on an ephemeral Unix-domain socket.  SSH forwards an
-auto-allocated remote TCP port to that socket.  The remote shell opens the
-forwarded port as a bidirectional file descriptor and uses it for all
-subsequent ``GET`` / ``RESOLVE`` / ``OK`` / ``ERR`` messages.
+auto-allocated remote TCP port to that socket.  The remote bash opens that
+port directly using Bash's built-in ``/dev/tcp/localhost/<port>`` path with
+``exec {fd}<>/dev/tcp/…``; no SSH client and no additional tool is required
+on the remote side.  All subsequent ``GET`` / ``RESOLVE`` / ``OK`` / ``ERR``
+messages travel over that single bidirectional file descriptor.
 
 ::
 
