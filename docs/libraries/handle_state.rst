@@ -52,6 +52,14 @@ Quick Start
 Public API
 ----------
 
+The library depends on the ``command_guard.sh`` library and fails at load time if
+it cannot load its dependency.
+
+Errors:
+
+- ``HS_ERR_DEPENDENCY_MISSING=19``: The library failed to load due to a missing dependency.
+
+
 hs_persist_state
 ~~~~~~~~~~~~~~~~
 
