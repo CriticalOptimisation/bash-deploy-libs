@@ -609,13 +609,24 @@ When the caller backgrounds a guarded command and later sends a signal to
    nc_pid=$!
    # … later …
    kill         "$nc_pid"   # SIGTERM forwarded to /usr/bin/nc
-   kill -INT    "$nc_pid"   # SIGINT  forwarded to /usr/bin/nc
+   kill -INT    "$nc_pid"   # binary terminated via SIGTERM (see note below)
    kill -HUP    "$nc_pid"   # SIGHUP  forwarded to /usr/bin/nc
    wait         "$nc_pid"   # exit status reflects binary's termination
 
 The wrapper installs forwarding traps for SIGTERM, SIGINT, and SIGHUP, and an
 EXIT trap as a backstop. The EXIT trap fires even on unhandled signals or
 unexpected wrapper exits, ensuring the binary is never left as an orphan.
+
+.. note::
+
+   **SIGINT and background processes.** POSIX specifies that asynchronous
+   commands in non-interactive shells have SIGINT set to SIG_IGN. Because the
+   binary is started with ``&`` inside a subshell that is itself a background
+   job, it inherits SIG_IGN for SIGINT. Forwarding SIGINT to it would be
+   silently discarded. The INT trap therefore sends SIGTERM to the binary,
+   which is not subject to SIG_IGN. The net effect — the binary is terminated
+   when the caller sends ``kill -INT $!`` — is the same; only the signal
+   received by the binary differs.
 
 SIGKILL cannot be trapped. Sending ``kill -9 $!`` terminates the wrapper
 subshell without propagating to the binary; callers that need unconditional
@@ -898,3 +909,4 @@ Source Listing
    #113   name=path guard token syntax [closes #111]
    #114   PATH enforcement API -- cg_safe_run, cg_unsafe [closes #112]
    #118   name filter and snap search API [closes #116, #117]
+   #127   gated trap-EXIT wrapper for async kill-propagation [closes #127]

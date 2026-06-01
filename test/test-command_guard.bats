@@ -1333,3 +1333,4 @@ return 0
 # | #113  | name=path guard token syntax [closes #111]                     |
 # | #114  | PATH enforcement API — cg_safe_run, cg_unsafe [closes #112]    |
 # | #118  | name filter and snap search API [closes #116, #117]            |
+# | #127  | gated trap-EXIT wrapper for async kill-propagation [closes #127] |

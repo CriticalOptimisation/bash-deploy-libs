@@ -436,9 +436,30 @@ cg_guard() {
     done
 
     # Second pass: create wrapper functions
-    local i
+    local i _cg_fname _cg_path_q
     for ((i=0; i<${#valid_fnames[@]}; i++)); do
-        eval "${valid_fnames[i]}() { \"${valid_paths[i]}\" \"\$@\"; }"
+        _cg_fname="${valid_fnames[i]}"
+        _cg_path_q="$(printf '%q' "${valid_paths[i]}")"
+        eval "$(cat <<CGEOF
+${_cg_fname}() {
+  if [[ \$BASHPID != \$\$ ]]; then
+    ${_cg_path_q} "\$@" &
+    local _cg_p=\$! _cg_rc=0
+    trap 'kill "\$_cg_p" 2>/dev/null' EXIT
+    trap 'kill      "\$_cg_p" 2>/dev/null' INT
+    trap 'kill -TERM "\$_cg_p" 2>/dev/null' TERM
+    trap 'kill -HUP  "\$_cg_p" 2>/dev/null' HUP
+    wait "\$_cg_p" || _cg_rc=\$?
+    while (( _cg_rc > 128 )) && kill -0 "\$_cg_p" 2>/dev/null; do
+      wait "\$_cg_p" || _cg_rc=\$?
+    done
+    return "\$_cg_rc"
+  else
+    ${_cg_path_q} "\$@"
+  fi
+}
+CGEOF
+)"
     done
 }
 
@@ -460,3 +481,4 @@ return 0
 # | #113  | name=path guard token syntax [closes #111]                     |
 # | #114  | PATH enforcement API — cg_safe_run, cg_unsafe [closes #112]    |
 # | #118  | name filter and snap search API [closes #116, #117]            |
+# | #127  | gated trap-EXIT wrapper for async kill-propagation [closes #127] |
