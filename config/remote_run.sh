@@ -48,24 +48,7 @@ if ! source "${BASH_SOURCE%/*}/handle_state.sh"; then
     return "$RR_ERR_DEPENDENCY_MISSING"
 fi
 
-cg_guard ssh base64 realpath mktemp dirname cat sleep || return $?
-
-# nc is intentionally NOT routed through cg_guard.  cg_guard installs a bash
-# function wrapper (`nc() { "/path" "$@"; }`); when that function is
-# backgrounded (`nc ... &`), bash forks a subshell to run it and `$!` returns
-# the subshell's PID, not nc's.  The subshell exits while nc keeps running, so
-# `kill "$_nc_pid"` never reaches nc — leaking the process and (in `$()` or
-# bats `run` contexts) pinning the captured stdout/stderr pipe open until
-# someone kills nc out of band.  Resolving the path eagerly the same way
-# cg_guard does (`command -pv` against the POSIX default PATH) and invoking
-# the binary directly keeps `$!` equal to nc's real PID and preserves the
-# PATH-tampering protection cg_guard provides for the other commands.
-# See command_guard.sh issue: signal forwarding to subshell-wrapped binaries.
-_RR_NC_BIN=$(command -pv -- nc)
-if [[ ! -x "$_RR_NC_BIN" ]]; then
-    echo "[ERROR] remote_run.sh: cannot resolve nc binary via command -pv" >&2
-    return "$RR_ERR_DEPENDENCY_MISSING"
-fi
+cg_guard nc ssh base64 realpath mktemp dirname cat sleep || return $?
 
 # ---------------------------------------------------------------------------
 # DESIGN OVERVIEW — per rr_run invocation
@@ -470,10 +453,8 @@ rr_run() {
     local -a _args=("$@")
 
     # Validate mandatory arguments.
-    # No runtime `command -v nc` check: cg_guard at source time installs nc as
-    # a full-path function wrapper, so the call here uses the resolved path and
-    # is not affected by later PATH changes — the very tampering vector guard
-    # is designed to defend against.
+    # cg_guard at source time installs nc as a gated wrapper; backgrounding it
+    # with & correctly propagates kill signals to the binary (issue #127).
     if [[ -z "$_host" ]]; then
         echo "[ERROR] rr_run: missing host argument" >&2; return "$RR_ERR_MISSING_ARGUMENT"
     fi
@@ -521,9 +502,7 @@ rr_run() {
     local _fd_in _fd_out
     exec {_fd_in}<>"$_fifo_in" {_fd_out}<>"$_fifo_out"
 
-    # Invoke nc via the absolute path (see _RR_NC_BIN resolution above) so that
-    # `$!` matches nc's real PID and `kill "$_nc_pid"` reaches it.
-    "$_RR_NC_BIN" -lU "$_local_sock" <&"$_fd_in" >&"$_fd_out" &
+    nc -lU "$_local_sock" <&"$_fd_in" >&"$_fd_out" &
     local _nc_pid=$!
 
     _rr_serve_loop "$_fd_out" "$_fd_in" "$_rr_whitelist_str" &
