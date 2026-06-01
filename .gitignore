@@ -22,3 +22,12 @@
 # Ignore patch files
 *.patch
 *.diff
+
+# Non-library files kept locally as working context
+/docker-compose-bridge.yml.template
+/install_plex_remote.sh
+/.codex
+/memory/
+
+# Claude Code local settings
+/.claude/settings.json
