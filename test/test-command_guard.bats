@@ -1271,9 +1271,9 @@ setup() {
     local binary_alive=0
     pgrep -f 'sleep 60\.515$' >/dev/null 2>&1 && binary_alive=1
 
-    kill -9 "$p"           2>/dev/null
-    pkill -9 -f "$bin"     2>/dev/null
-    pkill    -f 'sleep 60\.515$' 2>/dev/null
+    kill -9 "$p"              2>/dev/null
+    pkill -9 -f "$bin"        2>/dev/null
+    pkill -9 -f 'sleep 60\.515$' 2>/dev/null
     rm -f "$bin"
     wait 2>/dev/null
 
