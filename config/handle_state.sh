@@ -6,14 +6,6 @@
 # Sentinel
 [[ -z ${__HANDLE_STATE_SH_INCLUDED:-} ]] && __HANDLE_STATE_SH_INCLUDED=1 || return 0
 
-# Source command guard for secure external command usage
-# shellcheck source=command_guard.sh
-source "${BASH_SOURCE%/*}/command_guard.sh"
-
-# Library usage — see docs/libraries/handle_state.rst for the full API.
-
-guard cksum
-
 # --- Public error codes --------------------------------------------------------
 readonly HS_ERR_RESERVED_VAR_NAME=1
 readonly HS_ERR_VAR_NAME_COLLISION=2
@@ -27,7 +19,19 @@ readonly HS_ERR_INVALID_ARGUMENT_TYPE=9
 readonly HS_ERR_UNKNOWN_VAR_NAME=10
 readonly HS_ERR_VAR_ALREADY_SET=11
 readonly HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12
+readonly HS_ERR_DEPENDENCY_MISSING=19
 
+# Source command guard for secure external command usage
+## shellcheck disable=SC2317  # Linter complains that the error handler is unreachable.
+# shellcheck source=command_guard.sh
+if ! source "${BASH_SOURCE%/*}/command_guard.sh"; then
+    echo "[ERROR] handle_state.sh: Unable to load required library 'command_guard.sh'" >&2
+    return "$HS_ERR_DEPENDENCY_MISSING"
+fi
+
+# Library usage — see docs/libraries/handle_state.rst for the full API.
+
+cg_guard cksum || return $?
 
 # --- hs_persist_state ----------------------------------------------------------
 # Function:
