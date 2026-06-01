@@ -587,6 +587,20 @@ The foreground path is a transparent pass-through identical to the unguarded
 binary call. The behaviour below applies only when the wrapper runs in a
 subshell context.
 
+**Why backgrounded commands inside** ``$(…)`` **can block the substitution.**
+``$(…)`` works by connecting bash's reader to one end of a kernel pipe and the
+substitution body's stdout to the other end. Bash reads until the pipe delivers
+EOF. EOF arrives only when *every* process that holds the write end has closed
+it. A command started with ``&`` inside ``$(…)`` forks a child that inherits
+fd 1 — the write end of the capture pipe. The main body finishes and bash
+closes its copy of the write end, but the background child still holds the pipe
+open. Bash cannot see EOF and cannot return from ``$(…)`` until that child also
+closes fd 1 — whether by exiting normally, being killed, or explicitly
+redirecting its stdout. With a guarded command this is aggravated because the
+child that holds the pipe is the binary itself, whose PID is not directly
+reachable through ``$!`` without the mechanism described in *Capture pipe
+safety* below.
+
 How the wrapper detects a subshell context
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -656,8 +670,9 @@ pipe is released and the substitution returns:
    )
    # $result == "done"; substitution returns promptly
 
-Without the trap the orphaned binary would hold fd 1 (the capture pipe) open
-until the sleep duration expired, blocking the substitution indefinitely.
+Without the trap the orphaned binary holds fd 1 (the capture pipe) open until
+it exits on its own, blocking the substitution for the full remaining duration
+of the binary's execution.
 
 Constructs supported
 ~~~~~~~~~~~~~~~~~~~~
