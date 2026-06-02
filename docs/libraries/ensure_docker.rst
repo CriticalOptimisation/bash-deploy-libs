@@ -182,12 +182,49 @@ Errors:
 
 - ``ED_ERR_INSUFFICIENT_PRIVILEGE=7``: not root.
 
-Public API — Stage 2
---------------------
+Stage 2 State Variable Schema
+-----------------------------
 
 .. note::
    Stage 2 functions are not yet implemented.  Their API is documented here
    for planning purposes; they will be added in a subsequent PR.
+
+Stage 2 functions persist state via ``handle_state.sh`` using three
+associative arrays and one scalar.
+
+``_ed_chain`` *(associative array)*
+  Forward-linked list.  Each key is a git-commit hash (or the sentinel
+  string ``"none"`` representing the pre-Docker state); each value is the
+  git-commit hash of the *next* Docker installation.
+
+  Example after two ``ed_ensure_docker`` calls:
+
+  .. code-block:: text
+
+     _ed_chain["none"]    = "abc1234"   # Docker was absent; installed abc1234
+     _ed_chain["abc1234"] = "def5678"   # later updated to def5678
+     _ed_chain["def5678"] = ""          # terminal node
+
+``_ed_docker_ver`` *(associative array)*
+  Maps each git-commit hash to the Docker engine semantic version string
+  that was installed at that commit, e.g. ``_ed_docker_ver["abc1234"] = "24.0.7"``.
+
+``_ed_compose_ver`` *(associative array)*
+  Maps each git-commit hash to the Compose plugin semantic version string,
+  e.g. ``_ed_compose_ver["abc1234"] = "2.20.0"``.
+
+``_ed_head`` *(scalar)*
+  The git-commit hash at the tip of ``_ed_chain`` (the currently installed
+  Docker version), or ``"none"`` when Docker is not installed.
+
+The action implied by any commit is determined from the chain structure
+alone: a predecessor of ``"none"`` means the commit was the first
+installation (reverting → uninstall); any other predecessor means it was
+an update (reverting → downgrade to that predecessor's version via
+``_ed_docker_ver``).
+
+Public API — Stage 2
+--------------------
 
 ed_ensure_docker
 ~~~~~~~~~~~~~~~~
@@ -195,8 +232,11 @@ ed_ensure_docker
 ``ed_ensure_docker -S <state_var> [[--update] [version_constraint]]``
 
 Idempotent wrapper around ``ed_has_docker`` and ``ed_install_docker``.
-The ``-S`` state variable records whether Docker was installed or updated so
-that ``ed_cleanup`` can reverse the action later.
+On success, appends the newly installed commit to ``_ed_chain``, records
+its version data in ``_ed_docker_ver`` and ``_ed_compose_ver``, and
+updates ``_ed_head``.  When Docker was already present and no action was
+needed, ``_ed_head`` is set to the current commit and the chain gains one
+entry (the current state) if it was previously empty.
 
 ed_docker_version
 ~~~~~~~~~~~~~~~~~
@@ -204,18 +244,36 @@ ed_docker_version
 ``ed_docker_version -S <state_var> [-b] [-v] [-c]``
 
 Returns version information about the currently installed Docker engine.
+Reads ``_ed_head`` from state, then queries the live Docker process for
+the requested fields.
 
-- ``-b``: hex git-commit hash from ``docker version --format '{{.Server.GitCommit}}'``.
-- ``-v``: engine semantic version.
-- ``-c``: Compose plugin semantic version.
+- ``-b``: git-commit hash — ``docker version --format '{{.Server.GitCommit}}'``.
+- ``-v``: engine semantic version — ``docker version --format '{{.Server.Version}}'``.
+- ``-c``: Compose plugin version — ``docker compose version --short``.
+
+No flags is equivalent to ``-b -v -c``; output order follows flag order.
 
 ed_cleanup
 ~~~~~~~~~~
 
 ``ed_cleanup -S <state_var> [build_number]``
 
-Reverses the last action recorded by ``ed_ensure_docker``: uninstalls Docker
-if it was installed, or downgrades if it was updated.
+Reverses the last action recorded by ``ed_ensure_docker``.
+
+If ``build_number`` is given it must be present in ``_ed_chain`` as a key;
+otherwise ``ED_ERR_WRONG_VERSION`` is returned.
+
+The revert algorithm traverses ``_ed_chain`` from ``"none"`` to find the
+predecessor of ``_ed_head``:
+
+- Predecessor is ``"none"`` → Docker was installed by this library;
+  call ``ed_uninstall_docker``.
+- Predecessor is a commit hash → Docker was updated; call
+  ``ed_install_docker --update "$(_ed_docker_ver[$predecessor])"``
+  to downgrade.
+
+On success, removes ``_ed_head`` from the chain and version maps, and
+updates ``_ed_head`` to the predecessor.
 
 ..
 
