@@ -17,13 +17,18 @@ _last_code_line() {
 }
 
 # ---------------------------------------------------------------------------
-# Shell / BATS files — must end with "return 0" then a history block
+# Library .sh files — must NOT end with "return 0"
+#   Static analysis inlines sourced files (# shellcheck source=); a top-level
+#   "return 0" at the end of the inlined content is treated as an unconditional
+#   return in the calling file, making every subsequent definition unreachable
+#   (SC2317).  The implicit exit-0 of the last function definition suffices.
+# BATS test files — must end with "return 0" then a history block
+#   (bats sources test files; explicit return 0 keeps source exit-clean)
 # ---------------------------------------------------------------------------
 
-
-# bats test_tags=structure,history,issue-43
-@test "config/command_guard.sh: last code line is return 0" {
-  [[ "$(_last_code_line "$ROOT/config/command_guard.sh")" == "return 0" ]]
+# bats test_tags=structure,history,issue-43,issue-133
+@test "config/command_guard.sh: last code line is NOT return 0" {
+  [[ "$(_last_code_line "$ROOT/config/command_guard.sh")" != "return 0" ]]
 }
 
 # bats test_tags=structure,history,issue-43
@@ -31,14 +36,24 @@ _last_code_line() {
   grep -q "^# --- Change History" "$ROOT/config/command_guard.sh"
 }
 
-# bats test_tags=structure,history,issue-43
-@test "config/handle_state.sh: last code line is return 0" {
-  [[ "$(_last_code_line "$ROOT/config/handle_state.sh")" == "return 0" ]]
+# bats test_tags=structure,history,issue-43,issue-133
+@test "config/handle_state.sh: last code line is NOT return 0" {
+  [[ "$(_last_code_line "$ROOT/config/handle_state.sh")" != "return 0" ]]
 }
 
 # bats test_tags=structure,history,issue-43
 @test "config/handle_state.sh: change history block present" {
   grep -q "^# --- Change History" "$ROOT/config/handle_state.sh"
+}
+
+# bats test_tags=structure,history,issue-133
+@test "config/remote_run.sh: last code line is NOT return 0" {
+  [[ "$(_last_code_line "$ROOT/config/remote_run.sh")" != "return 0" ]]
+}
+
+# bats test_tags=structure,history,issue-131,issue-133
+@test "config/remote_run.sh: change history block present" {
+  grep -q "^# --- Change History" "$ROOT/config/remote_run.sh"
 }
 
 # bats test_tags=structure,history,issue-43
@@ -61,6 +76,16 @@ _last_code_line() {
   grep -q "^# --- Change History" "$ROOT/test/test-hs_persist_state.bats"
 }
 
+# bats test_tags=structure,history,issue-131,issue-133
+@test "test/test-remote_run.bats: last code line is return 0" {
+  [[ "$(_last_code_line "$ROOT/test/test-remote_run.bats")" == "return 0" ]]
+}
+
+# bats test_tags=structure,history,issue-131,issue-133
+@test "test/test-remote_run.bats: change history block present" {
+  grep -q "^# --- Change History" "$ROOT/test/test-remote_run.bats"
+}
+
 # ---------------------------------------------------------------------------
 # RST files — must contain an RST comment block with "Change History"
 # ---------------------------------------------------------------------------
@@ -78,6 +103,11 @@ _last_code_line() {
 # bats test_tags=structure,history,issue-43
 @test "docs/libraries/index.rst: change history RST comment present" {
   grep -q "Change History" "$ROOT/docs/libraries/index.rst"
+}
+
+# bats test_tags=structure,history,issue-131,issue-133
+@test "docs/libraries/remote_run.rst: change history RST comment present" {
+  grep -q "Change History" "$ROOT/docs/libraries/remote_run.rst"
 }
 
 # ---------------------------------------------------------------------------
@@ -120,9 +150,24 @@ _last_code_line() {
   [[ -f "$ROOT/.github/skills/sphinx-docs/history.md" ]]
 }
 
+# bats test_tags=structure,history,issue-131,issue-133
+@test "remote-run skill has history.md" {
+  [[ -f "$ROOT/.github/skills/remote-run/history.md" ]]
+}
+
+# ---------------------------------------------------------------------------
+# Claude skill files (.claude/commands/) — must be present for each library
+# ---------------------------------------------------------------------------
+
+# bats test_tags=structure,history,issue-131,issue-133
+@test "remote-run Claude skill file present" {
+  [[ -f "$ROOT/.claude/commands/remote-run.md" ]]
+}
+
 return 0
 
 # --- Change History -------------------------------------------------------
 # | PR    | Summary                                                        |
 # |-------|----------------------------------------------------------------|
 # | #43   | initial file — structural tests for PR change history sections |
+# | #134  | invert return-0 assertions; add full remote_run coverage [closes #133] |

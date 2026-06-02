@@ -496,10 +496,12 @@ rr_run() {
     # FIFOs avoid coproc fd-inheritance races.  Both are opened O_RDWR so that
     # neither open(2) blocks waiting for the other side.
     local _fifo_in _fifo_out
+    # shellcheck disable=SC2015 # Error handler runs if mktemp or mkfifo fails
     _fifo_in=$(mktemp -u) && mkfifo "$_fifo_in" || {
         echo "[ERROR] rr_run: cannot create protocol FIFO" >&2
         return 1
     }
+    # shellcheck disable=SC2015 # Error handler runs if mktemp or mkfifo fails
     _fifo_out=$(mktemp -u) && mkfifo "$_fifo_out" || {
         rm -f "$_fifo_in"
         echo "[ERROR] rr_run: cannot create protocol FIFO" >&2
@@ -621,3 +623,9 @@ rr_cleanup() {
         hs_destroy_state -S "$_out_var" -- _rr_ssh_opts_str _rr_whitelist_str || return $?
     fi
 }
+
+# --- Change History -------------------------------------------------------
+# | PR    | Summary                                                        |
+# |-------|----------------------------------------------------------------|
+# | #126  | initial library — rr_init, rr_run, rr_resolve, rr_cleanup      |
+# | #134  | no top-level return 0; SC2015 suppressions; change history [closes #133] |

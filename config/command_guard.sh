@@ -468,8 +468,6 @@ if ! declare -f guard >/dev/null 2>&1; then
     guard() { cg_guard "$@"; }
 fi
 
-return 0
-
 # --- Change History -------------------------------------------------------
 # | PR    | Summary                                                        |
 # |-------|----------------------------------------------------------------|
@@ -482,3 +480,4 @@ return 0
 # | #114  | PATH enforcement API — cg_safe_run, cg_unsafe [closes #112]    |
 # | #118  | name filter and snap search API [closes #116, #117]            |
 # | #127  | gated trap-EXIT wrapper for async kill-propagation [closes #127] |
+# | #134  | remove top-level return 0 — fixes SC2317 in sourcing files [closes #133] |

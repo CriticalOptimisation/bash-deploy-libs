@@ -15,3 +15,4 @@ from skill content and is not loaded into Claude's context.
 | #52 | #51    | ALL references | restructure task selection; add TDD, planning, integration phases |
 | #114 | #112  | references/pr-threads.sh | add pr-threads helper script (added during PATH enforcement PR) |
 | #43 | —      | templates.md, implementation.md, integration.md | introduce per-file change history sections |
+| #134 | #133  | implementation.md | add new-library checklist: skill command + history.md + structural tests |
