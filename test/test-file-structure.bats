@@ -170,4 +170,4 @@ return 0
 # | PR    | Summary                                                        |
 # |-------|----------------------------------------------------------------|
 # | #43   | initial file — structural tests for PR change history sections |
-# | #TBD  | invert return-0 assertions; add full remote_run coverage [closes #133] |
+# | #134  | invert return-0 assertions; add full remote_run coverage [closes #133] |

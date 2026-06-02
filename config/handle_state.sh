@@ -836,4 +836,4 @@ _hs_hs2_parse() {
 # | #105  | fix hs_persist_state dropping indexed array elements [cls #3]  |
 # | #109  | reduce nameref collision surface [closes #104]                 |
 # | #110  | document HS_ERR_MULTIPLE_STATE_INPUTS for all entry points     |
-# | #TBD  | remove top-level return 0 — fixes SC2317 in sourcing files [closes #133] |
+# | #134  | remove top-level return 0 — fixes SC2317 in sourcing files [closes #133] |

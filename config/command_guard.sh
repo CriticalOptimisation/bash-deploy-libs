@@ -480,4 +480,4 @@ fi
 # | #114  | PATH enforcement API — cg_safe_run, cg_unsafe [closes #112]    |
 # | #118  | name filter and snap search API [closes #116, #117]            |
 # | #127  | gated trap-EXIT wrapper for async kill-propagation [closes #127] |
-# | #TBD  | remove top-level return 0 — fixes SC2317 in sourcing files [closes #133] |
+# | #134  | remove top-level return 0 — fixes SC2317 in sourcing files [closes #133] |

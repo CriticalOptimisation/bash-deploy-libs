@@ -628,4 +628,4 @@ rr_cleanup() {
 # | PR    | Summary                                                        |
 # |-------|----------------------------------------------------------------|
 # | #126  | initial library — rr_init, rr_run, rr_resolve, rr_cleanup      |
-# | #TBD  | no top-level return 0; SC2015 suppressions; change history [closes #133] |
+# | #134  | no top-level return 0; SC2015 suppressions; change history [closes #133] |
