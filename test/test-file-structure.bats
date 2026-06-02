@@ -159,6 +159,41 @@ _last_code_line() {
   [[ -f "$ROOT/.claude/commands/remote-run.md" ]]
 }
 
+# bats test_tags=structure,history,issue-132
+@test "config/ensure_docker.sh: last code line is NOT return 0" {
+  [[ "$(_last_code_line "$ROOT/config/ensure_docker.sh")" != "return 0" ]]
+}
+
+# bats test_tags=structure,history,issue-132
+@test "config/ensure_docker.sh: change history block present" {
+  grep -q "^# --- Change History" "$ROOT/config/ensure_docker.sh"
+}
+
+# bats test_tags=structure,history,issue-132
+@test "test/test-ensure_docker.bats: last code line is return 0" {
+  [[ "$(_last_code_line "$ROOT/test/test-ensure_docker.bats")" == "return 0" ]]
+}
+
+# bats test_tags=structure,history,issue-132
+@test "test/test-ensure_docker.bats: change history block present" {
+  grep -q "^# --- Change History" "$ROOT/test/test-ensure_docker.bats"
+}
+
+# bats test_tags=structure,history,issue-132
+@test "docs/libraries/ensure_docker.rst: change history RST comment present" {
+  grep -q "Change History" "$ROOT/docs/libraries/ensure_docker.rst"
+}
+
+# bats test_tags=structure,history,issue-132
+@test "ensure-docker skill has history.md" {
+  [[ -f "$ROOT/.github/skills/ensure-docker/history.md" ]]
+}
+
+# bats test_tags=structure,history,issue-132
+@test "ensure-docker Claude skill file present" {
+  [[ -f "$ROOT/.claude/commands/ensure-docker.md" ]]
+}
+
 return 0
 
 # --- Change History -------------------------------------------------------
@@ -167,3 +202,4 @@ return 0
 # | #43   | initial file — structural tests for PR change history sections |
 # | #134  | invert return-0 assertions; add full remote_run coverage [closes #133] |
 # | #142  | update history.md paths to .claude/commands/; remove skill-creator test [closes #141] |
+# | #TBD  | add structural coverage for ensure_docker.sh (issue #132)      |

@@ -10,6 +10,7 @@ pieces they ship.
    handle_state
    command_guard
    remote_run
+   ensure_docker
 
 Change History
 --------------
