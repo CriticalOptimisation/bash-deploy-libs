@@ -223,10 +223,11 @@ token is unchanged — there is nothing to undo.  On success, the state
 token is updated atomically to reflect the completed operation.
 
 **``ed_ensure_docker`` is not idempotent.**
-Every call unconditionally appends one new node to the chain and persists
-the updated state, even when Docker is already present and no system change
-is needed.  Each caller owns exactly one node and must match it with a
-single ``ed_cleanup`` call when the host is decommissioned.
+Every **successful** call appends one new node to the chain and persists
+the updated state, even when Docker was already present and no system
+change was needed.  A failed call leaves state unchanged and adds no node.
+Each caller owns exactly one node per successful call and must match it
+with a single ``ed_cleanup`` call when the host is decommissioned.
 
 Stage 2 State Variable Schema
 ------------------------------
@@ -339,11 +340,12 @@ ed_ensure_docker
 
 ``ed_ensure_docker -S <state_var> [[--update] [version_constraint]]``
 
-Restores state, then unconditionally appends one new node to the chain.
-This function is **not idempotent**: every call creates a node regardless
-of whether Docker was already present or any system change was made.  Each
-caller is responsible for issuing exactly one matching ``ed_cleanup`` call
-when the host is decommissioned.
+Restores state, then ensures Docker is present and satisfies the given
+constraint, then appends one new node to the chain.  This function is
+**not idempotent**: every **successful** call creates exactly one node,
+even when Docker was already present and no system change was needed.
+Each caller is responsible for issuing exactly one matching ``ed_cleanup``
+call when the host is decommissioned.  A failed call never modifies state.
 
 Behaviour:
 
