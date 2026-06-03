@@ -320,29 +320,48 @@ helper it calls.  The convention is therefore:
 
 The accessor surface:
 
+Calling convention
+  All five state arrays live in the caller's frame and are accessed
+  directly by the helpers via Bash dynamic scoping — no parameter
+  decoding needed for reads or writes.
+
+  Getter helpers write their result into a **predefined output variable**
+  whose name is part of the helper's calling convention (documented
+  below).  Because calls are sequential, the caller saves the result into
+  a local variable before the next getter call overwrites the output
+  variable.  Mutators and deleters have no output variable.
+
 .. code-block:: bash
 
    # Chain (forward-pointer AA)
-   _ed_chain_get  key            # → stdout: chain[key]
+   #   reads/writes chain[] directly via dynamic scoping
+   #   getters write result into __ed_value (scalar)
+   _ed_chain_get  key            # __ed_value = chain[key]
    _ed_chain_put  key value      # chain[key]=value
    _ed_chain_del  key            # unset chain[key]
-   _ed_chain_pred target         # → stdout: key k where chain[k]==target
-                                 #   (traverses from "none"; fails if not found)
+   _ed_chain_pred target         # __ed_value = k where chain[k]==target
+                                 #   (traverses from "none"; fails → return 1)
 
    # Node record  (node_commit + node_cons)
+   #   reads/writes node_commit[] and node_cons[] via dynamic scoping
+   #   getters write result into __ed_value (scalar)
    _ed_node_put    seq commit cons   # write both fields
-   _ed_node_commit seq               # → stdout: node_commit[seq]
-   _ed_node_cons   seq               # → stdout: node_cons[seq]
+   _ed_node_commit seq               # __ed_value = node_commit[seq]
+   _ed_node_cons   seq               # __ed_value = node_cons[seq]
    _ed_node_del    seq               # unset both fields
 
    # Commit record  (commit_ver + commit_comp)
+   #   reads/writes commit_ver[] and commit_comp[] via dynamic scoping
+   #   getters write result into __ed_value (scalar)
    _ed_commit_put     hash docker_ver compose_ver   # write both fields
-   _ed_commit_docker  hash                          # → stdout: commit_ver[hash]
-   _ed_commit_compose hash                          # → stdout: commit_comp[hash]
+   _ed_commit_docker  hash                          # __ed_value = commit_ver[hash]
+   _ed_commit_compose hash                          # __ed_value = commit_comp[hash]
    _ed_commit_del     hash                          # unset both fields
 
    # Sequence counter
-   _ed_seq_alloc      # increments next_seq; → stdout: new value
+   #   reads/writes next_seq via dynamic scoping
+   #   writes result into __ed_seq (scalar)
+   _ed_seq_alloc      # increments next_seq; __ed_seq = new value
 
 Public API — Stage 2
 --------------------
@@ -438,9 +457,11 @@ Revert algorithm:
      installed by this library → call ``ed_uninstall_docker``.
    - ``P == "none"`` and nodes remain, or ``P`` is a seq number: check
      whether current Docker version satisfies all remaining
-     ``node_cons`` values.  If not, call
-     ``ed_install_docker --update "$(_ed_commit_docker "$(_ed_node_commit "$P")")"``
-     to downgrade.  If yes, no system change.
+     ``node_cons`` values.  If not, call ``_ed_node_commit "$P"`` (result
+     in ``__ed_value``), then ``_ed_commit_docker "$__ed_value"`` (result
+     in ``__ed_value``), then
+     ``ed_install_docker --update "$__ed_value"`` to downgrade.
+     If yes, no system change.
 
 5. Remove ``T`` from chain and node maps (``_ed_node_del``, ``_ed_chain_del``).
    Remove commit record only if no other node references the same commit.
