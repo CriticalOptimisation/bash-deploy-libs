@@ -21,9 +21,8 @@
 # MOCK_COMPOSE_VERSION   — compose semver (default: 2.20.0)
 
 readonly ED_TEST_SOURCE_FAILED=2
-readonly ED_TEST_DOCKER_NET_FAILED=3
-readonly ED_TEST_CONTAINER_START_FAILED=4
-readonly ED_TEST_CONTAINER_NOT_READY=5
+# ED_TEST_DOCKER_NET_FAILED, ED_TEST_CONTAINER_START_FAILED, ED_TEST_CONTAINER_NOT_READY
+# will be added in Stage 1 implementation when the DinD fixture is wired up.
 
 setup_file() {
     bats_require_minimum_version 1.5.0
@@ -123,6 +122,7 @@ setup() {
 
 # bats test_tags=ensure_docker,source,issue-132
 @test "all ED_ERR_ constants are defined after sourcing" {
+    [[ -n "${ED_ERR_CORRUPT_STATE+x}" ]]          || { echo "ED_ERR_CORRUPT_STATE missing" >&2;          false; }
     [[ -n "${ED_ERR_INSUFFICIENT_PRIVILEGE+x}" ]] || { echo "ED_ERR_INSUFFICIENT_PRIVILEGE missing" >&2; false; }
     [[ -n "${ED_ERR_MISSING_ARGUMENT+x}" ]]       || { echo "ED_ERR_MISSING_ARGUMENT missing" >&2;       false; }
     [[ -n "${ED_ERR_SYNTAX_ERROR+x}" ]]           || { echo "ED_ERR_SYNTAX_ERROR missing" >&2;           false; }
@@ -138,6 +138,7 @@ setup() {
 
 # bats test_tags=ensure_docker,source,issue-132
 @test "ED_ERR_ numeric values match the approved table" {
+    [[ "$ED_ERR_CORRUPT_STATE"          -eq 4  ]]
     [[ "$ED_ERR_INSUFFICIENT_PRIVILEGE" -eq 7  ]]
     [[ "$ED_ERR_MISSING_ARGUMENT"       -eq 8  ]]
     [[ "$ED_ERR_SYNTAX_ERROR"           -eq 9  ]]

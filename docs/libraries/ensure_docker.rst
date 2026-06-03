@@ -68,6 +68,10 @@ Quick Start
 Error Codes
 -----------
 
+- ``ED_ERR_CORRUPT_STATE=4``: the state token supplied via ``-S`` is not a
+  valid ``handle_state.sh`` HS2 object.  Emitted by stateful entry points
+  when state restoration fails at function entry.  The system is not touched.
+  Aligned with ``HS_ERR_CORRUPT_STATE=4``.
 - ``ED_ERR_INSUFFICIENT_PRIVILEGE=7``: the caller does not have root
   privilege.  The library never escalates privileges on the caller's behalf.
 - ``ED_ERR_MISSING_ARGUMENT=8``: a mandatory argument (typically ``-S``) was
@@ -192,8 +196,40 @@ Errors:
 
 - ``ED_ERR_INSUFFICIENT_PRIVILEGE=7``: not root.
 
+State Consistency Policy
+------------------------
+
+This policy applies to every stateful entry point
+(``ed_ensure_docker``, ``ed_docker_version``, ``ed_cleanup``).
+
+**Rule 1 — Full restoration at entry.**
+The very first operation of every stateful entry point is restoring all
+five state variables from the ``-S`` token.  No argument validation,
+constraint checking, or system operation precedes this step.
+
+**Rule 2 — Corrupt state is a hard failure.**
+If restoration fails (invalid or corrupted HS2 token), the entry point
+emits an ``[ERROR]`` message to stderr and returns
+``ED_ERR_CORRUPT_STATE=4``.  Nothing is done to the system.
+
+**Rule 3 — Single persist point on success.**
+``hs_persist_state`` is called exactly once, at the successful exit of
+the entry point, after all system operations have completed.  On any
+failure path the function returns without calling ``hs_persist_state``,
+leaving the state token identical to what was passed in.
+
+**Consequence.**  On failure, the system is unchanged *and* the state
+token is unchanged — there is nothing to undo.  On success, the state
+token is updated atomically to reflect the completed operation.
+
+**``ed_ensure_docker`` is not idempotent.**
+Every call unconditionally appends one new node to the chain and persists
+the updated state, even when Docker is already present and no system change
+is needed.  Each caller owns exactly one node and must match it with a
+single ``ed_cleanup`` call when the host is decommissioned.
+
 Stage 2 State Variable Schema
------------------------------
+------------------------------
 
 .. note::
    Stage 2 functions are not yet implemented.  Their API is documented here
@@ -303,49 +339,105 @@ ed_ensure_docker
 
 ``ed_ensure_docker -S <state_var> [[--update] [version_constraint]]``
 
-Idempotent wrapper around ``ed_has_docker`` and ``ed_install_docker``.
-On success, appends the newly installed commit to ``_ed_chain``, records
-its version data in ``_ed_docker_ver`` and ``_ed_compose_ver``, and
-updates ``_ed_head``.  When Docker was already present and no action was
-needed, ``_ed_head`` is set to the current commit and the chain gains one
-entry (the current state) if it was previously empty.
+Restores state, then unconditionally appends one new node to the chain.
+This function is **not idempotent**: every call creates a node regardless
+of whether Docker was already present or any system change was made.  Each
+caller is responsible for issuing exactly one matching ``ed_cleanup`` call
+when the host is decommissioned.
+
+Behaviour:
+
+1. Restore full state from ``-S`` token; return ``ED_ERR_CORRUPT_STATE``
+   on failure.
+2. Allocate a new sequence number via ``_ed_seq_alloc``.
+3. Call ``ed_has_docker [version_constraint]``:
+
+   - Returns ``0``: Docker present and satisfies constraint.  No system
+     change; record current commit as the new node's commit.
+   - Returns ``ED_ERR_NO_DOCKER``: call ``ed_install_docker [constraint]``.
+   - Returns ``ED_ERR_WRONG_VERSION`` with ``--update``: call
+     ``ed_install_docker --update [constraint]``.
+   - Returns ``ED_ERR_WRONG_VERSION`` without ``--update``: propagate
+     ``ED_ERR_WRONG_VERSION``; state unchanged.
+   - Any other error: propagate; state unchanged.
+
+4. Verify the new constraint is compatible with all existing ``node_cons``
+   values.  If any conflict is detected: propagate ``ED_ERR_WRONG_VERSION``;
+   state unchanged.
+5. Write node (``_ed_node_put``, ``_ed_commit_put`` if commit is new).
+6. Link the new node as the chain terminal (``_ed_chain_put``).
+7. Persist state (``hs_persist_state``).
+
+Errors:
+
+- ``ED_ERR_CORRUPT_STATE=4``: state token invalid at function entry.
+- ``ED_ERR_WRONG_VERSION=15``: no Docker version satisfies all constraints.
+- ``ED_ERR_VERSION_NOT_FOUND=16``: no APT candidate satisfies the constraint.
+- ``ED_ERR_HOST_INCOMPATIBLE=21``: version found but cannot be installed.
+- ``ED_ERR_INSUFFICIENT_PRIVILEGE=7``: install attempted but not root.
+- ``ED_ERR_MISSING_ARGUMENT=8``: ``-S`` absent.
+- ``ED_ERR_SYNTAX_ERROR=9``: malformed option or constraint.
 
 ed_docker_version
 ~~~~~~~~~~~~~~~~~
 
 ``ed_docker_version -S <state_var> [-b] [-v] [-c]``
 
-Returns version information about the currently installed Docker engine.
-Reads ``_ed_head`` from state, then queries the live Docker process for
-the requested fields.
+Restores state, then queries the live Docker process for the requested
+version fields.
 
 - ``-b``: git-commit hash — ``docker version --format '{{.Server.GitCommit}}'``.
 - ``-v``: engine semantic version — ``docker version --format '{{.Server.Version}}'``.
 - ``-c``: Compose plugin version — ``docker compose version --short``.
 
 No flags is equivalent to ``-b -v -c``; output order follows flag order.
+This function does not modify state; ``hs_persist_state`` is not called.
+
+Errors:
+
+- ``ED_ERR_CORRUPT_STATE=4``: state token invalid at function entry.
+- ``ED_ERR_NO_DOCKER=13``: Docker unreachable.
+- ``ED_ERR_NO_COMPOSE=14``: Compose plugin missing.
+- ``ED_ERR_MISSING_ARGUMENT=8``: ``-S`` absent.
+- ``ED_ERR_SYNTAX_ERROR=9``: unknown flag.
 
 ed_cleanup
 ~~~~~~~~~~
 
 ``ed_cleanup -S <state_var> [build_number]``
 
-Reverses the last action recorded by ``ed_ensure_docker``.
+Restores state, removes the terminal chain node, reverts the corresponding
+system change if any, and persists the updated state.
 
-If ``build_number`` is given it must be present in ``_ed_chain`` as a key;
-otherwise ``ED_ERR_WRONG_VERSION`` is returned.
+If ``build_number`` is given it must equal ``node_commit[head_seq]``
+(the commit recorded at the terminal node); otherwise returns
+``ED_ERR_WRONG_VERSION``.
 
-The revert algorithm traverses ``_ed_chain`` from ``"none"`` to find the
-predecessor of ``_ed_head``:
+Revert algorithm:
 
-- Predecessor is ``"none"`` → Docker was installed by this library;
-  call ``ed_uninstall_docker``.
-- Predecessor is a commit hash → Docker was updated; call
-  ``ed_install_docker --update "$(_ed_docker_ver[$predecessor])"``
-  to downgrade.
+1. Restore full state; return ``ED_ERR_CORRUPT_STATE`` on failure.
+2. Identify the terminal node ``T`` (``chain[k] = "head"`` for some ``k``).
+3. Find the predecessor ``P`` of ``T`` (``_ed_chain_pred "head"``).
+4. Determine action from ``P``:
 
-On success, removes ``_ed_head`` from the chain and version maps, and
-updates ``_ed_head`` to the predecessor.
+   - ``P == "none"`` and no remaining nodes after removal: Docker was
+     installed by this library → call ``ed_uninstall_docker``.
+   - ``P == "none"`` and nodes remain, or ``P`` is a seq number: check
+     whether current Docker version satisfies all remaining
+     ``node_cons`` values.  If not, call
+     ``ed_install_docker --update "$(_ed_commit_docker "$(_ed_node_commit "$P")")"``
+     to downgrade.  If yes, no system change.
+
+5. Remove ``T`` from chain and node maps (``_ed_node_del``, ``_ed_chain_del``).
+   Remove commit record only if no other node references the same commit.
+6. Persist state.
+
+Errors:
+
+- ``ED_ERR_CORRUPT_STATE=4``: state token invalid at function entry.
+- ``ED_ERR_WRONG_VERSION=15``: ``build_number`` does not match terminal node.
+- ``ED_ERR_INSUFFICIENT_PRIVILEGE=7``: uninstall/downgrade attempted but not root.
+- ``ED_ERR_MISSING_ARGUMENT=8``: ``-S`` absent.
 
 ..
 
