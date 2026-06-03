@@ -88,6 +88,13 @@ Error Codes
   required tool or dependency library is absent.
 - ``ED_ERR_ALREADY_INSTALLED=20``: ``ed_install_docker`` was called without
   ``--update`` and Docker is already installed.
+- ``ED_ERR_HOST_INCOMPATIBLE=21``: the selected version exists in the APT
+  repository but cannot be installed on this host (OS version mismatch,
+  unsupported architecture, irresolvable package dependencies, or a
+  container environment that lacks the required kernel capabilities).
+  ``ed_install_docker`` emits a diagnostic that includes the ``apt-get``
+  error output.  Callers that receive this code should consider a
+  Docker-in-Docker deployment or a remote installation via ``rr_run``.
 
 Version Constraint Syntax
 --------------------------
@@ -168,6 +175,9 @@ Errors:
 - ``ED_ERR_ALREADY_INSTALLED=20``: Docker present and ``--update`` not set.
 - ``ED_ERR_INSUFFICIENT_PRIVILEGE=7``: not root.
 - ``ED_ERR_VERSION_NOT_FOUND=16``: no APT candidate satisfies the constraint.
+- ``ED_ERR_HOST_INCOMPATIBLE=21``: the selected version exists in APT but
+  the ``apt-get install`` step fails due to host incompatibility (see
+  diagnostic on stderr).  The caller should try DinD or a remote host.
 - ``ED_ERR_SYNTAX_ERROR=9``: malformed option or constraint.
 
 ed_uninstall_docker
@@ -189,39 +199,101 @@ Stage 2 State Variable Schema
    Stage 2 functions are not yet implemented.  Their API is documented here
    for planning purposes; they will be added in a subsequent PR.
 
-Stage 2 functions persist state via ``handle_state.sh`` using three
-associative arrays and one scalar.
+Stage 2 functions persist state via ``handle_state.sh``.  The five state
+variables below have **fixed names**: every stateful entry point restores
+them under exactly these names, and the accessor helpers rely on Bash's
+dynamic scoping to read and write them without namerefs (see `Accessor
+Helpers`_ below).
 
-``_ed_chain`` *(associative array)*
-  Forward-linked list.  Each key is a git-commit hash (or the sentinel
-  string ``"none"`` representing the pre-Docker state); each value is the
-  git-commit hash of the *next* Docker installation.
+``chain`` *(associative array)*
+  Forward-linked list where both keys and values are opaque sequence
+  integers (or the sentinels ``"none"`` and ``"head"``).
 
-  Example after two ``ed_ensure_docker`` calls:
+  - ``chain["none"]`` is ``"head"`` in the initial empty state (no Docker
+    installed by this library).
+  - ``chain["none"] = "1"`` after the first installation; ``chain["1"] = "head"``
+    marks it as the terminal node.
+  - ``chain[N] = "head"`` always marks the current tip.
 
-  .. code-block:: text
+``node_commit`` *(associative array)*
+  ``node_commit[seq]`` — git-commit hash of the Docker engine that was
+  current when node *seq* was appended.
 
-     _ed_chain["none"]    = "abc1234"   # Docker was absent; installed abc1234
-     _ed_chain["abc1234"] = "def5678"   # later updated to def5678
-     _ed_chain["def5678"] = ""          # terminal node
+``node_cons`` *(associative array)*
+  ``node_cons[seq]`` — version constraint string that was passed to the
+  ``ed_ensure_docker`` call that created node *seq* (empty string if
+  unconstrained).
 
-``_ed_docker_ver`` *(associative array)*
-  Maps each git-commit hash to the Docker engine semantic version string
-  that was installed at that commit, e.g. ``_ed_docker_ver["abc1234"] = "24.0.7"``.
+``commit_ver`` *(associative array)*
+  ``commit_ver[hash]`` — Docker engine semver for a given git-commit hash.
+  Shared across nodes that reference the same commit.
 
-``_ed_compose_ver`` *(associative array)*
-  Maps each git-commit hash to the Compose plugin semantic version string,
-  e.g. ``_ed_compose_ver["abc1234"] = "2.20.0"``.
+``commit_comp`` *(associative array)*
+  ``commit_comp[hash]`` — Compose plugin semver for a given git-commit hash.
+  Shared across nodes that reference the same commit.
 
-``_ed_head`` *(scalar)*
-  The git-commit hash at the tip of ``_ed_chain`` (the currently installed
-  Docker version), or ``"none"`` when Docker is not installed.
+``next_seq`` *(scalar)*
+  Monotonic integer counter; incremented each time a new node is appended.
 
-The action implied by any commit is determined from the chain structure
-alone: a predecessor of ``"none"`` means the commit was the first
-installation (reverting → uninstall); any other predecessor means it was
-an update (reverting → downgrade to that predecessor's version via
-``_ed_docker_ver``).
+Example after two ``ed_ensure_docker`` calls that install then update Docker:
+
+.. code-block:: text
+
+   chain["none"]  = "1"      chain["1"]  = "2"      chain["2"] = "head"
+   node_commit["1"] = "abc"  node_commit["2"] = "def"
+   node_cons["1"]   = ">=24.0.0"  node_cons["2"] = ">=24.0.5,<25.0.0"
+   commit_ver["abc"]  = "24.0.7"  commit_ver["def"]  = "24.0.9"
+   commit_comp["abc"] = "2.20.0"  commit_comp["def"] = "2.23.0"
+   next_seq = 2
+
+The action implied by cleanup is read from the chain: if the predecessor of
+the terminal node is ``"none"``, Docker was installed by this library and
+cleanup uninstalls it; otherwise cleanup downgrades to the predecessor's
+``commit_ver``.  A new version must satisfy all ``node_cons`` values across
+every node currently in the chain.
+
+Accessor Helpers
+----------------
+
+.. note::
+   Accessor helpers are not yet implemented.
+
+Internal ``_ed_`` helper functions encapsulate all access to the five state
+arrays.  They work without namerefs because Bash uses dynamic scoping:
+``local`` variables declared in a stateful entry point are visible to every
+helper it calls.  The convention is therefore:
+
+1. Every stateful entry point restores the five state variables under their
+   fixed names (``chain``, ``node_commit``, ``node_cons``, ``commit_ver``,
+   ``commit_comp``, ``next_seq``) before calling any accessor.
+2. Accessor helpers reference those names directly.  They must only be
+   called from within a stateful entry point that has already restored state.
+
+The accessor surface:
+
+.. code-block:: bash
+
+   # Chain (forward-pointer AA)
+   _ed_chain_get  key            # → stdout: chain[key]
+   _ed_chain_put  key value      # chain[key]=value
+   _ed_chain_del  key            # unset chain[key]
+   _ed_chain_pred target         # → stdout: key k where chain[k]==target
+                                 #   (traverses from "none"; fails if not found)
+
+   # Node record  (node_commit + node_cons)
+   _ed_node_put    seq commit cons   # write both fields
+   _ed_node_commit seq               # → stdout: node_commit[seq]
+   _ed_node_cons   seq               # → stdout: node_cons[seq]
+   _ed_node_del    seq               # unset both fields
+
+   # Commit record  (commit_ver + commit_comp)
+   _ed_commit_put     hash docker_ver compose_ver   # write both fields
+   _ed_commit_docker  hash                          # → stdout: commit_ver[hash]
+   _ed_commit_compose hash                          # → stdout: commit_comp[hash]
+   _ed_commit_del     hash                          # unset both fields
+
+   # Sequence counter
+   _ed_seq_alloc      # increments next_seq; → stdout: new value
 
 Public API — Stage 2
 --------------------

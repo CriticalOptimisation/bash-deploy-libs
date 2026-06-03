@@ -133,6 +133,7 @@ setup() {
     [[ -n "${ED_ERR_VERSION_VULNERABLE+x}" ]]     || { echo "ED_ERR_VERSION_VULNERABLE missing" >&2;     false; }
     [[ -n "${ED_ERR_DEPENDENCY_MISSING+x}" ]]     || { echo "ED_ERR_DEPENDENCY_MISSING missing" >&2;     false; }
     [[ -n "${ED_ERR_ALREADY_INSTALLED+x}" ]]      || { echo "ED_ERR_ALREADY_INSTALLED missing" >&2;      false; }
+    [[ -n "${ED_ERR_HOST_INCOMPATIBLE+x}" ]]      || { echo "ED_ERR_HOST_INCOMPATIBLE missing" >&2;      false; }
 }
 
 # bats test_tags=ensure_docker,source,issue-132
@@ -147,6 +148,7 @@ setup() {
     [[ "$ED_ERR_VERSION_VULNERABLE"     -eq 17 ]]
     [[ "$ED_ERR_DEPENDENCY_MISSING"     -eq 19 ]]
     [[ "$ED_ERR_ALREADY_INSTALLED"      -eq 20 ]]
+    [[ "$ED_ERR_HOST_INCOMPATIBLE"      -eq 21 ]]
 }
 
 # bats test_tags=ensure_docker,source,issue-132
@@ -375,6 +377,28 @@ setup() {
     MOCK_DOCKER_ABSENT=1 MOCK_APT_VERSIONS="24.0.7" \
         run ed_install_docker ">=99.0.0"
     [[ "$status" -eq "$ED_ERR_VERSION_NOT_FOUND" ]]
+}
+
+# bats test_tags=ensure_docker,install_docker,issue-132
+@test "ed_install_docker — returns ED_ERR_HOST_INCOMPATIBLE when apt-get fails for host reasons" {
+    if [[ "$(id -u)" -ne 0 ]]; then
+        skip "requires root to reach apt-get execution"
+    fi
+    # Simulate: version exists in APT but apt-get install itself fails
+    # (e.g. broken dependencies, incompatible OS).
+    MOCK_DOCKER_ABSENT=1 MOCK_APT_GET_EXIT=100 \
+        run ed_install_docker
+    [[ "$status" -eq "$ED_ERR_HOST_INCOMPATIBLE" ]]
+}
+
+# bats test_tags=ensure_docker,install_docker,issue-132
+@test "ed_install_docker — emits stderr diagnostic on ED_ERR_HOST_INCOMPATIBLE" {
+    if [[ "$(id -u)" -ne 0 ]]; then
+        skip "requires root to reach apt-get execution"
+    fi
+    MOCK_DOCKER_ABSENT=1 MOCK_APT_GET_EXIT=100 \
+        run ed_install_docker
+    [[ -n "$output" ]]
 }
 
 # ---------------------------------------------------------------------------

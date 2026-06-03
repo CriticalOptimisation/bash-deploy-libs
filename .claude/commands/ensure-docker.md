@@ -51,6 +51,7 @@ Do **not** use this library when:
 | 16 | `ED_ERR_VERSION_NOT_FOUND` | No APT candidate matches constraint |
 | 19 | `ED_ERR_DEPENDENCY_MISSING` | Library failed to load |
 | 20 | `ED_ERR_ALREADY_INSTALLED` | Docker present; `--update` not set |
+| 21 | `ED_ERR_HOST_INCOMPATIBLE` | Version exists in APT but host cannot install it (OS/arch/deps); caller should try DinD or `rr_run` |
 
 ## Dependencies
 
