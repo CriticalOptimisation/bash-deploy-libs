@@ -218,6 +218,18 @@ the entry point, after all system operations have completed.  On any
 failure path the function returns without calling ``hs_persist_state``,
 leaving the state token identical to what was passed in.
 
+Implementation pattern::
+
+    local _new_state=""
+    hs_persist_state -S _new_state -- chain node_commit node_cons \
+        commit_ver commit_comp next_seq
+    printf -v "$_state_var" '%s' "$_new_state"
+
+``hs_persist_state`` writes into a fresh local (no prior state → no
+collision possible).  The final ``printf -v`` copies the serialised token
+into the caller's variable in a single Bash string assignment — atomic in
+the Bash memory model.
+
 **Consequence.**  On failure, the system is unchanged *and* the state
 token is unchanged — there is nothing to undo.  On success, the state
 token is updated atomically to reflect the completed operation.
