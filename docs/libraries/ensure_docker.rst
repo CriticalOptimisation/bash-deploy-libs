@@ -14,56 +14,73 @@ detection, installation, uninstallation, and version-tracked cleanup.  It is
 designed to be called via ``rr_run`` so the same operations can be applied
 transparently to a remote host without any file being copied there.
 
-The library is organised in two stages:
+The library exposes two functional layers:
 
-- **Stage 1** — atomic functions that have no side-effects on library state:
+- **Layer 1** — stateless functions with no side-effects on library state:
   ``ed_has_docker``, ``ed_install_docker``, ``ed_uninstall_docker``.
-- **Stage 2** — state-managed functions that compose Stage 1 with
+- **Layer 2** — state-managed functions that compose Layer 1 with
   ``handle_state.sh`` for idempotency and rollback:
   ``ed_ensure_docker``, ``ed_docker_version``, ``ed_cleanup``.
 
 Dependencies
 ------------
 
-+-------------------+---------------------------------+
-| Dependency        | Notes                           |
-+===================+=================================+
-| ``command_guard.sh`` | Guarded at source time:      |
-|                   | ``docker``, ``apt-get``,        |
-|                   | ``apt-cache``, ``curl``, ``id`` |
-+-------------------+---------------------------------+
-| ``handle_state.sh`` | Stage 2 functions only.       |
-|                   | Sourced automatically.          |
-+-------------------+---------------------------------+
-| Docker CE APT repo | Required by ``ed_install_docker``|
-|                   | on Debian/Ubuntu hosts.         |
-+-------------------+---------------------------------+
-| Bash ≥ 4.3        | Nameref support in              |
-|                   | ``handle_state.sh``.            |
-+-------------------+---------------------------------+
++------------------------+--------------------------------------------------+
+| Dependency             | Notes                                            |
++========================+==================================================+
+| ``command_guard.sh``   | Sourced at load time.  Guards the external       |
+|                        | commands ``docker``, ``apt-get``, ``apt-cache``, |
+|                        | ``curl``, ``id``.                                |
++------------------------+--------------------------------------------------+
+| ``handle_state.sh``    | Layer 2 functions only.  Sourced automatically  |
+|                        | by ``ensure_docker.sh``.                         |
++------------------------+--------------------------------------------------+
+| Docker CE APT repo     | Required by ``ed_install_docker`` on             |
+|                        | Debian/Ubuntu hosts.                             |
++------------------------+--------------------------------------------------+
+| Bash ≥ 4.3             | Required by ``handle_state.sh``                  |
+|                        | (nameref support).                               |
++------------------------+--------------------------------------------------+
 
-All command-guard dependencies are verified at source time.  If any required
-tool is absent the library fails to load and returns
-``ED_ERR_DEPENDENCY_MISSING``.
+All required external commands are verified at source time.  If any is
+absent the library fails to load and returns ``ED_ERR_DEPENDENCY_MISSING``.
 
 Quick Start
 -----------
 
 .. code-block:: bash
 
-   source "$(dirname "$0")/config/ensure_docker.sh"
+   source "$(dirname "$0")/config/ensure_docker.sh" || exit $?
 
-   # Check Docker is present and satisfies a version constraint
-   ed_has_docker ">=24.0.0" || { echo "Docker 24+ required"; exit 1; }
+   # Check whether Docker is present and satisfies a version constraint
+   ed_has_docker ">=24.0.0" || { echo "Docker 24+ required" >&2; exit 1; }
 
-   # Install Docker if absent (requires root)
-   ed_install_docker ">=24.0.0"
+   # Install Docker (requires root); fails if already installed without --update
+   ed_install_docker ">=24.0.0" || exit $?
 
-   # Idempotent: install only when needed, record action in state (Stage 2)
-   local state=""
-   ed_ensure_docker -S state ">=24.0.0" || return $?
+Layer 2 — commissioning and decommissioning with state tracking:
+
+.. code-block:: bash
+
+   source "$(dirname "$0")/config/ensure_docker.sh" || exit $?
+
+   # Commission: ensure Docker is present and record what was done.
+   # ed_ensure_docker appends one node to the state chain on every
+   # successful call; each call must be matched by exactly one ed_cleanup.
+   state=""
+   ed_ensure_docker -S state ">=24.0.0" || exit $?
+
+   # For long-lived servers the state string must be saved to permanent
+   # storage (a file, a secrets manager, a configuration database keyed
+   # by the server's unique identity) before the script exits.
+   printf '%s\n' "$state" > /etc/ensure_docker.state
+
    # ... use Docker ...
-   ed_cleanup -S state   # restore the host to its prior state
+
+   # Decommission: restore the host to its prior Docker state.
+   state="$(< /etc/ensure_docker.state)"
+   ed_cleanup -S state || exit $?
+   rm -f /etc/ensure_docker.state
 
 Error Codes
 -----------
@@ -71,7 +88,6 @@ Error Codes
 - ``ED_ERR_CORRUPT_STATE=4``: the state token supplied via ``-S`` is not a
   valid ``handle_state.sh`` HS2 object.  Emitted by stateful entry points
   when state restoration fails at function entry.  The system is not touched.
-  Aligned with ``HS_ERR_CORRUPT_STATE=4``.
 - ``ED_ERR_INSUFFICIENT_PRIVILEGE=7``: the caller does not have root
   privilege.  The library never escalates privileges on the caller's behalf.
 - ``ED_ERR_MISSING_ARGUMENT=8``: a mandatory argument (typically ``-S``) was
@@ -84,21 +100,24 @@ Error Codes
   ``docker compose`` CLI plugin is missing.
 - ``ED_ERR_WRONG_VERSION=15``: Docker is installed but does not satisfy
   the supplied version constraint.
-- ``ED_ERR_VERSION_NOT_FOUND=16``: no APT candidate satisfies the
-  requested version constraint.
+- ``ED_ERR_NO_SUITABLE_VERSION=16``: the APT repository contains no
+  candidate that satisfies the requested version constraint.  The host is
+  reachable and the repository is accessible; the constraint itself cannot
+  be met with what is currently published.
 - ``ED_ERR_VERSION_VULNERABLE=17``: *(reserved — CVE checking deferred to
   a future PR; currently never returned).*
 - ``ED_ERR_DEPENDENCY_MISSING=19``: the library failed to load because a
-  required tool or dependency library is absent.
+  required external command or dependency library is absent.
 - ``ED_ERR_ALREADY_INSTALLED=20``: ``ed_install_docker`` was called without
   ``--update`` and Docker is already installed.
-- ``ED_ERR_HOST_INCOMPATIBLE=21``: the selected version exists in the APT
-  repository but cannot be installed on this host (OS version mismatch,
-  unsupported architecture, irresolvable package dependencies, or a
-  container environment that lacks the required kernel capabilities).
-  ``ed_install_docker`` emits a diagnostic that includes the ``apt-get``
-  error output.  Callers that receive this code should consider a
-  Docker-in-Docker deployment or a remote installation via ``rr_run``.
+- ``ED_ERR_HOST_INCOMPATIBLE=21``: a suitable version was found in the APT
+  repository but ``apt-get install`` failed because the host cannot run it
+  (OS version mismatch, unsupported CPU architecture, irresolvable package
+  dependencies, or a container environment that lacks the required kernel
+  capabilities).  ``ed_install_docker`` emits a diagnostic on stderr that
+  includes the ``apt-get`` error output.  Callers that receive this code
+  should consider a Docker-in-Docker deployment or a remote installation
+  via ``rr_run``.
 
 Version Constraint Syntax
 --------------------------
@@ -114,7 +133,7 @@ forms, where ``A``, ``B``, ``C`` are non-negative integers:
    =A.B.C             # exact match
    =A.B               # equivalent to >=A.B.0,<A.(B+1).0
 
-Public API — Stage 1
+Public API — Layer 1
 --------------------
 
 ed_has_docker
@@ -178,7 +197,7 @@ Errors:
 
 - ``ED_ERR_ALREADY_INSTALLED=20``: Docker present and ``--update`` not set.
 - ``ED_ERR_INSUFFICIENT_PRIVILEGE=7``: not root.
-- ``ED_ERR_VERSION_NOT_FOUND=16``: no APT candidate satisfies the constraint.
+- ``ED_ERR_NO_SUITABLE_VERSION=16``: no APT candidate satisfies the constraint.
 - ``ED_ERR_HOST_INCOMPATIBLE=21``: the selected version exists in APT but
   the ``apt-get install`` step fails due to host incompatibility (see
   diagnostic on stderr).  The caller should try DinD or a remote host.
@@ -199,7 +218,7 @@ Errors:
 State Consistency Policy
 ------------------------
 
-This policy applies to every stateful entry point
+This policy applies to every Layer 2 entry point
 (``ed_ensure_docker``, ``ed_docker_version``, ``ed_cleanup``).
 
 **Rule 1 — Full restoration at entry.**
@@ -241,15 +260,11 @@ change was needed.  A failed call leaves state unchanged and adds no node.
 Each caller owns exactly one node per successful call and must match it
 with a single ``ed_cleanup`` call when the host is decommissioned.
 
-Stage 2 State Variable Schema
+Layer 2 State Variable Schema
 ------------------------------
 
-.. note::
-   Stage 2 functions are not yet implemented.  Their API is documented here
-   for planning purposes; they will be added in a subsequent PR.
-
-Stage 2 functions persist state via ``handle_state.sh``.  The five state
-variables below have **fixed names**: every stateful entry point restores
+Layer 2 functions persist state via ``handle_state.sh``.  The six state
+variables below have **fixed names**: every Layer 2 entry point restores
 them under exactly these names, and the accessor helpers rely on Bash's
 dynamic scoping to read and write them without namerefs (see `Accessor
 Helpers`_ below).
@@ -304,10 +319,7 @@ every node currently in the chain.
 Accessor Helpers
 ----------------
 
-.. note::
-   Accessor helpers are not yet implemented.
-
-Internal ``_ed_`` helper functions encapsulate all access to the five state
+Internal ``_ed_`` helper functions encapsulate all access to the six state
 arrays.  They work without namerefs because Bash uses dynamic scoping:
 ``local`` variables declared in a stateful entry point are visible to every
 helper it calls.  The convention is therefore:
@@ -363,7 +375,7 @@ Calling convention
    #   writes result into __ed_seq (scalar)
    _ed_seq_alloc      # increments next_seq; __ed_seq = new value
 
-Public API — Stage 2
+Public API — Layer 2
 --------------------
 
 ed_ensure_docker
@@ -405,7 +417,7 @@ Errors:
 
 - ``ED_ERR_CORRUPT_STATE=4``: state token invalid at function entry.
 - ``ED_ERR_WRONG_VERSION=15``: no Docker version satisfies all constraints.
-- ``ED_ERR_VERSION_NOT_FOUND=16``: no APT candidate satisfies the constraint.
+- ``ED_ERR_NO_SUITABLE_VERSION=16``: no APT candidate satisfies the constraint.
 - ``ED_ERR_HOST_INCOMPATIBLE=21``: version found but cannot be installed.
 - ``ED_ERR_INSUFFICIENT_PRIVILEGE=7``: install attempted but not root.
 - ``ED_ERR_MISSING_ARGUMENT=8``: ``-S`` absent.

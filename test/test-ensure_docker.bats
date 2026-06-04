@@ -130,7 +130,7 @@ setup() {
     [[ -n "${ED_ERR_NO_DOCKER+x}" ]]              || { echo "ED_ERR_NO_DOCKER missing" >&2;              false; }
     [[ -n "${ED_ERR_NO_COMPOSE+x}" ]]             || { echo "ED_ERR_NO_COMPOSE missing" >&2;             false; }
     [[ -n "${ED_ERR_WRONG_VERSION+x}" ]]          || { echo "ED_ERR_WRONG_VERSION missing" >&2;          false; }
-    [[ -n "${ED_ERR_VERSION_NOT_FOUND+x}" ]]      || { echo "ED_ERR_VERSION_NOT_FOUND missing" >&2;      false; }
+    [[ -n "${ED_ERR_NO_SUITABLE_VERSION+x}" ]]      || { echo "ED_ERR_NO_SUITABLE_VERSION missing" >&2;      false; }
     [[ -n "${ED_ERR_VERSION_VULNERABLE+x}" ]]     || { echo "ED_ERR_VERSION_VULNERABLE missing" >&2;     false; }
     [[ -n "${ED_ERR_DEPENDENCY_MISSING+x}" ]]     || { echo "ED_ERR_DEPENDENCY_MISSING missing" >&2;     false; }
     [[ -n "${ED_ERR_ALREADY_INSTALLED+x}" ]]      || { echo "ED_ERR_ALREADY_INSTALLED missing" >&2;      false; }
@@ -146,7 +146,7 @@ setup() {
     [[ "$ED_ERR_NO_DOCKER"              -eq 13 ]]
     [[ "$ED_ERR_NO_COMPOSE"             -eq 14 ]]
     [[ "$ED_ERR_WRONG_VERSION"          -eq 15 ]]
-    [[ "$ED_ERR_VERSION_NOT_FOUND"      -eq 16 ]]
+    [[ "$ED_ERR_NO_SUITABLE_VERSION"      -eq 16 ]]
     [[ "$ED_ERR_VERSION_VULNERABLE"     -eq 17 ]]
     [[ "$ED_ERR_DEPENDENCY_MISSING"     -eq 19 ]]
     [[ "$ED_ERR_ALREADY_INSTALLED"      -eq 20 ]]
@@ -372,13 +372,13 @@ setup() {
 }
 
 # bats test_tags=ensure_docker,install_docker,issue-132
-@test "ed_install_docker — returns ED_ERR_VERSION_NOT_FOUND when no apt candidate matches constraint" {
+@test "ed_install_docker — returns ED_ERR_NO_SUITABLE_VERSION when no apt candidate matches constraint" {
     if [[ "$(id -u)" -ne 0 ]]; then
         skip "requires root to reach version-selection logic"
     fi
     MOCK_DOCKER_ABSENT=1 MOCK_APT_VERSIONS="24.0.7" \
         run ed_install_docker ">=99.0.0"
-    [[ "$status" -eq "$ED_ERR_VERSION_NOT_FOUND" ]]
+    [[ "$status" -eq "$ED_ERR_NO_SUITABLE_VERSION" ]]
 }
 
 # bats test_tags=ensure_docker,install_docker,issue-132
