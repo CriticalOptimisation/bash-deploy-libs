@@ -204,4 +204,4 @@ return 0
 # | #43   | initial file — structural tests for PR change history sections |
 # | #134  | invert return-0 assertions; add full remote_run coverage [closes #133] |
 # | #142  | update history.md paths to .claude/commands/; remove skill-creator test [closes #141] |
-# | #TBD  | add structural coverage for ensure_docker.sh (issue #132)      |
+# | #135  | add structural coverage for ensure_docker.sh (issue #132)      |

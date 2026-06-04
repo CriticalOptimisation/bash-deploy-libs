@@ -480,4 +480,4 @@ Errors:
 
    PR     Summary
    -----  ---------------------------------------------------------------
-   #TBD   initial Stage 1 documentation (issue #132)
+   #135   initial Stage 1 & 2 documentation (issue #132)
