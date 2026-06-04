@@ -127,6 +127,7 @@ setup() {
     [[ -n "${ED_ERR_INSUFFICIENT_PRIVILEGE+x}" ]] || { echo "ED_ERR_INSUFFICIENT_PRIVILEGE missing" >&2; false; }
     [[ -n "${ED_ERR_MISSING_ARGUMENT+x}" ]]       || { echo "ED_ERR_MISSING_ARGUMENT missing" >&2;       false; }
     [[ -n "${ED_ERR_SYNTAX_ERROR+x}" ]]           || { echo "ED_ERR_SYNTAX_ERROR missing" >&2;           false; }
+    [[ -n "${ED_ERR_RESERVED_VAR_NAME+x}" ]]      || { echo "ED_ERR_RESERVED_VAR_NAME missing" >&2;      false; }
     [[ -n "${ED_ERR_NO_DOCKER+x}" ]]              || { echo "ED_ERR_NO_DOCKER missing" >&2;              false; }
     [[ -n "${ED_ERR_NO_COMPOSE+x}" ]]             || { echo "ED_ERR_NO_COMPOSE missing" >&2;             false; }
     [[ -n "${ED_ERR_WRONG_VERSION+x}" ]]          || { echo "ED_ERR_WRONG_VERSION missing" >&2;          false; }
@@ -143,6 +144,7 @@ setup() {
     [[ "$ED_ERR_INSUFFICIENT_PRIVILEGE" -eq 7  ]]
     [[ "$ED_ERR_MISSING_ARGUMENT"       -eq 8  ]]
     [[ "$ED_ERR_SYNTAX_ERROR"           -eq 9  ]]
+    [[ "$ED_ERR_RESERVED_VAR_NAME"      -eq 10 ]]
     [[ "$ED_ERR_NO_DOCKER"              -eq 13 ]]
     [[ "$ED_ERR_NO_COMPOSE"             -eq 14 ]]
     [[ "$ED_ERR_WRONG_VERSION"          -eq 15 ]]
@@ -158,6 +160,69 @@ setup() {
     [[ "$(type -t ed_has_docker)"       == "function" ]]
     [[ "$(type -t ed_install_docker)"   == "function" ]]
     [[ "$(type -t ed_uninstall_docker)" == "function" ]]
+}
+
+# bats test_tags=ensure_docker,source,issue-132
+@test "Layer 2 entry points are defined after sourcing" {
+    [[ "$(type -t ed_ensure_docker)"   == "function" ]]
+    [[ "$(type -t ed_docker_version)"  == "function" ]]
+    [[ "$(type -t ed_cleanup)"         == "function" ]]
+}
+
+# ---------------------------------------------------------------------------
+# --list-reserved
+# ---------------------------------------------------------------------------
+
+# bats test_tags=ensure_docker,list_reserved,issue-132
+@test "ed_ensure_docker --list-reserved exits 0 and prints at least one name" {
+    run ed_ensure_docker --list-reserved
+    [[ "$status" -eq 0 ]]
+    [[ -n "$output" ]]
+}
+
+# bats test_tags=ensure_docker,list_reserved,issue-132
+@test "ed_ensure_docker --list-reserved output contains OPTARG" {
+    run ed_ensure_docker --list-reserved
+    [[ "$status" -eq 0 ]]
+    grep -qx "OPTARG" <<< "$output"
+}
+
+# bats test_tags=ensure_docker,list_reserved,issue-132
+@test "ed_docker_version --list-reserved output matches ed_ensure_docker" {
+    run ed_ensure_docker --list-reserved
+    local expected="$output"
+    run ed_docker_version --list-reserved
+    [[ "$output" == "$expected" ]]
+}
+
+# bats test_tags=ensure_docker,list_reserved,issue-132
+@test "ed_cleanup --list-reserved output matches ed_ensure_docker" {
+    run ed_ensure_docker --list-reserved
+    local expected="$output"
+    run ed_cleanup --list-reserved
+    [[ "$output" == "$expected" ]]
+}
+
+# ---------------------------------------------------------------------------
+# Reserved variable name rejection
+# ---------------------------------------------------------------------------
+
+# bats test_tags=ensure_docker,reserved,issue-132
+@test "ed_ensure_docker -S OPTARG returns ED_ERR_RESERVED_VAR_NAME" {
+    run ed_ensure_docker -S OPTARG
+    [[ "$status" -eq "$ED_ERR_RESERVED_VAR_NAME" ]]
+}
+
+# bats test_tags=ensure_docker,reserved,issue-132
+@test "ed_docker_version -S OPTARG returns ED_ERR_RESERVED_VAR_NAME" {
+    run ed_docker_version -S OPTARG
+    [[ "$status" -eq "$ED_ERR_RESERVED_VAR_NAME" ]]
+}
+
+# bats test_tags=ensure_docker,reserved,issue-132
+@test "ed_cleanup -S OPTARG returns ED_ERR_RESERVED_VAR_NAME" {
+    run ed_cleanup -S OPTARG
+    [[ "$status" -eq "$ED_ERR_RESERVED_VAR_NAME" ]]
 }
 
 # ---------------------------------------------------------------------------

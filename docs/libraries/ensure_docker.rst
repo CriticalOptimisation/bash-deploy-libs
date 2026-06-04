@@ -94,6 +94,9 @@ Error Codes
   not supplied.
 - ``ED_ERR_SYNTAX_ERROR=9``: an option or the version constraint string is
   malformed.
+- ``ED_ERR_RESERVED_VAR_NAME=10``: the name supplied to ``-S`` is reserved
+  for internal use.  Call any Layer 2 entry point with ``--list-reserved``
+  for the current list.
 - ``ED_ERR_NO_DOCKER=13``: Docker is absent, unreachable, or not on
   ``PATH``.
 - ``ED_ERR_NO_COMPOSE=14``: the Docker engine is present but the
@@ -225,60 +228,31 @@ State Consistency Policy
 This policy applies to every Layer 2 entry point
 (``ed_ensure_docker``, ``ed_docker_version``, ``ed_cleanup``).
 
-**Rule 1 — Two-level structure: entry point and body helper.**
-Every Layer 2 function is split into a thin API entry point and a body
-helper (``_ed_<name>_body``).  The entry point does the minimum work
-needed to extract the ``-S`` token variable name, then immediately copies
-the token value into a local and delegates all further work to the helper:
+**Rule 1 — Reserved variable names.**
+The name supplied to ``-S`` must not be one of the names reserved for
+internal use by the entry point.  Passing a reserved name is detected at
+runtime and returns ``ED_ERR_RESERVED_VAR_NAME`` before any system
+operation is attempted.  To obtain the current reserved list
+programmatically:
 
 .. code-block:: bash
 
-    ed_ensure_docker() {
-        # Option processing without getopts — extract -S <token_var> only
-        local __ed_token_var=""
-        # ... decode -S into __ed_token_var, validate it, return on error ...
-        local __ed_state_token="${!__ed_token_var}"
-        _ed_ensure_docker_body "$@" || return $?
-        printf -v "$__ed_token_var" '%s' "$__ed_state_token"
-    }
+    ed_ensure_docker --list-reserved   # prints one name per line, exits 0
 
-``${!__ed_token_var}`` is evaluated before ``__ed_state_token`` is
-declared, so even if the caller named their variable ``__ed_state_token``
-the indirection resolves correctly — ``__ed_state_token`` is not in the
-nameref collision space.  Any local declared *before* that line would be
-in the collision space, which is why the entry point declares nothing else.
-
-The body helper accesses ``__ed_state_token`` via dynamic scoping.  It
-restores the six state variables into its own frame, performs all
-validation and system operations, and persists updated state back into
-``__ed_state_token`` on success.  Because the state variables live in the
-helper's frame, not the entry point's, they are never in the entry
-point's collision space.  Within the helper, state variable names are not
-prefixed; all other locals use a ``__ed_`` prefix.
+Every Layer 2 entry point accepts ``--list-reserved`` with identical
+output, so any one of them can be used.  Currently the only reserved name
+is ``OPTARG``.
 
 **Rule 2 — Corrupt state is a hard failure.**
-If state restoration fails (invalid or corrupted HS2 token), the body
-helper emits an ``[ERROR]`` message to stderr and returns
+If state restoration fails (invalid or corrupted HS2 token), the entry
+point emits an ``[ERROR]`` message to stderr and returns
 ``ED_ERR_CORRUPT_STATE=4``.  Nothing is done to the system.
 
 **Rule 3 — Single persist point on success.**
-``hs_persist_state`` is called exactly once per body helper, at the
-successful exit path, after all system operations have completed.  On any
-failure path the helper returns without calling ``hs_persist_state``,
-leaving ``__ed_state_token`` (and therefore the caller's variable) unchanged.
-
-.. code-block:: bash
-
-    # Inside _ed_ensure_docker_body — persist on success only
-    local __ed_new_state=""
-    hs_persist_state -S __ed_new_state -- chain node_commit node_cons \
-        commit_ver commit_comp next_seq || return $?
-    __ed_state_token="$__ed_new_state"
-
-``hs_persist_state`` writes into a fresh local (no prior state → no
-collision possible).  Assigning back to ``__ed_state_token`` propagates
-the result to the entry point, which writes it to the caller's variable
-via ``printf -v``.
+``hs_persist_state`` is called exactly once, at the successful exit path,
+after all system operations have completed.  On any failure path the
+function returns without calling ``hs_persist_state``, leaving the
+caller's state variable unchanged.
 
 **Consequence.**  On failure, the system is unchanged *and* the caller's
 state variable is unchanged — there is nothing to undo.  On success, the
@@ -413,6 +387,7 @@ ed_ensure_docker
 ~~~~~~~~~~~~~~~~
 
 ``ed_ensure_docker -S <state_var> [[--update] [version_constraint]]``
+``ed_ensure_docker --list-reserved``
 
 Restores state, then ensures Docker is present and satisfies the given
 constraint, then appends one new node to the chain.  This function is
@@ -447,17 +422,19 @@ Behaviour:
 Errors:
 
 - ``ED_ERR_CORRUPT_STATE=4``: state token invalid at function entry.
-- ``ED_ERR_WRONG_VERSION=15``: no Docker version satisfies all constraints.
-- ``ED_ERR_NO_SUITABLE_VERSION=16``: no APT candidate satisfies the constraint.
-- ``ED_ERR_HOST_INCOMPATIBLE=21``: version found but cannot be installed.
 - ``ED_ERR_INSUFFICIENT_PRIVILEGE=7``: install attempted but not root.
 - ``ED_ERR_MISSING_ARGUMENT=8``: ``-S`` absent.
 - ``ED_ERR_SYNTAX_ERROR=9``: malformed option or constraint.
+- ``ED_ERR_RESERVED_VAR_NAME=10``: the name supplied to ``-S`` is reserved.
+- ``ED_ERR_WRONG_VERSION=15``: no Docker version satisfies all constraints.
+- ``ED_ERR_NO_SUITABLE_VERSION=16``: no APT candidate satisfies the constraint.
+- ``ED_ERR_HOST_INCOMPATIBLE=21``: version found but cannot be installed.
 
 ed_docker_version
 ~~~~~~~~~~~~~~~~~
 
 ``ed_docker_version -S <state_var> [-b] [-v] [-c]``
+``ed_docker_version --list-reserved``
 
 Restores state, then queries the live Docker process for the requested
 version fields.
@@ -472,15 +449,17 @@ This function does not modify state; ``hs_persist_state`` is not called.
 Errors:
 
 - ``ED_ERR_CORRUPT_STATE=4``: state token invalid at function entry.
-- ``ED_ERR_NO_DOCKER=13``: Docker unreachable.
-- ``ED_ERR_NO_COMPOSE=14``: Compose plugin missing.
 - ``ED_ERR_MISSING_ARGUMENT=8``: ``-S`` absent.
 - ``ED_ERR_SYNTAX_ERROR=9``: unknown flag.
+- ``ED_ERR_RESERVED_VAR_NAME=10``: the name supplied to ``-S`` is reserved.
+- ``ED_ERR_NO_DOCKER=13``: Docker unreachable.
+- ``ED_ERR_NO_COMPOSE=14``: Compose plugin missing.
 
 ed_cleanup
 ~~~~~~~~~~
 
 ``ed_cleanup -S <state_var> [build_number]``
+``ed_cleanup --list-reserved``
 
 Restores state, removes the terminal chain node, reverts the corresponding
 system change if any, and persists the updated state.
@@ -513,9 +492,10 @@ Revert algorithm:
 Errors:
 
 - ``ED_ERR_CORRUPT_STATE=4``: state token invalid at function entry.
-- ``ED_ERR_WRONG_VERSION=15``: ``build_number`` does not match terminal node.
 - ``ED_ERR_INSUFFICIENT_PRIVILEGE=7``: uninstall/downgrade attempted but not root.
 - ``ED_ERR_MISSING_ARGUMENT=8``: ``-S`` absent.
+- ``ED_ERR_RESERVED_VAR_NAME=10``: the name supplied to ``-S`` is reserved.
+- ``ED_ERR_WRONG_VERSION=15``: ``build_number`` does not match terminal node.
 
 ..
 
