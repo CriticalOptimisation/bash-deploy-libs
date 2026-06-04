@@ -167,30 +167,34 @@ ed_install_docker
 ``ed_install_docker [[--update] [version_constraint]]``
 
 Installs Docker CE and the Compose plugin via the official APT repository.
-This function is **not idempotent**: it fails with ``ED_ERR_ALREADY_INSTALLED``
-when Docker is already present and ``--update`` is not set.  Use
-``ed_ensure_docker`` when idempotency is required.
+Without ``--update`` the function refuses to run when Docker is already
+present, returning ``ED_ERR_ALREADY_INSTALLED``.  With ``--update`` the
+function is idempotent: if the installed version already satisfies the
+constraint it exits 0 without touching the system.
 
 Options:
 
-- ``--update``: upgrade an existing installation.  With ``--update`` and a
-  constraint, the target version is the newest APT candidate satisfying the
-  constraint.  A downgrade is performed when the target is older than the
-  installed version.
+- ``--update``: allow installation onto a host that already has Docker.
+  With a constraint, the target version is the newest APT candidate
+  satisfying the constraint; a downgrade is performed when the target is
+  older than the installed version.  Without a constraint, the latest
+  stable release is targeted.
 
 Behaviour:
 
-- Checks "already installed" before the privilege check: if Docker is present
-  and ``--update`` is not set, returns ``ED_ERR_ALREADY_INSTALLED`` without
-  requiring root.
+- Checks "already installed" before the privilege check: if Docker is
+  present and ``--update`` is not set, returns ``ED_ERR_ALREADY_INSTALLED``
+  without requiring root.
 - Verifies caller is root (``id -u == 0``); returns
   ``ED_ERR_INSUFFICIENT_PRIVILEGE`` otherwise.
 - Idempotently adds the Docker CE APT repository and GPG key.
-- Selects the newest APT candidate satisfying the constraint (or installs the
-  latest stable release when no constraint is given).
+- Selects the newest APT candidate satisfying the constraint (or installs
+  the latest stable release when no constraint is given).
 - Installs ``docker-ce``, ``docker-ce-cli``, ``containerd.io``,
   ``docker-compose-plugin``.
-- Polls ``/var/run/docker.sock`` (up to 30 s) before returning.
+- Polls the daemon socket (obtained from ``docker context inspect`` —
+  honours custom ``DOCKER_HOST`` / context configuration) for up to 30 s
+  before returning.
 - Verifies the installation by calling ``ed_has_docker [constraint]``.
 
 Errors:
@@ -221,37 +225,64 @@ State Consistency Policy
 This policy applies to every Layer 2 entry point
 (``ed_ensure_docker``, ``ed_docker_version``, ``ed_cleanup``).
 
-**Rule 1 — Full restoration at entry.**
-The very first operation of every stateful entry point is restoring all
-five state variables from the ``-S`` token.  No argument validation,
-constraint checking, or system operation precedes this step.
+**Rule 1 — Two-level structure: entry point and body helper.**
+Every Layer 2 function is split into a thin API entry point and a body
+helper (``_ed_<name>_body``).  The entry point does the minimum work
+needed to extract the ``-S`` token variable name, then immediately copies
+the token value into a local and delegates all further work to the helper:
+
+.. code-block:: bash
+
+    ed_ensure_docker() {
+        # Option processing without getopts — extract -S <token_var> only
+        local __ed_token_var=""
+        # ... decode -S into __ed_token_var, validate it, return on error ...
+        local __ed_state_token="${!__ed_token_var}"
+        _ed_ensure_docker_body "$@" || return $?
+        printf -v "$__ed_token_var" '%s' "$__ed_state_token"
+    }
+
+``${!__ed_token_var}`` is evaluated before ``__ed_state_token`` is
+declared, so even if the caller named their variable ``__ed_state_token``
+the indirection resolves correctly — ``__ed_state_token`` is not in the
+nameref collision space.  Any local declared *before* that line would be
+in the collision space, which is why the entry point declares nothing else.
+
+The body helper accesses ``__ed_state_token`` via dynamic scoping.  It
+restores the six state variables into its own frame, performs all
+validation and system operations, and persists updated state back into
+``__ed_state_token`` on success.  Because the state variables live in the
+helper's frame, not the entry point's, they are never in the entry
+point's collision space.  Within the helper, state variable names are not
+prefixed; all other locals use a ``__ed_`` prefix.
 
 **Rule 2 — Corrupt state is a hard failure.**
-If restoration fails (invalid or corrupted HS2 token), the entry point
-emits an ``[ERROR]`` message to stderr and returns
+If state restoration fails (invalid or corrupted HS2 token), the body
+helper emits an ``[ERROR]`` message to stderr and returns
 ``ED_ERR_CORRUPT_STATE=4``.  Nothing is done to the system.
 
 **Rule 3 — Single persist point on success.**
-``hs_persist_state`` is called exactly once, at the successful exit of
-the entry point, after all system operations have completed.  On any
-failure path the function returns without calling ``hs_persist_state``,
-leaving the state token identical to what was passed in.
+``hs_persist_state`` is called exactly once per body helper, at the
+successful exit path, after all system operations have completed.  On any
+failure path the helper returns without calling ``hs_persist_state``,
+leaving ``__ed_state_token`` (and therefore the caller's variable) unchanged.
 
-Implementation pattern::
+.. code-block:: bash
 
-    local _new_state=""
-    hs_persist_state -S _new_state -- chain node_commit node_cons \
-        commit_ver commit_comp next_seq
-    printf -v "$_state_var" '%s' "$_new_state"
+    # Inside _ed_ensure_docker_body — persist on success only
+    local __ed_new_state=""
+    hs_persist_state -S __ed_new_state -- chain node_commit node_cons \
+        commit_ver commit_comp next_seq || return $?
+    __ed_state_token="$__ed_new_state"
 
 ``hs_persist_state`` writes into a fresh local (no prior state → no
-collision possible).  The final ``printf -v`` copies the serialised token
-into the caller's variable in a single Bash string assignment — atomic in
-the Bash memory model.
+collision possible).  Assigning back to ``__ed_state_token`` propagates
+the result to the entry point, which writes it to the caller's variable
+via ``printf -v``.
 
-**Consequence.**  On failure, the system is unchanged *and* the state
-token is unchanged — there is nothing to undo.  On success, the state
-token is updated atomically to reflect the completed operation.
+**Consequence.**  On failure, the system is unchanged *and* the caller's
+state variable is unchanged — there is nothing to undo.  On success, the
+caller's variable is updated atomically after all operations complete.
 
 **``ed_ensure_docker`` is not idempotent.**
 Every **successful** call appends one new node to the chain and persists
