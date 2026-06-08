@@ -1,0 +1,2 @@
+- [handle-state skill update pattern](feedback_handle_state_skill.md) — token-routing helpers require eval+subshell pattern; always document all 3 forms of hs_extract_token
+- [hs_extract_token/hs_write_token zero-collision pattern](project_issue136.md) — introduced in issue #136; subshell eval pattern eliminates nameref collision from issue #104
