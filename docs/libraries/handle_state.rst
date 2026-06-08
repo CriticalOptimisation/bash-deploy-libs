@@ -272,6 +272,201 @@ Errors:
   set (including empty string); ``unset`` the variable first if an overwrite
   is intended.
 
+hs_extract_token
+~~~~~~~~~~~~~~~~
+
+``hs_extract_token`` has three call forms depending on which argument position
+holds ``--list-reserved``.
+
+**Direct query form** — ``$1`` is ``--list-reserved``:
+
+.. code-block:: bash
+
+   hs_extract_token --list-reserved
+
+Prints the names of every local in ``hs_extract_token``'s own frame, one per
+line (identical output to ``hs_persist_state --list-reserved``). These are the
+names prohibited as the ``-S`` argument to any entry point that delegates to
+``hs_extract_token``. The list is derived dynamically from ``local -p`` so that
+future edits to this function are automatically reflected.
+
+**Normal eval form** — ``$1`` is the local name, ``$2..`` are the forwarded args:
+
+.. code-block:: bash
+
+   eval "$(hs_extract_token __mod_state_token "$@")"
+
+Parses ``-S <statevar>`` from the forwarded options and prints either
+``local <local_name>='<token_value>'`` on success or ``bash -c 'exit N'`` on
+error. Runs in a ``$(...)`` subshell so no local from the caller's frame is
+visible at fork time — the collision space is zero.
+
+**Eval-code --list-reserved form** — ``$1`` is the local name, ``$2`` is
+``--list-reserved``, ``$3..`` are the forwarded args:
+
+.. code-block:: bash
+
+   eval "$(hs_extract_token __mod_state_token --list-reserved "$@")"
+
+``$3..`` are the caller's forwarded args (i.e. ``"$@"`` from the entry-point).
+If ``--list-reserved`` appears anywhere in ``$3..``, emits two sentinels:
+
+.. code-block:: bash
+
+   local list_reserved=1       # marks --list-reserved mode in the entry-point frame
+   local __mod_state_token=''  # token local pre-declared so it shows up in the
+                                # lp_snapshot the entry-point takes next
+
+The entry-point detects ``list_reserved`` with ``_hs_local_exists``, takes a
+combined ``local lp_snapshot="$(local -p)"`` snapshot (which excludes
+``lp_snapshot`` itself), and calls ``_hs_print_reserved_names "$lp_snapshot"
+list_reserved`` to emit every local except ``list_reserved``.
+
+If ``--list-reserved`` is **not** present in ``$3..``, falls through to normal
+token extraction using ``$3..`` as the argument list — identical to the normal
+eval form.
+
+This pattern ensures that both the names from ``hs_extract_token``'s own frame
+(``__hs_remaining``, ``__hs_processed``) — reported by the direct query form and
+rejected by ``_hs_resolve_state_inputs`` — and the entry-point's own token local
+(e.g. ``__mod_state_token``) all appear in the ``--list-reserved`` output.
+
+Errors: same set as ``_hs_resolve_state_inputs``; no new codes.
+
+hs_write_token
+~~~~~~~~~~~~~~
+
+``hs_write_token`` writes an updated state token value back to the caller's variable.
+
+- Usage: ``eval "$(hs_write_token <source_local> [forwarded args] -S <statevar>)"``
+- ``$1`` is the name of the local holding the updated token (accessed by position).
+- The forwarded parameter list (``$2..``) must contain ``-S <statevar>``.
+- Runs in a ``$(...)`` subshell, inheriting the calling frame read-only.
+- ``--list-reserved``: when ``"${2-}" == "--list-reserved"``, emits a ``printf``
+  statement (valid Bash) that prints the reserved names when ``eval``\ed:
+  the function's own ``local -p`` names (``__hs_remaining``, ``__hs_processed``)
+  plus ``$1`` (the source local name, which is part of the entry point's collision
+  space for read-write functions).
+
+Behaviour:
+
+- Parses ``-S`` from the forwarded arguments using ``_hs_resolve_state_inputs``.
+- On success: prints ``<statevar>=$(printf '%q' "${!1}")`` — a plain assignment
+  (not ``local``) that ``eval`` executes to write the token back.
+- On error: prints ``bash -c 'exit N'``.
+
+Errors: same set as ``_hs_resolve_state_inputs``; ``HS_ERR_MISSING_ARGUMENT`` if
+``$1`` is absent.
+
+Entry-Point Pattern
+~~~~~~~~~~~~~~~~~~~
+
+Libraries that expose ``-S <statevar>`` and use ``handle_state.sh`` internally
+should structure each stateful entry point as follows to eliminate nameref
+collision risk.
+
+**Read-write entry point** (restores and persists state):
+
+.. code-block:: bash
+
+   my_func() {
+       # No local declared before eval — collision space at fork: empty.
+       # hs_write_token handles --list-reserved for read-write functions.
+       eval "$(hs_extract_token __mylib_state_token "$@")" || return $?
+       if ! _hs_local_exists "$(local -p)" list_reserved; then
+           _my_func_body "$@" || return $?
+       fi
+       # hs_write_token reports the full reserved list (including __mylib_state_token)
+       # when --list-reserved is in $@, otherwise writes the token back.
+       eval "$(hs_write_token __mylib_state_token "$@")" || return $?
+   }
+
+   _my_func_body() {
+       # __mylib_state_token visible via dynamic scoping — no prefix needed on locals.
+       local var1 var2
+       hs_read_persisted_state -S __mylib_state_token -- var1 var2 || return $?
+       # ... work ...
+       __mylib_state_token=""
+       hs_persist_state -S __mylib_state_token -- var1 var2 || return $?
+   }
+
+**Read-only entry point** (restores state but does not persist):
+
+.. code-block:: bash
+
+   my_ro_func() {
+       # Pass --list-reserved as $2 so hs_extract_token emits the list_reserved
+       # sentinel and the empty token local when the caller passes --list-reserved.
+       eval "$(hs_extract_token __mylib_state_token --list-reserved "$@")" || return $?
+       if _hs_local_exists "$(local -p)" list_reserved; then
+           # Snapshot taken after list_reserved and __mylib_state_token are declared.
+           # Combined form: lp_snapshot is absent from its own snapshot.
+           # shellcheck disable=SC2155
+           local lp_snapshot="$(local -p)"
+           _hs_print_reserved_names "$lp_snapshot" list_reserved
+           return 0
+       fi
+       _my_ro_func_body "$@" || return $?
+   }
+
+**Read/modify/write entry point** (updates one or more variables inside an
+existing token without replacing the whole state):
+
+When a function must change variables that are already stored in an opaque
+token it received from its caller, it must destroy and re-persist those
+variables — it cannot overwrite them in place.  Using ``hs_extract_token``
+and ``hs_write_token`` keeps the operation atomic from the caller's
+perspective: the token variable is either fully updated or left unchanged.
+
+.. code-block:: bash
+
+   my_update_func() {
+       # Zero collision surface before eval.
+       eval "$(hs_extract_token __mylib_state_token "$@")" || return $?
+       _my_update_func_body "$@" || return $?
+       eval "$(hs_write_token __mylib_state_token "$@")" || return $?
+   }
+
+   _my_update_func_body() {
+       local var1 var2
+       hs_read_persisted_state -S __mylib_state_token -- var1 var2 || return $?
+       # ... mutate var1, var2 as needed ...
+       # Destroy before re-persisting to avoid HS_ERR_VAR_NAME_COLLISION.
+       hs_destroy_state  -S __mylib_state_token -- var1 var2 || return $?
+       hs_persist_state  -S __mylib_state_token -- var1 var2 || return $?
+   }
+
+.. warning::
+
+   ``hs_destroy_state`` modifies the token **in the caller's variable**
+   immediately.  If ``hs_persist_state`` subsequently fails, the destroyed
+   variables are lost from the token.  Always call both functions in the
+   same body helper so that any error causes the whole entry point to abort
+   via ``return $?`` before ``hs_write_token`` propagates an incomplete
+   token back to the caller.  Bash's sequential execution model and the
+   fact that subshells cannot write back to the parent shell's variables
+   make this pattern safe under normal control flow: there is no concurrent
+   access that could observe a partially-updated token.
+
+.. note::
+
+   Subshells (``$(...)`` command substitutions and explicit ``( )``
+   subshell groups) inherit a **copy** of the parent shell's environment.
+   Any variable assignment or ``hs_persist_state`` call inside a subshell
+   affects only that copy; the parent's token variable is never updated.
+   This means ``handle_state.sh`` state can only be advanced by code that
+   runs directly in the relevant shell process.  Functions that run in a
+   subshell (e.g. to capture their output) cannot update the caller's token
+   even if they call ``hs_persist_state`` successfully.
+
+The module's ``--list-reserved`` output for read-write functions (via
+``hs_write_token``) includes ``__mylib_state_token`` plus
+``__hs_remaining`` and ``__hs_processed``; for read-only functions it
+includes ``__mylib_state_token``, ``__hs_remaining``, and
+``__hs_processed`` (the latter two because they are in the subshell frame
+that ``hs_extract_token`` inherits from when it resolves ``-S``, so
+``hs_extract_token --list-reserved`` reports them).
+
 Developer Reference
 -------------------
 
@@ -423,27 +618,50 @@ Source Listing
    :language: bash
    :linenos:
 
-..
+Change History
+--------------
 
-   Change History
+.. list-table::
+   :header-rows: 1
+   :widths: 10 90
 
-   PR     Summary
-   -----  -----------------------------------------------------------------
-   #23    feature/skills update
-   #32    batch security fixes [closes #7]
-   #38    do not return state via stdout
-   #63    refactor safer handle-state restoration flow [closes #62]
-   #83    fix hs_destroy_state rebuild subprocess helper [closes #82]
-   #90    remove internal-format mention, convenience form non-preferred
-   #91    add forwarded-args eval example for probe-snippet mode
-   #93    rename probe-snippet to implicit local restore [closes #76]
-   #94    emphasize implicit restore snippet is safe local code
-   #95    clarify caller evaluates probe code, not transmitted state
-   #96    add -S calling context to Examples section [closes #80]
-   #98    remove caveat implying raw eval of state is valid [closes #81]
-   #99    error on undeclared variable names [closes #1]
-   #102   guard nameref restore against undeclared variables [closes #100]
-   #103   reject function names with HS_ERR_UNKNOWN_VAR_NAME
-   #105   fix hs_persist_state dropping indexed array elements [closes #3]
-   #109   reduce nameref collision surface [closes #104]
-   #110   document HS_ERR_MULTIPLE_STATE_INPUTS for all entry points
+   * - PR
+     - Summary
+   * - #23
+     - feature/skills update
+   * - #32
+     - batch security fixes [closes #7]
+   * - #38
+     - do not return state via stdout
+   * - #63
+     - refactor safer handle-state restoration flow [closes #62]
+   * - #83
+     - fix hs_destroy_state rebuild subprocess helper [closes #82]
+   * - #90
+     - remove internal-format mention, convenience form non-preferred
+   * - #91
+     - add forwarded-args eval example for probe-snippet mode
+   * - #93
+     - rename probe-snippet to implicit local restore [closes #76]
+   * - #94
+     - emphasize implicit restore snippet is safe local code
+   * - #95
+     - clarify caller evaluates probe code, not transmitted state
+   * - #96
+     - add -S calling context to Examples section [closes #80]
+   * - #98
+     - remove caveat implying raw eval of state is valid [closes #81]
+   * - #TBD
+     - add hs_extract_token and hs_write_token; entry-point pattern (issue #136)
+   * - #99
+     - error on undeclared variable names [closes #1]
+   * - #102
+     - guard nameref restore against undeclared variables [closes #100]
+   * - #103
+     - reject function names with HS_ERR_UNKNOWN_VAR_NAME
+   * - #105
+     - fix hs_persist_state dropping indexed array elements [closes #3]
+   * - #109
+     - reduce nameref collision surface [closes #104]
+   * - #110
+     - document HS_ERR_MULTIPLE_STATE_INPUTS for all entry points
