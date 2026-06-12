@@ -284,18 +284,34 @@ hs_extract_token
    hs_extract_token --list-reserved
 
 Prints the names forming the collision surface of ``hs_extract_token`` itself,
-one per line (identical output to ``hs_persist_state --list-reserved``).
-These names are prohibited as the ``-S`` argument to any entry point that
-delegates to ``hs_extract_token``; ill-designed or write-capable entry points
-may add further prohibited names. The list is derived dynamically from
-``local -p`` so that future edits to this function are automatically reflected.
+one per line.  These names are prohibited as the ``-S`` argument to any entry
+point that delegates to ``hs_extract_token``; ill-designed or write-capable
+entry points may add further prohibited names.  The list is derived dynamically
+from ``local -p`` so that future edits to this function are automatically
+reflected.
+
+As of the current release the output is:
+
+.. code-block:: text
+
+   __hs_processed
+   __hs_remaining
+
+``hs_write_token`` reports the same two names plus the source-local name passed
+as ``$1``.  For example, ``hs_write_token __wt_tok --list-reserved`` outputs:
+
+.. code-block:: text
+
+   __hs_processed
+   __hs_remaining
+   __wt_tok
 
 .. note::
 
-   The reserved-name list is part of the minor API: it will not change its
-   prefix conventions across minor versions, but individual names may be added
-   or removed.  Code that avoids the entire ``__hs_`` namespace is unaffected
-   by such changes; code that checks for specific names may break on a minor
+   The reserved-name list is part of the minor API: its prefix conventions will
+   not change across minor versions, but individual names may be added or
+   removed.  Code that avoids the entire ``__hs_`` namespace is unaffected by
+   such changes; code that checks for specific names may break on a minor
    update.
 
 **Eval form** — ``$1`` is the local name, ``${@:2}`` are the forwarded args:
@@ -339,9 +355,9 @@ hs_write_token
 - ``$1`` is the name of the local holding the updated token (accessed by position).
 - The forwarded parameter list (``${@:2}``) must contain ``-S <statevar>``.
 - Runs in a ``$(...)`` subshell, inheriting the calling frame read-only.
-- ``--list-reserved`` (when ``$2 == --list-reserved``): prints the function's own
-  frame locals plus ``$1`` (the source local name, which is part of the entry-point's
-  collision space for read-write functions).
+- ``--list-reserved`` (when ``${*:2}`` is exactly ``--list-reserved``): prints
+  the function's own frame locals plus ``$1`` (the source local name, which is
+  part of the entry-point's collision space for read-write functions).
 
 Behaviour:
 

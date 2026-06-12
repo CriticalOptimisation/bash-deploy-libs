@@ -1743,6 +1743,20 @@ EOF
   outer_collision_test
 }
 
+# bats test_tags=hs_extract_token,issue-136
+@test "hs_extract_token — local name equals -S variable name: extracted value is preserved" {
+  # Validates that hs_extract_token __tok -S __tok works correctly when the
+  # destination local and the state variable share the same name.  The subshell
+  # reads the outer __tok value before eval declares the new local, so the
+  # extracted value must equal the original state variable value.
+  f() {
+    local __tok="token-value"
+    eval "$(hs_extract_token __tok -S __tok)" || return $?
+    [[ "$__tok" == "token-value" ]]
+  }
+  f
+}
+
 # ---------------------------------------------------------------------------
 # hs_write_token
 # ---------------------------------------------------------------------------
