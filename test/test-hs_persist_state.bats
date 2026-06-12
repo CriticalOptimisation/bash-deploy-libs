@@ -1656,20 +1656,22 @@ EOF
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — returns HS_ERR_STATE_VAR_UNINITIALIZED when -S absent" {
-  run bash -c "source \"$LIB\" && eval \"\$(hs_extract_token __et_tok)\""
+  f() { eval "$(hs_extract_token __et_tok)"; }
+  run f
   [[ "$status" -eq "$HS_ERR_STATE_VAR_UNINITIALIZED" ]]
 }
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — returns HS_ERR_MULTIPLE_STATE_INPUTS when -S given twice" {
-  local tok=""
-  run bash -c "source \"$LIB\" && eval \"\$(hs_extract_token __et_tok -S tok -S tok)\""
+  f() { local tok=""; eval "$(hs_extract_token __et_tok -S tok -S tok)"; }
+  run f
   [[ "$status" -eq "$HS_ERR_MULTIPLE_STATE_INPUTS" ]]
 }
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — returns HS_ERR_INVALID_VAR_NAME for invalid -S identifier" {
-  run bash -c "source \"$LIB\" && eval \"\$(hs_extract_token __et_tok -S '1invalid')\""
+  f() { eval "$(hs_extract_token __et_tok -S '1invalid')"; }
+  run f
   [[ "$status" -eq "$HS_ERR_INVALID_VAR_NAME" ]]
 }
 
@@ -1759,7 +1761,8 @@ EOF
 
 # bats test_tags=hs_write_token,issue-136
 @test "hs_write_token — returns HS_ERR_STATE_VAR_UNINITIALIZED when -S absent" {
-  run bash -c "source \"$LIB\" && eval \"\$(hs_write_token __wt_tok)\""
+  f() { eval "$(hs_write_token __wt_tok)"; }
+  run f
   [[ "$status" -eq "$HS_ERR_STATE_VAR_UNINITIALIZED" ]]
 }
 
@@ -1780,8 +1783,8 @@ EOF
 # bats test_tags=hs_write_token,issue-136
 @test "hs_write_token --list-reserved includes source local name" {
   # When called with __wt_tok as $1, --list-reserved output must include __wt_tok
-  run -0 bash -c "source \"$LIB\" && hs_write_token __wt_tok --list-reserved | grep -qx '__wt_tok'"
-  [[ "$status" -eq 0 ]]
+  run -0 hs_write_token __wt_tok --list-reserved
+  grep -qx '__wt_tok' <<< "$output"
 }
 
 # bats test_tags=hs_write_token,issue-136
@@ -1807,14 +1810,18 @@ EOF
 
 # bats test_tags=hs_write_token,issue-136
 @test "hs_write_token --list-reserved direct query rejects extra arguments" {
-  run bash -c "source \"$LIB\" && hs_write_token --list-reserved extra"
+  f() { hs_write_token --list-reserved extra; }
+  run --separate-stderr f
   [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
+  [[ "$stderr" == *"--list-reserved takes no other arguments"* ]]
 }
 
 # bats test_tags=hs_write_token,issue-136
 @test "hs_write_token with-source-local --list-reserved rejects extra arguments" {
-  run bash -c "source \"$LIB\" && eval \"\$(hs_write_token __wt_tok --list-reserved extra)\""
+  f() { eval "$(hs_write_token __wt_tok --list-reserved extra)"; }
+  run --separate-stderr f
   [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
+  [[ "$stderr" == *"--list-reserved takes no other arguments"* ]]
 }
 
 # bats test_tags=hs_extract_token,hs_write_token,issue-136
