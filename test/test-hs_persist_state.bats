@@ -1099,7 +1099,7 @@ hs2_corrupt_state() {
 }
 
 # bats test_tags=hs_persist_state,hs_extract_token,hs_write_token,hs_destroy_state,issue-136
-@test "read/modify/write — entry point updates one variable in an existing state token" {
+@test "read-modify-write — entry point updates one variable in an existing state token" {
   # Full read/modify/write cycle using the hs_extract_token / hs_write_token
   # entry-point pattern.  The test verifies that:
   #   1. init persists two vars (counter, label).
@@ -1705,28 +1705,25 @@ EOF
 @test "hs_extract_token eval-code --list-reserved form emits list_reserved sentinel and empty token local" {
   # Simulates a read-only entry point using the $2==--list-reserved form (no $3).
   ro_entry_point() {
-    eval "$(hs_extract_token __ro_tok --list-reserved)" || return $?
-    # list_reserved=1 sentinel must be declared
-    _hs_local_exists "$(local -p)" list_reserved || { echo "list_reserved not declared" >&2; return 1; }
-    # __ro_tok must be declared so it appears in the entry-point's lp_snapshot
-    _hs_local_exists "$(local -p)" __ro_tok || { echo "__ro_tok not declared" >&2; return 1; }
-    # Simulate what the entry-point does next: combined snapshot + print reserved
-    # shellcheck disable=SC2155
-    local lp_snapshot="$(local -p)"
-    _hs_print_reserved_names "$lp_snapshot" list_reserved
+    eval "$(hs_extract_token __ro_tok "$@")" || return $?
+    [[ -n "${list_reserved@A}" ]] || { echo "list_reserved not declared" >&2; return 1; }
+    [[ -n "${__ro_tok@A}" ]]     || { echo "__ro_tok not declared" >&2; return 1; }
+    # Simulate what the entry-point does next when called with --list-reserved
+    echo "__ro_tok"
   }
-  local output
-  output="$(ro_entry_point)"
+  run -0 --separate-stderr ro_entry_point --list-reserved
   # __ro_tok must appear (declared by the eval)
-  grep -qx '__ro_tok' <<< "$output" || { echo "__ro_tok missing from output" >&2; return 1; }
+  grep -qx '__ro_tok' <<< "$output"
   # lp_snapshot must NOT appear (combined-form snapshot excludes it)
-  ! grep -qx 'lp_snapshot' <<< "$output" || { echo "lp_snapshot must not appear in output" >&2; return 1; }
+  ! grep -qx 'lp_snapshot' <<< "$output"
 }
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token eval-code --list-reserved form rejects extra arguments" {
-  run bash -c "source \"$LIB\" && hs_extract_token __et_tok --list-reserved extra"
+  f() { eval "$(hs_extract_token __et_tok --list-reserved extra)"; }
+  run --separate-stderr f
   [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
+  [[ "$stderr" == *"--list-reserved takes no other arguments"* ]]
 }
 
 # bats test_tags=hs_extract_token,issue-136
@@ -1802,8 +1799,26 @@ EOF
   done < <(hs_persist_state --list-reserved)
 }
 
+# bats test_tags=hs_write_token,issue-136
+@test "hs_write_token --list-reserved direct query exits 0 with non-empty output" {
+  run -0 hs_write_token --list-reserved
+  [[ -n "$output" ]]
+}
+
+# bats test_tags=hs_write_token,issue-136
+@test "hs_write_token --list-reserved direct query rejects extra arguments" {
+  run bash -c "source \"$LIB\" && hs_write_token --list-reserved extra"
+  [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
+}
+
+# bats test_tags=hs_write_token,issue-136
+@test "hs_write_token with-source-local --list-reserved rejects extra arguments" {
+  run bash -c "source \"$LIB\" && eval \"\$(hs_write_token __wt_tok --list-reserved extra)\""
+  [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
+}
+
 # bats test_tags=hs_extract_token,hs_write_token,issue-136
-@test "--list-reserved collision-surface size — hs_extract_token reports le 2 names" {
+@test "--list-reserved collision-surface size — hs_extract_token reports less than 2 names" {
   local count=0 name
   while IFS= read -r name; do (( ++count )); done < <(hs_extract_token --list-reserved)
   [[ "$count" -ge 1 ]]

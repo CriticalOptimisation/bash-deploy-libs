@@ -479,37 +479,57 @@ hs_extract_token() {
 
 # --- hs_write_token -----------------------------------------------------------
 # Function:
+#   hs_write_token --list-reserved
+#   hs_write_token <source_local> --list-reserved
 #   hs_write_token <source_local> [forwarded options] -S <statevar>
 # Description:
-#   Intended to be called via: eval "$(hs_write_token __mod_state_token "$@")"
-#   Parses -S <statevar> from the forwarded options and prints either:
-#     <statevar>='<updated_value>'   on success (plain assignment, not local)
-#     bash -c 'exit N'               on error
-#   Running in a subshell context; reads ${!1} (the source local value) from the
-#   inherited frame copy.
-#   --list-reserved: builds the reserved-name list from this function's own
-#   local -p snapshot plus $1 (the source-local name, which is part of the entry
-#   point's collision space for read-write functions). Emits a printf statement
-#   so eval prints the names to the entry point's stdout.
+#   Direct query form ($1 == --list-reserved, no further args):
+#     Prints every local in this function's own frame, one per line; identical
+#     output to hs_persist_state --list-reserved.  Called automatically by
+#     _hs_resolve_state_inputs to build the collision-section guard.
+#     Returns HS_ERR_INVALID_ARGUMENT_TYPE if any extra arguments are present.
+#
+#   With-source-local form ($1 is source_local, $2 == --list-reserved, no $3):
+#     Prints own collision surface plus $1 (the source-local name, which is
+#     part of the entry-point's collision section for read-write functions).
+#     Returns HS_ERR_INVALID_ARGUMENT_TYPE (via eval-code) if any $3.. present.
+#
+#   Normal eval form ($1 is source_local, $2 is not --list-reserved):
+#     eval "$(hs_write_token __mod_state_token "$@")"
+#     Parses -S <statevar> from forwarded opts ($2..) and prints either:
+#       <statevar>='<updated_value>'   on success (plain assignment, not local)
+#       bash -c 'exit N'              on error (causes eval to return N)
+#     Runs in a subshell: no caller local visible at fork, collision space = 0.
 # Arguments:
-#   $1          - name of the local holding the updated token value
-#   $2..        - forwarded parameter list (must contain -S <statevar>)
+#   $1          - --list-reserved (direct query) OR name of the local holding
+#                 the updated token value
+#   $2..        - forwarded parameter list (normal eval form: must contain -S)
 hs_write_token() {
     local -a __hs_remaining=()
     local -A __hs_processed=()
-    if [[ "${2-}" == "--list-reserved" ]]; then
+    if [[ "${1-}" == "--list-reserved" ]]; then
+        if [[ $# -gt 1 ]]; then
+            echo "[ERROR] hs_write_token: --list-reserved takes no other arguments." >&2
+            return "$HS_ERR_INVALID_ARGUMENT_TYPE"
+        fi
+        # Direct query form: print own collision surface, one name per line.
         # shellcheck disable=SC2155
         local lp_snapshot="$(local -p)"
-        # Build printf args: names from our own frame + $1 (entry-point local)
-        local __hs_wt_names=()
-        local __hs_wt_n
-        while IFS= read -r __hs_wt_n; do
-            __hs_wt_names+=("$__hs_wt_n")
-        done < <(_hs_print_reserved_names "$lp_snapshot" "")
-        __hs_wt_names+=("$1")
-        # shellcheck disable=SC2001
-        printf 'printf '\''%%s\\n'\'' %s\n' \
-            "$(printf "'%s' " "${__hs_wt_names[@]}")"
+        _hs_print_reserved_names "$lp_snapshot" lp_snapshot
+        return 0
+    fi
+    if [[ "${2-}" == "--list-reserved" ]]; then
+        if [[ $# -gt 2 ]]; then
+            echo "[ERROR] hs_write_token: --list-reserved takes no other arguments." >&2
+            printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_ARGUMENT_TYPE"
+            return 0
+        fi
+        # With-source-local form: print own collision surface plus $1 (the
+        # source-local name, which is part of the entry-point's collision section).
+        # shellcheck disable=SC2155
+        local lp_snapshot="$(local -p)"
+        _hs_print_reserved_names "$lp_snapshot" lp_snapshot
+        printf '%s\n' "$1"
         return 0
     fi
     _hs_resolve_state_inputs hs_write_token S: "${@:2}" \
