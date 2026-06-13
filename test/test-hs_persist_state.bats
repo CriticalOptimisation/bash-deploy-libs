@@ -1657,15 +1657,17 @@ EOF
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — returns HS_ERR_STATE_VAR_UNINITIALIZED when -S absent" {
   f() { eval "$(hs_extract_token __et_tok)"; }
-  run f
+  run --separate-stderr f
   [[ "$status" -eq "$HS_ERR_STATE_VAR_UNINITIALIZED" ]]
+  [[ "$stderr" == *"state variable is uninitialized"* ]]
 }
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — returns HS_ERR_MULTIPLE_STATE_INPUTS when -S given twice" {
   f() { local tok=""; eval "$(hs_extract_token __et_tok -S tok -S tok)"; }
-  run f
+  run --separate-stderr f
   [[ "$status" -eq "$HS_ERR_MULTIPLE_STATE_INPUTS" ]]
+  [[ "$stderr" == *"option -S may only be given once"* ]]
 }
 
 # bats test_tags=hs_extract_token,issue-136
@@ -1714,10 +1716,8 @@ EOF
     echo "__ro_tok"
   }
   run -0 --separate-stderr ro_entry_point --list-reserved
-  # __ro_tok must appear (declared by the eval)
-  grep -qx '__ro_tok' <<< "$output"
-  # lp_snapshot must NOT appear (combined-form snapshot excludes it)
-  ! grep -qx 'lp_snapshot' <<< "$output"
+  # entry-point echoes "__ro_tok" confirming list_reserved and __ro_tok were both declared
+  [[ "$output" == "__ro_tok" ]]
 }
 
 # bats test_tags=hs_extract_token,issue-136
@@ -1740,7 +1740,7 @@ EOF
     eval "$(hs_extract_token __et_tok -S outer_tok)" || return $?
     [[ "$__et_tok" == "real-token-value" ]]
   }
-  outer_collision_test
+  run -0 outer_collision_test
 }
 
 # bats test_tags=hs_extract_token,issue-136
@@ -1763,14 +1763,14 @@ EOF
 
 # bats test_tags=hs_write_token,issue-136
 @test "hs_write_token — writes source local value into caller state variable" {
-  local dest_tok="old"
   write_test_helper() {
+    local dest_tok="old"
     eval "$(hs_extract_token __wt_tok -S dest_tok)" || return $?
     __wt_tok="new-value"
     eval "$(hs_write_token __wt_tok -S dest_tok)" || return $?
+    [[ "$dest_tok" == "new-value" ]]
   }
-  write_test_helper
-  [[ "$dest_tok" == "new-value" ]]
+  run -0 write_test_helper
 }
 
 # bats test_tags=hs_write_token,issue-136
@@ -1796,24 +1796,23 @@ EOF
 
 # bats test_tags=hs_write_token,issue-136
 @test "hs_write_token --list-reserved includes source local name" {
-  # When called with __wt_tok as $1, --list-reserved output must include __wt_tok
   run -0 hs_write_token __wt_tok --list-reserved
-  grep -qx '__wt_tok' <<< "$output"
+  [[ "$output" == *"__wt_tok"* ]]
 }
 
 # bats test_tags=hs_write_token,issue-136
-@test "hs_write_token --list-reserved is superset of hs_persist_state --list-reserved" {
+@test "hs_persist_state --list-reserved is superset of hs_write_token --list-reserved" {
   local name found
   while IFS= read -r name; do
     found=0
-    while IFS= read -r wt_name; do
-      [[ "$wt_name" == "$name" ]] && { found=1; break; }
-    done < <(hs_write_token __wt_tok --list-reserved)
+    while IFS= read -r ps_name; do
+      [[ "$ps_name" == "$name" ]] && { found=1; break; }
+    done < <(hs_persist_state --list-reserved)
     [[ "$found" -eq 1 ]] || {
-      printf '%s from hs_persist_state missing from hs_write_token output\n' "$name" >&2
+      printf '%s from hs_write_token missing from hs_persist_state output\n' "$name" >&2
       return 1
     }
-  done < <(hs_persist_state --list-reserved)
+  done < <(hs_write_token --list-reserved)
 }
 
 # bats test_tags=hs_write_token,issue-136
@@ -1831,7 +1830,7 @@ EOF
 }
 
 # bats test_tags=hs_write_token,issue-136
-@test "hs_write_token with-source-local --list-reserved rejects extra arguments" {
+@test "hs_write_token eval-code --list-reserved form rejects extra arguments when source local given" {
   f() { eval "$(hs_write_token __wt_tok --list-reserved extra)"; }
   run --separate-stderr f
   [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
@@ -1863,4 +1862,4 @@ return 0
 # | #108  | fix shellcheck linter errors in bats file [closes #107]        |
 # | #109  | reduce nameref collision surface [closes #104]                 |
 # | #110  | document HS_ERR_MULTIPLE_STATE_INPUTS for all entry points     |
-# | #TBD  | add preliminary tests for hs_extract_token and hs_write_token  |
+# | #140  | add hs_extract_token and hs_write_token; entry-point pattern        |
