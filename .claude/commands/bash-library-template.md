@@ -8,8 +8,8 @@ Use this skill when the user asks to create a new Bash library, scaffold a Bash 
 
 ## Assets
 
-- `.github/skills/bash-library-template/assets/bash_library_template.sh`: base library template modeled after `config/handle_state.sh`.
-- `.github/skills/bash-library-template/assets/bash_library_test_template.bats`: unit test template for the library.
+- `.claude/commands/bash-library-template/assets/bash_library_template.sh`: base library template modeled after `config/handle_state.sh`.
+- `.claude/commands/bash-library-template/assets/bash_library_test_template.bats`: unit test template for the library.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ Use this skill when the user asks to create a new Bash library, scaffold a Bash 
    - Function prefix (e.g., `hs_`), and include guard name (e.g., `__LIB_<NAME>_INCLUDED`).
 
 2. **Create the library file**
-   - Copy the template from `.github/skills/bash-library-template/assets/bash_library_template.sh`.
+   - Copy the template from `.claude/commands/bash-library-template/assets/bash_library_template.sh`.
    - Replace placeholders: `LIB_NAME`, `LIB_FILE`, `LIB_PREFIX`, `INCLUDE_GUARD`.
    - Keep sections and comment layout consistent with `config/handle_state.sh`.
 
@@ -27,7 +27,7 @@ Use this skill when the user asks to create a new Bash library, scaffold a Bash 
    - Add the new doc file to `docs/libraries/index.rst` under the toctree.
 
 4. **Initialize unit tests**
-   - Create `test/test-<library>.bats` from `.github/skills/bash-library-template/assets/bash_library_test_template.bats`.
+   - Create `test/test-<library>.bats` from `.claude/commands/bash-library-template/assets/bash_library_test_template.bats`.
    - Replace placeholders: `LIB_NAME`, `LIB_FILE`, `LIB_PREFIX`.
    - Keep the default test skipped unless an env flag is set, so the suite passes by default.
 

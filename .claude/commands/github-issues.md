@@ -21,7 +21,7 @@ Manage GitHub issues using the `@modelcontextprotocol/server-github` MCP server.
 
 1. **Determine action**: Create, update, or query?
 2. **Gather context**: Get repo info, existing labels, milestones if needed
-3. **Structure content**: Use appropriate template from `.github/skills/github-issues/references/templates.md`
+3. **Structure content**: Use appropriate template from `.claude/commands/github-issues/references/templates.md`
 4. **Execute**: Call the appropriate MCP tool
 5. **Confirm**: Report the issue URL to user
 
@@ -56,7 +56,7 @@ milestone: milestone number (integer)
 
 ### Body Structure
 
-Always use the templates in `.github/skills/github-issues/references/templates.md`. Choose based on issue type:
+Always use the templates in `.claude/commands/github-issues/references/templates.md`. Choose based on issue type:
 
 | User Request | Template |
 |--------------|----------|

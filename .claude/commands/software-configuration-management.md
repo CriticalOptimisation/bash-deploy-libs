@@ -37,13 +37,13 @@ When handling issues, use the `github-issues` skill for execution but follow SCM
 
 1. **Determine action**: Decide if the task is issue creation, update, query, or other housekeeping.
 2. **Gather context**: Review repo details, existing labels/milestones, and any related issues.
-3. **Structure content**: Always use the custom templates from `.github/skills/software-configuration-management/references/templates.md`, which are tailored for this repository and override any generic templates in the `github-issues` skill.
+3. **Structure content**: Always use the custom templates from `.claude/commands/software-configuration-management/references/templates.md`, which are tailored for this repository and override any generic templates in the `github-issues` skill.
 4. **Execute**: Call the appropriate MCP tool or `gh` command via the `github-issues` skill.
 5. **Confirm**: Verify the result on GitHub and ensure the action aligns with meta-task rules.
 
 ## Implementation Workflow Summary
 
-Companion reference files under `.github/skills/software-configuration-management/references/` contain full details:
+Companion reference files under `.claude/commands/software-configuration-management/references/` contain full details:
 
 - `shared-issue-understanding.md` — Task 2: Issue Assessment & Approval
 - `implementation-planning.md` — Task 3: Branch Creation and Planning
