@@ -366,12 +366,11 @@ Behaviour:
   that ``eval`` executes to write the token back.
 - On error: prints ``bash -c 'exit N'``.
 
-The collision surface of ``hs_write_token`` includes at minimum ``__mylib_state_token``
-(the source local) plus ``hs_extract_token``'s own locals.  Name collision on the source
-local prevents ``hs_write_token`` from updating the caller's state variable: any local in
-the entry-point frame that shadows the ``-S`` variable makes the assignment a no-op.
-Follow the body-helper pattern so that only the token local is declared before
-``hs_write_token`` is called.
+The collision surface includes at minimum the source-local name (``$1``) plus
+``hs_extract_token``'s own locals.  Any other locals declared in the entry-point frame
+before this call also add to the surface.  When the body-helper pattern is followed
+strictly — where the body helper (not the entry point) declares and updates the token local
+— only those minimum names appear.
 
 .. note::
 
@@ -380,6 +379,8 @@ Follow the body-helper pattern so that only the token local is declared before
 
 Errors: same set as the shared option parser; ``HS_ERR_MISSING_ARGUMENT`` if
 ``$1`` is absent.
+
+See `Entry-Point Pattern`_ for canonical usage examples of both functions.
 
 Entry-Point Pattern
 ~~~~~~~~~~~~~~~~~~~
@@ -405,7 +406,7 @@ risk.
 
    _mylib_func() {
        local var1 var2
-       hs_read_persisted_state -S __mylib_state_token -- var1 var2 || return $?
+       eval "$(hs_read_persisted_state -S __mylib_state_token)" || return $?   # implicit form preferred
        # ... work ...
        hs_destroy_state -S __mylib_state_token -- var1 var2 || return $?
        hs_persist_state -S __mylib_state_token -- var1 var2 || return $?
@@ -427,7 +428,7 @@ to ``hs_extract_token --list-reserved``.
 
    _mylib_ro_func() {
        local var1 var2
-       hs_read_persisted_state -S __mylib_state_token -- var1 var2 || return $?
+       eval "$(hs_read_persisted_state -S __mylib_state_token)" || return $?   # implicit form preferred
        # ... read-only work ...
    }
 
@@ -453,7 +454,7 @@ perspective: the token variable is either fully updated or left unchanged.
 
    _mylib_update_func() {
        local var1 var2
-       hs_read_persisted_state -S __mylib_state_token -- var1 var2 || return $?
+       eval "$(hs_read_persisted_state -S __mylib_state_token)" || return $?   # implicit form preferred
        # ... mutate var1, var2 as needed ...
        # Destroy before re-persisting to avoid HS_ERR_VAR_NAME_COLLISION.
        hs_destroy_state -S __mylib_state_token -- var1 var2 || return $?
@@ -483,13 +484,12 @@ perspective: the token variable is either fully updated or left unchanged.
    subshell (e.g. to capture their output) cannot update the caller's token
    even if they call ``hs_persist_state`` successfully.
 
-The module's ``--list-reserved`` output for read-write functions (via
-``hs_write_token``) includes ``__mylib_state_token`` plus
-``__hs_remaining`` and ``__hs_processed``; for read-only functions it
-includes ``__mylib_state_token``, ``__hs_remaining``, and
-``__hs_processed`` (the latter two because they are in the subshell frame
-that ``hs_extract_token`` inherits from when it resolves ``-S``, so
-``hs_extract_token --list-reserved`` reports them).
+The ``--list-reserved`` output differs by entry-point type:
+
+- **Read-only** (delegates to ``hs_extract_token --list-reserved``): prints only
+  ``__hs_processed`` and ``__hs_remaining``.
+- **Read-write** (delegates to ``hs_write_token __mylib_state_token --list-reserved``):
+  prints ``__hs_processed``, ``__hs_remaining``, and ``__mylib_state_token``.
 
 Developer Reference
 -------------------

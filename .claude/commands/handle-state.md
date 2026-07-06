@@ -148,7 +148,7 @@ mylib_func() {
 
 _mylib_func() {
     local var1 var2
-    hs_read_persisted_state -S __mylib_state_token -- var1 var2 || return $?
+    eval "$(hs_read_persisted_state -S __mylib_state_token)" || return $?   # implicit form preferred
     # ... work ...
     hs_destroy_state -S __mylib_state_token -- var1 var2 || return $?
     hs_persist_state  -S __mylib_state_token -- var1 var2 || return $?
@@ -169,7 +169,7 @@ mylib_ro_func() {
 
 _mylib_ro_func() {
     local var1 var2
-    hs_read_persisted_state -S __mylib_state_token -- var1 var2 || return $?
+    eval "$(hs_read_persisted_state -S __mylib_state_token)" || return $?   # implicit form preferred
     # ... read-only work ...
 }
 ```
