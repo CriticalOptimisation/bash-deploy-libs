@@ -43,7 +43,7 @@ Use this skill when the user asks to scan Bash scripts for PATH prefix vulnerabi
 
 ## Reference
 
-Scan script and examples: `.github/skills/bash-path-prefix-scan/references/`
+Scan script and examples: `.claude/commands/bash-path-prefix-scan/references/`
 
 ## Notes
 

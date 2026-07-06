@@ -67,7 +67,7 @@ library's own API.
 
 - Only local scalar variables (strings or numbers) are reliably preserved.
 - Encode any other state variable as a string. See encoding templates in
-  `.github/skills/handle-state/references/templates.md`.
+  `.claude/commands/handle-state/references/templates.md`.
 - Re-declare the same locals in cleanup before `hs_read_persisted_state`.
 
 ## Known Limitations (Tracked)
@@ -86,7 +86,7 @@ The following behaviors are tracked in GitHub; avoid them or apply workarounds.
 - Represent indexed arrays as a single scalar string (encode/decode) or as an
   associative array if appropriate.
 - Convert other complex constructs into strings and rebuild them in cleanup.
-- See `.github/skills/handle-state/references/templates.md` for encoding examples.
+- See `.claude/commands/handle-state/references/templates.md` for encoding examples.
 
 ## Safety Notes
 

@@ -36,7 +36,7 @@ This task covers source code implementation, edge-cases tests expansion, testing
     - `docs/libraries/<name>.rst` — Sphinx documentation
     - `test/test-<name>.bats` — test suite
     - `.claude/commands/<name>.md` — Claude skill command file
-    - `.github/skills/<name>/history.md` — skill change-history file
+    - `.claude/commands/<name>/history.md` — skill change-history file
     - Structural tests in `test/test-file-structure.bats` covering all four companion files above and the library `.sh` itself (last code line NOT `return 0`, change history block present).
   - Open a PR with a descriptive title and body referencing the issue.
   - Assign the **maintainers team** as reviewers (@CriticalOptimisation/maintainers).
