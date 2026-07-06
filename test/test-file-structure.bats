@@ -117,42 +117,37 @@ _last_code_line() {
 
 # bats test_tags=structure,history,issue-43
 @test "software-configuration-management skill has history.md" {
-  [[ -f "$ROOT/.github/skills/software-configuration-management/history.md" ]]
+  [[ -f "$ROOT/.claude/commands/software-configuration-management/history.md" ]]
 }
 
 # bats test_tags=structure,history,issue-43
 @test "handle-state skill has history.md" {
-  [[ -f "$ROOT/.github/skills/handle-state/history.md" ]]
+  [[ -f "$ROOT/.claude/commands/handle-state/history.md" ]]
 }
 
 # bats test_tags=structure,history,issue-43
 @test "bash-library-template skill has history.md" {
-  [[ -f "$ROOT/.github/skills/bash-library-template/history.md" ]]
+  [[ -f "$ROOT/.claude/commands/bash-library-template/history.md" ]]
 }
 
 # bats test_tags=structure,history,issue-43
 @test "bash-path-prefix-scan skill has history.md" {
-  [[ -f "$ROOT/.github/skills/bash-path-prefix-scan/history.md" ]]
-}
-
-# bats test_tags=structure,history,issue-43
-@test "skill-creator skill has history.md" {
-  [[ -f "$ROOT/.github/skills/skill-creator/history.md" ]]
+  [[ -f "$ROOT/.claude/commands/bash-path-prefix-scan/history.md" ]]
 }
 
 # bats test_tags=structure,history,issue-43
 @test "github-issues skill has history.md" {
-  [[ -f "$ROOT/.github/skills/github-issues/history.md" ]]
+  [[ -f "$ROOT/.claude/commands/github-issues/history.md" ]]
 }
 
 # bats test_tags=structure,history,issue-43
 @test "sphinx-docs skill has history.md" {
-  [[ -f "$ROOT/.github/skills/sphinx-docs/history.md" ]]
+  [[ -f "$ROOT/.claude/commands/sphinx-docs/history.md" ]]
 }
 
 # bats test_tags=structure,history,issue-131,issue-133
 @test "remote-run skill has history.md" {
-  [[ -f "$ROOT/.github/skills/remote-run/history.md" ]]
+  [[ -f "$ROOT/.claude/commands/remote-run/history.md" ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -171,3 +166,4 @@ return 0
 # |-------|----------------------------------------------------------------|
 # | #43   | initial file — structural tests for PR change history sections |
 # | #134  | invert return-0 assertions; add full remote_run coverage [closes #133] |
+# | #142  | update history.md paths to .claude/commands/; remove skill-creator test [closes #141] |
