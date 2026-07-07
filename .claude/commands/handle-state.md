@@ -103,7 +103,7 @@ The eval form has two operational modes selected automatically by the caller's a
   `--list-reserved` as their first argument, making `$3` of `hs_extract_token` equal to
   `--list-reserved`. Emits two sentinels into the entry-point frame:
   ```bash
-  local list_reserved=1
+  local list_reserved=$'__hs_processed\n__hs_remaining'  # own reserved names; merged by hs_write_token
   local __mylib_state_token=''
   ```
   No further arguments are valid in this mode.
@@ -122,9 +122,10 @@ this call also add to the surface. When the body-helper pattern is followed stri
 the token local is declared, keeping the surface to those three names.
 
 **`--list-reserved` form** (when `$3 == --list-reserved`):
-Computes the collision surface at the point of the call (via `local -p` in the subshell
-frame) and prints it plus `$1` (the source local name, which is in the entry-point's
-collision space for read-write functions).
+Computes own collision surface, merges it with `list_reserved` from the inherited
+entry-point frame (set by `hs_extract_token`'s eval-code form when present), adds `$2`
+(the source-local name), and emits eval-code that prints all merged names and returns 0.
+After `eval`, the entry-point prints the complete collision surface and exits.
 
 Note: `hs_write_token` cannot avoid a name collision if the `-S` state variable and the
 source local share a name. This edge case is addressed in issue #139.

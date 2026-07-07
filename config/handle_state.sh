@@ -455,7 +455,7 @@ hs_extract_token() {
         # Direct query form: print own collision surface, one name per line.
         # shellcheck disable=SC2155
         local lp_snapshot="$(local -p)"
-        _hs_print_reserved_names "$lp_snapshot" lp_snapshot
+        _hs_print_reserved_names "$lp_snapshot"
         return 0
     fi
     if [[ "${3-}" == "--list-reserved" ]]; then
@@ -465,9 +465,13 @@ hs_extract_token() {
             return 0
         fi
         # Eval-code --list-reserved form: emit sentinels into the entry-point frame.
-        # list_reserved=1 marks --list-reserved mode; local $2='' ensures the token
-        # local is already declared when _hs_print_reserved_names snapshots the frame.
-        printf 'local list_reserved=1\n'
+        # list_reserved holds own reserved names so hs_write_token can merge them;
+        # local $2='' ensures the token local is declared in the entry-point frame.
+        # shellcheck disable=SC2155
+        local lp_snapshot="$(local -p)"
+        local hs_et_names
+        hs_et_names="$(_hs_print_reserved_names "$lp_snapshot")"
+        printf 'local list_reserved=%s\n' "$(printf '%q' "$hs_et_names")"
         printf 'local %s=%s\n' "$2" "''"
         return 0
     fi
@@ -490,9 +494,10 @@ hs_extract_token() {
 #     _hs_resolve_state_inputs to build the collision-section guard.
 #     Returns HS_ERR_INVALID_ARGUMENT_TYPE if any extra arguments are present.
 #
-#   With-source-local form ($1 is API function name, $2 is source_local, $3 == --list-reserved, no $4):
-#     Prints own collision surface plus $2 (the source-local name, which is
-#     part of the entry-point's collision section for read-write functions).
+#   Eval-code --list-reserved form ($1 is API function name, $2 is source_local, $3 == --list-reserved):
+#     Computes own surface, merges with list_reserved from the inherited entry-point frame
+#     (populated by hs_extract_token in read-write patterns), adds $2, and emits eval-code
+#     that prints all merged names and returns 0 from the entry-point.
 #     Returns HS_ERR_INVALID_ARGUMENT_TYPE (via eval-code) if any $4.. present.
 #
 #   Normal eval form ($1 is API function name, $2 is source_local, $3 is not --list-reserved):
@@ -517,7 +522,7 @@ hs_write_token() {
         # Direct query form: print own collision surface, one name per line.
         # shellcheck disable=SC2155
         local lp_snapshot="$(local -p)"
-        _hs_print_reserved_names "$lp_snapshot" lp_snapshot
+        _hs_print_reserved_names "$lp_snapshot"
         return 0
     fi
     if [[ "${3-}" == "--list-reserved" ]]; then
@@ -526,12 +531,28 @@ hs_write_token() {
             printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_ARGUMENT_TYPE"
             return 0
         fi
-        # With-source-local form: print own collision surface plus $2 (the
-        # source-local name, which is part of the entry-point's collision section).
+        # Eval-code --list-reserved form: compute own surface, merge with
+        # list_reserved from the entry-point frame (set by hs_extract_token in
+        # read-write patterns), add source-local, emit printf + return 0.
         # shellcheck disable=SC2155
         local lp_snapshot="$(local -p)"
-        _hs_print_reserved_names "$lp_snapshot" lp_snapshot
-        printf '%s\n' "$2"
+        local hs_wt_names _hs_name
+        hs_wt_names="$(_hs_print_reserved_names "$lp_snapshot")"
+        local -A _hs_merged=()
+        while IFS= read -r _hs_name; do
+            [[ -n "$_hs_name" ]] && _hs_merged["$_hs_name"]=1
+        done <<< "$hs_wt_names"
+        if [[ -v list_reserved ]]; then
+            while IFS= read -r _hs_name; do
+                [[ -n "$_hs_name" ]] && _hs_merged["$_hs_name"]=1
+            done <<< "$list_reserved"
+        fi
+        _hs_merged["$2"]=1
+        printf "printf '%%s\\n'"
+        for _hs_name in "${!_hs_merged[@]}"; do
+            printf ' %s' "$(printf '%q' "$_hs_name")"
+        done
+        printf '\nreturn 0\n'
         return 0
     fi
     _hs_resolve_state_inputs "$1" S: "${@:3}" \
@@ -966,3 +987,4 @@ _hs_hs2_parse() {
 # | #110  | document HS_ERR_MULTIPLE_STATE_INPUTS for all entry points     |
 # | #134  | remove top-level return 0 — fixes SC2317 in sourcing files [closes #133] |
 # | #140  | add hs_extract_token and hs_write_token; API_function name as $1 [closes #136] |
+# | #140  | fix --list-reserved merge for read-write entry points             |

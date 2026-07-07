@@ -1707,16 +1707,16 @@ EOF
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token eval-code --list-reserved form emits list_reserved sentinel and empty token local" {
-  # Simulates a read-only entry point using the $2==--list-reserved form (no $3).
   ro_entry_point() {
     eval "$(hs_extract_token ro_entry_point __ro_tok "$@")" || return $?
     [[ -n "${list_reserved@A}" ]] || { echo "list_reserved not declared" >&2; return 1; }
     [[ -n "${__ro_tok@A}" ]]     || { echo "__ro_tok not declared" >&2; return 1; }
-    # Simulate what the entry-point does next when called with --list-reserved
+    # list_reserved holds actual reserved names, not just a boolean flag.
+    [[ "$list_reserved" == *"__hs_remaining"* ]] || { echo "list_reserved missing __hs_remaining" >&2; return 1; }
+    [[ "$list_reserved" == *"__hs_processed"* ]] || { echo "list_reserved missing __hs_processed" >&2; return 1; }
     echo "__ro_tok"
   }
   run -0 --separate-stderr ro_entry_point --list-reserved
-  # entry-point echoes "__ro_tok" confirming list_reserved and __ro_tok were both declared
   [[ "$output" == "__ro_tok" ]]
 }
 
@@ -1838,6 +1838,21 @@ EOF
 }
 
 # bats test_tags=hs_extract_token,hs_write_token,issue-136
+@test "hs_write_token eval-code --list-reserved form merges hs_extract_token surface and source local" {
+  rw_entry_point() {
+    eval "$(hs_extract_token rw_entry_point __rw_tok "$@")" || return $?
+    if ! local -p list_reserved >/dev/null 2>&1; then
+      :
+    fi
+    eval "$(hs_write_token rw_entry_point __rw_tok "$@")" || return $?
+  }
+  run -0 --separate-stderr rw_entry_point --list-reserved
+  [[ "$output" == *"__hs_remaining"* ]]
+  [[ "$output" == *"__hs_processed"* ]]
+  [[ "$output" == *"__rw_tok"* ]]
+}
+
+# bats test_tags=hs_extract_token,hs_write_token,issue-136
 @test "--list-reserved collision-surface size — hs_extract_token reports less than 2 names" {
   local count=0 name
   while IFS= read -r name; do (( ++count )); done < <(hs_extract_token --list-reserved)
@@ -1863,3 +1878,4 @@ return 0
 # | #109  | reduce nameref collision surface [closes #104]                 |
 # | #110  | document HS_ERR_MULTIPLE_STATE_INPUTS for all entry points     |
 # | #140  | add hs_extract_token and hs_write_token; entry-point pattern        |
+# | #140  | fix --list-reserved merge for read-write entry points [closes #136] |

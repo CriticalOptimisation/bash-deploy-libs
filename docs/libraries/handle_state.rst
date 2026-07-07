@@ -296,8 +296,10 @@ As of the current release the output is:
    __hs_processed
    __hs_remaining
 
-``hs_write_token`` reports the same two names plus the source-local name passed
-as ``$2``.  For example, ``hs_write_token api_func __wt_tok --list-reserved`` outputs:
+When used in a read-write entry-point pattern, calling the entry point with
+``--list-reserved`` prints the merged collision surface, which includes
+``hs_extract_token``'s own names plus the source-local name (``$2``).  For
+``__wt_tok`` as the source local, the output is:
 
 .. code-block:: text
 
@@ -329,18 +331,21 @@ collision surface at fork time consists of ``hs_extract_token``'s own
 locals.
 
 *Auto --list-reserved mode* (``$3 == --list-reserved``): activated when the
-caller passes ``--list-reserved`` as their first argument (so ``$3`` of
-``hs_extract_token`` is ``--list-reserved``).  Emits two sentinels into the
+caller passes ``--list-reserved`` as their first argument (so ``${@:3}`` of
+``hs_extract_token`` is exactly ``--list-reserved``).  Emits two sentinels into the
 entry-point frame:
 
 .. code-block:: bash
 
-   local list_reserved=1        # marks --list-reserved mode in the entry-point frame
+   local list_reserved=$'__hs_processed\n__hs_remaining'  # own reserved names; merged by hs_write_token
    local __mod_state_token=''   # token local pre-declared for frame inspection
 
 No further arguments are valid in this mode.  The entry-point detects
 ``list_reserved`` with ``local -p list_reserved >/dev/null 2>&1`` (returns 0
-when the variable is declared as a local, even if unset).
+when the variable is declared as a local).  In a read-write pattern,
+``hs_write_token`` reads ``list_reserved`` from the inherited frame, merges it
+with its own names and the source-local name, and emits a ``printf`` statement
+plus ``return 0`` so that ``eval`` prints all names and exits the entry point.
 
 Errors: same set as the shared option parser; no new codes.
 
@@ -355,10 +360,12 @@ hs_write_token
 - ``$2`` is the name of the local holding the updated token (accessed by position).
 - The forwarded parameter list (``${@:3}``) must contain ``-S <statevar>``.
 - Runs in a ``$(...)`` subshell, inheriting the calling frame read-only.
-- ``--list-reserved`` (when ``$3`` is exactly ``--list-reserved``): computes
-  the collision surface at the point of the call (via ``local -p`` in the subshell
-  frame) and prints it plus ``$2`` (the source local name, which is part of the
-  entry-point's collision space for read-write functions).
+- ``--list-reserved`` (when ``${@:3}`` is exactly ``--list-reserved``): computes
+  own collision surface, merges it with ``list_reserved`` from the inherited
+  entry-point frame (set by ``hs_extract_token``'s eval-code form when present),
+  adds ``$2`` (the source-local name), and emits eval-code that prints all merged
+  names and returns 0.  After ``eval``, the entry-point prints the complete
+  collision surface and exits.
 
 Behaviour:
 
@@ -678,6 +685,8 @@ Change History
      - remove caveat implying raw eval of state is valid [closes #81]
    * - #140
      - add hs_extract_token and hs_write_token; entry-point pattern (issue #136)
+   * - #140
+     - fix --list-reserved merge for read-write entry points
    * - #99
      - error on undeclared variable names [closes #1]
    * - #102
