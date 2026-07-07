@@ -460,7 +460,7 @@ hs_extract_token() {
     fi
     if [[ "${3-}" == "--list-reserved" ]]; then
         if [[ $# -gt 3 ]]; then
-            echo "[ERROR] hs_extract_token: --list-reserved takes no other arguments." >&2
+            echo "[ERROR] $1: --list-reserved takes no other arguments." >&2
             printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_ARGUMENT_TYPE"
             return 0
         fi
@@ -522,7 +522,7 @@ hs_write_token() {
     fi
     if [[ "${3-}" == "--list-reserved" ]]; then
         if [[ $# -gt 3 ]]; then
-            echo "[ERROR] hs_write_token: --list-reserved takes no other arguments." >&2
+            echo "[ERROR] $1: --list-reserved takes no other arguments." >&2
             printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_ARGUMENT_TYPE"
             return 0
         fi
