@@ -297,7 +297,7 @@ As of the current release the output is:
    __hs_remaining
 
 ``hs_write_token`` reports the same two names plus the source-local name passed
-as ``$1``.  For example, ``hs_write_token __wt_tok --list-reserved`` outputs:
+as ``$2``.  For example, ``hs_write_token api_func __wt_tok --list-reserved`` outputs:
 
 .. code-block:: text
 
@@ -313,23 +313,23 @@ as ``$1``.  For example, ``hs_write_token __wt_tok --list-reserved`` outputs:
    such changes; code that checks for specific names may break on a minor
    update.
 
-**Eval form** — ``$1`` is the local name, ``${@:2}`` are the forwarded args:
+**Eval form** — ``$1`` is the calling function name, ``$2`` is the local name, ``${@:3}`` are the forwarded args:
 
 .. code-block:: bash
 
-   eval "$(hs_extract_token __mod_state_token "$@")" || return $?
+   eval "$(hs_extract_token mylib_func __mod_state_token "$@")" || return $?
 
 The eval form has two operational modes selected automatically by the caller's
 argument list:
 
-*Normal mode* (``$2`` is not ``--list-reserved``): parses ``-S <statevar>``
-from ``${@:2}`` and emits ``local __mod_state_token='<token_value>'`` on
+*Normal mode* (``$3`` is not ``--list-reserved``): parses ``-S <statevar>``
+from ``${@:3}`` and emits ``local __mod_state_token='<token_value>'`` on
 success or ``bash -c 'exit N'`` on error.  Runs in a ``$(...)`` subshell; the
 collision surface at fork time consists of ``hs_extract_token``'s own
 locals.
 
-*Auto --list-reserved mode* (``$2 == --list-reserved``): activated when the
-caller passes ``--list-reserved`` as their first argument (so ``$2`` of
+*Auto --list-reserved mode* (``$3 == --list-reserved``): activated when the
+caller passes ``--list-reserved`` as their first argument (so ``$3`` of
 ``hs_extract_token`` is ``--list-reserved``).  Emits two sentinels into the
 entry-point frame:
 
@@ -349,14 +349,15 @@ hs_write_token
 
 ``hs_write_token`` writes an updated state token value back to the caller's variable.
 
-- Usage: ``eval "$(hs_write_token <source_local> "$@")"`` where ``${@:2}``
+- Usage: ``eval "$(hs_write_token <API_function> <source_local> "$@")"`` where ``${@:3}``
   from the entry point's perspective contains ``-S <statevar>``.
-- ``$1`` is the name of the local holding the updated token (accessed by position).
-- The forwarded parameter list (``${@:2}``) must contain ``-S <statevar>``.
+- ``$1`` is the name of the calling API function (used in error messages).
+- ``$2`` is the name of the local holding the updated token (accessed by position).
+- The forwarded parameter list (``${@:3}``) must contain ``-S <statevar>``.
 - Runs in a ``$(...)`` subshell, inheriting the calling frame read-only.
-- ``--list-reserved`` (when ``${*:2}`` is exactly ``--list-reserved``): computes
+- ``--list-reserved`` (when ``$3`` is exactly ``--list-reserved``): computes
   the collision surface at the point of the call (via ``local -p`` in the subshell
-  frame) and prints it plus ``$1`` (the source local name, which is part of the
+  frame) and prints it plus ``$2`` (the source local name, which is part of the
   entry-point's collision space for read-write functions).
 
 Behaviour:
@@ -366,7 +367,7 @@ Behaviour:
   that ``eval`` executes to write the token back.
 - On error: prints ``bash -c 'exit N'``.
 
-The collision surface includes at minimum the source-local name (``$1``) plus
+The collision surface includes at minimum the source-local name (``$2``) plus
 ``hs_extract_token``'s own locals.  Any other locals declared in the entry-point frame
 before this call also add to the surface.  When the body-helper pattern is followed
 strictly — where the body helper (not the entry point) declares and updates the token local
@@ -395,13 +396,13 @@ risk.
 
    mylib_func() {
        # No extra locals; hs_extract_token emits __mylib_state_token via eval.
-       eval "$(hs_extract_token __mylib_state_token "$@")" || return $?
+       eval "$(hs_extract_token mylib_func __mylib_state_token "$@")" || return $?
        if ! local -p list_reserved >/dev/null 2>&1; then
            # Body helper reads from and persists to __mylib_state_token via dynamic scoping.
            _mylib_func "$@" || return $?
        fi
        # hs_write_token handles --list-reserved when active; otherwise writes the token back.
-       eval "$(hs_write_token __mylib_state_token "$@")" || return $?
+       eval "$(hs_write_token mylib_func __mylib_state_token "$@")" || return $?
    }
 
    _mylib_func() {
@@ -421,7 +422,7 @@ to ``hs_extract_token --list-reserved``.
 .. code-block:: bash
 
    mylib_ro_func() {
-       eval "$(hs_extract_token __mylib_state_token "$@")" || return $?
+       eval "$(hs_extract_token mylib_ro_func __mylib_state_token "$@")" || return $?
        local -p list_reserved >/dev/null 2>&1 && { hs_extract_token --list-reserved; return 0; }
        _mylib_ro_func "$@" || return $?
    }
@@ -445,11 +446,11 @@ perspective: the token variable is either fully updated or left unchanged.
 
    mylib_update_func() {
        # No extra locals; hs_extract_token emits __mylib_state_token via eval.
-       eval "$(hs_extract_token __mylib_state_token "$@")" || return $?
+       eval "$(hs_extract_token mylib_update_func __mylib_state_token "$@")" || return $?
        if ! local -p list_reserved >/dev/null 2>&1; then
            _mylib_update_func "$@" || return $?
        fi
-       eval "$(hs_write_token __mylib_state_token "$@")" || return $?
+       eval "$(hs_write_token mylib_update_func __mylib_state_token "$@")" || return $?
    }
 
    _mylib_update_func() {
@@ -488,7 +489,7 @@ The ``--list-reserved`` output differs by entry-point type:
 
 - **Read-only** (delegates to ``hs_extract_token --list-reserved``): prints only
   ``__hs_processed`` and ``__hs_remaining``.
-- **Read-write** (delegates to ``hs_write_token __mylib_state_token --list-reserved``):
+- **Read-write** (delegates to ``hs_write_token mylib_func __mylib_state_token --list-reserved``):
   prints ``__hs_processed``, ``__hs_remaining``, and ``__mylib_state_token``.
 
 Developer Reference

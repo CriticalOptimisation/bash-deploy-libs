@@ -89,18 +89,18 @@ __hs_processed
 __hs_remaining
 ```
 
-**Form 2 — eval form** (`$1` is local name, `${@:2}` are the forwarded args):
+**Form 2 — eval form** (`$1` is calling function name, `$2` is local name, `${@:3}` are the forwarded args):
 ```bash
-eval "$(hs_extract_token __mylib_state_token "$@")" || return $?
+eval "$(hs_extract_token mylib_func __mylib_state_token "$@")" || return $?
 ```
 The eval form has two operational modes selected automatically by the caller's argument list:
 
-- **Normal mode** (`$2` is not `--list-reserved`): parses `-S <statevar>` from `${@:2}`
+- **Normal mode** (`$3` is not `--list-reserved`): parses `-S <statevar>` from `${@:3}`
   and emits `local __mylib_state_token='<value>'` on success, or `bash -c 'exit N'` on error.
   The collision surface at fork time consists of `hs_extract_token`'s own locals only.
 
-- **Auto `--list-reserved` mode** (`$2 == --list-reserved`): activated when the caller passes
-  `--list-reserved` as their first argument, making `$2` of `hs_extract_token` equal to
+- **Auto `--list-reserved` mode** (`$3 == --list-reserved`): activated when the caller passes
+  `--list-reserved` as their first argument, making `$3` of `hs_extract_token` equal to
   `--list-reserved`. Emits two sentinels into the entry-point frame:
   ```bash
   local list_reserved=1
@@ -112,16 +112,16 @@ The eval form has two operational modes selected automatically by the caller's a
 
 **Normal eval form**:
 ```bash
-eval "$(hs_write_token __mylib_state_token "$@")" || return $?
+eval "$(hs_write_token mylib_func __mylib_state_token "$@")" || return $?
 ```
-Parses `-S <statevar>` from `${@:2}` (the forwarded args, which include `-S`) and emits
+Parses `-S <statevar>` from `${@:3}` (the forwarded args, which include `-S`) and emits
 `<statevar>='<value>'` (plain assignment, not `local`) on success, or `bash -c 'exit N'`
 on error. The collision surface includes at minimum `__mylib_state_token` plus
 `hs_extract_token`'s own locals. Any other locals declared in the entry-point frame before
 this call also add to the surface. When the body-helper pattern is followed strictly, only
 the token local is declared, keeping the surface to those three names.
 
-**`--list-reserved` form** (when `$2 == --list-reserved`):
+**`--list-reserved` form** (when `$3 == --list-reserved`):
 Computes the collision surface at the point of the call (via `local -p` in the subshell
 frame) and prints it plus `$1` (the source local name, which is in the entry-point's
 collision space for read-write functions).
@@ -136,14 +136,14 @@ source local share a name. This edge case is addressed in issue #139.
 ```bash
 mylib_func() {
     # No extra locals; hs_extract_token emits __mylib_state_token via eval.
-    eval "$(hs_extract_token __mylib_state_token "$@")" || return $?
+    eval "$(hs_extract_token mylib_func __mylib_state_token "$@")" || return $?
     if ! local -p list_reserved >/dev/null 2>&1; then
         # __mylib_state_token accessible by _mylib_func via dynamic scoping.
         # Body helper calls hs_read_persisted_state and hs_persist_state -S __mylib_state_token directly.
         _mylib_func "$@" || return $?
     fi
     # hs_write_token handles --list-reserved when active; otherwise writes the token back.
-    eval "$(hs_write_token __mylib_state_token "$@")" || return $?
+    eval "$(hs_write_token mylib_func __mylib_state_token "$@")" || return $?
 }
 
 _mylib_func() {
@@ -162,7 +162,7 @@ so it delegates `--list-reserved` reporting directly to `hs_extract_token --list
 
 ```bash
 mylib_ro_func() {
-    eval "$(hs_extract_token __mylib_state_token "$@")" || return $?
+    eval "$(hs_extract_token mylib_ro_func __mylib_state_token "$@")" || return $?
     local -p list_reserved >/dev/null 2>&1 && { hs_extract_token --list-reserved; return 0; }
     _mylib_ro_func "$@" || return $?
 }
@@ -185,11 +185,11 @@ from its caller, it must destroy those variables before re-persisting them.
 ```bash
 mylib_update_func() {
     # No extra locals; hs_extract_token emits __mylib_state_token via eval.
-    eval "$(hs_extract_token __mylib_state_token "$@")" || return $?
+    eval "$(hs_extract_token mylib_update_func __mylib_state_token "$@")" || return $?
     if ! local -p list_reserved >/dev/null 2>&1; then
         _mylib_update_func "$@" || return $?
     fi
-    eval "$(hs_write_token __mylib_state_token "$@")" || return $?
+    eval "$(hs_write_token mylib_update_func __mylib_state_token "$@")" || return $?
 }
 
 _mylib_update_func() {
