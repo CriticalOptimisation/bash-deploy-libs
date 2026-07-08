@@ -1803,19 +1803,41 @@ EOF
   [[ "$output" == *"__wt_tok"* ]]
 }
 
-# bats test_tags=hs_write_token,issue-136
-@test "hs_persist_state --list-reserved is superset of hs_write_token --list-reserved" {
-  local name found
+# bats test_tags=hs_extract_token,hs_write_token,issue-136
+@test "entry point --list-reserved equals hs_persist_state --list-reserved plus source local" {
+  # hs_persist_state --list-reserved is the canonical enumeration of the
+  # shared parsing machinery's collision surface.  An entry point built on
+  # the token utilities must report exactly that set plus its own source
+  # local: any missing canonical name is an under-report that lets a caller
+  # pick a -S name the machinery shadows (silent state corruption); any
+  # extra name is an unjustified new reservation.  Exact set equality is
+  # asserted in both directions (PR #140 thread on the former superset test).
+  rw_entry() {
+    eval "$(hs_extract_token rw_entry __rw_tok "$@")" || return $?
+    eval "$(hs_write_token rw_entry __rw_tok "$@")" || return $?
+  }
+  local name
+  local -A expected=() reported=()
   while IFS= read -r name; do
-    found=0
-    while IFS= read -r ps_name; do
-      [[ "$ps_name" == "$name" ]] && { found=1; break; }
-    done < <(hs_persist_state --list-reserved)
-    [[ "$found" -eq 1 ]] || {
-      printf '%s from hs_write_token missing from hs_persist_state output\n' "$name" >&2
+    [[ -n "$name" ]] && expected["$name"]=1
+  done < <(hs_persist_state --list-reserved)
+  expected["__rw_tok"]=1
+  run -0 --separate-stderr rw_entry --list-reserved
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && reported["$name"]=1
+  done <<< "$output"
+  for name in "${!expected[@]}"; do
+    [[ -n "${reported[$name]+x}" ]] || {
+      printf 'reserved name %s missing from rw_entry --list-reserved output\n' "$name" >&2
       return 1
     }
-  done < <(hs_write_token --list-reserved)
+  done
+  for name in "${!reported[@]}"; do
+    [[ -n "${expected[$name]+x}" ]] || {
+      printf 'extra name %s reported beyond hs_persist_state surface plus source local\n' "$name" >&2
+      return 1
+    }
+  done
 }
 
 # bats test_tags=hs_write_token,issue-136
