@@ -11,7 +11,10 @@ setup_file() {
     return 1
   fi
   export BATS_TEST_TMPDIR
-  export BATS_TEST_TIMEOUT=30
+  # 2 s covers setup + any legitimate test in this file; the failure mode this
+  # guards against is the --list-reserved re-entry fork bomb (issue #136),
+  # which otherwise burns ~15 s per test saturating the fork budget.
+  export BATS_TEST_TIMEOUT=2
 }
 setup() {
   # `builtin source` bypasses any test-installed override of `source` (the
@@ -1098,6 +1101,55 @@ hs2_corrupt_state() {
   [[ "$stderr" == *"str_target"* ]]
 }
 
+# bats test_tags=hs_persist_state,hs_extract_token,hs_write_token,hs_destroy_state,issue-136
+@test "read-modify-write — entry point updates one variable in an existing state token" {
+  # Full read/modify/write cycle using the hs_extract_token / hs_write_token
+  # entry-point pattern.  The test verifies that:
+  #   1. init persists two vars (counter, label).
+  #   2. update_counter uses hs_extract_token + hs_destroy_state + hs_persist_state
+  #      + hs_write_token to increment counter without touching label.
+  #   3. read_back restores both vars and confirms the update landed correctly.
+  # hs_destroy_state is required before re-persisting because hs_persist_state
+  # rejects names already present in the token (HS_ERR_VAR_NAME_COLLISION).
+  # Because Bash is sequential and subshells cannot write back to the parent
+  # shell's variables, the token update is safe: hs_write_token runs in a
+  # subshell only to emit the assignment code; eval in the entry-point frame
+  # performs the actual write atomically.
+  # shellcheck disable=SC2329
+  f() {
+    init() {
+      local counter=0 label="start"
+      hs_persist_state -S "$1" -- counter label || return $?
+    }
+    update_counter() {
+      # Entry-point: zero collision surface before eval.
+      eval "$(hs_extract_token update_counter __uc_tok "$@")" || return $?
+      _update_counter_body "$@" || return $?
+      eval "$(hs_write_token update_counter __uc_tok "$@")" || return $?
+    }
+    _update_counter_body() {
+      local counter label
+      hs_read_persisted_state -S __uc_tok -- counter label || return $?
+      (( counter++ )) || true
+      # Destroy before re-persisting to avoid HS_ERR_VAR_NAME_COLLISION.
+      hs_destroy_state -S __uc_tok -- counter label || return $?
+      hs_persist_state  -S __uc_tok -- counter label || return $?
+    }
+    read_back() {
+      local counter label
+      hs_read_persisted_state -S "$1" -- counter label || return $?
+      printf "%s:%s" "$counter" "$label"
+    }
+    local state=""
+    init state || return $?
+    update_counter -S state || return $?
+    read_back state
+  }
+  run -0 --separate-stderr f
+  [ "$output" = "1:start" ]
+  [ -z "$stderr" ]
+}
+
 # bats test_tags=hs_persist_state
 @test "hs_persist_state reports a collision for a variable already in state" {
   # shellcheck disable=SC2329
@@ -1501,18 +1553,26 @@ hs2_corrupt_state() {
 
 # bats test_tags=hs_persist_state
 @test "hs_persist_state --list-reserved output names all start with __hs_" {
-  local name
+  local name count=0
   while IFS= read -r name; do
+    (( ++count ))
     [[ "$name" == __hs_* ]] || { printf 'unexpected name: %s\n' "$name" >&2; return 1; }
   done < <(hs_persist_state --list-reserved)
+  [[ "$count" -ge 1 ]]  # guards against vacuous pass when --list-reserved is broken
 }
 
 # bats test_tags=hs_persist_state,hs_read_persisted_state,hs_destroy_state
 @test "--list-reserved produces identical output from all three API entry points" {
+  # run -0 also pins the exit status and non-emptiness: with bare command
+  # substitutions a broken --list-reserved would compare empty == empty.
   local out_persist out_read out_destroy
-  out_persist=$(hs_persist_state --list-reserved)
-  out_read=$(hs_read_persisted_state --list-reserved)
-  out_destroy=$(hs_destroy_state --list-reserved)
+  run -0 hs_persist_state --list-reserved
+  [[ -n "$output" ]]
+  out_persist="$output"
+  run -0 hs_read_persisted_state --list-reserved
+  out_read="$output"
+  run -0 hs_destroy_state --list-reserved
+  out_destroy="$output"
   [[ "$out_persist" == "$out_read" ]]
   [[ "$out_persist" == "$out_destroy" ]]
 }
@@ -1534,9 +1594,16 @@ hs2_corrupt_state() {
   local name count=0
   while IFS= read -r name; do
     (( ++count ))
+    # Regression guard inside the loop: the process substitution streams into
+    # read in parallel, so an endless-output regression would otherwise spin
+    # here until the test timeout.  Target is exactly 2 names
+    # (__hs_remaining, __hs_processed).
+    [[ "$count" -le 2 ]] || {
+      printf 'more than 2 reserved names reported: runaway or grown --list-reserved output\n' >&2
+      return 1
+    }
   done < <(hs_persist_state --list-reserved)
   [[ "$count" -ge 1 ]]  # guards against vacuous pass when --list-reserved is broken
-  [[ "$count" -le 2 ]]  # regression guard: target is exactly 2 (__hs_remaining, __hs_processed)
 }
 
 # ---------------------------------------------------------------------------
@@ -1587,6 +1654,268 @@ EOF
   run -"$CG_ERR_NOT_FOUND" bash --noprofile --norc "$script"
 }
 
+# ---------------------------------------------------------------------------
+# hs_extract_token
+# ---------------------------------------------------------------------------
+
+# bats test_tags=hs_extract_token,issue-136
+@test "hs_extract_token — extracts token value into named local" {
+  local my_token="HS2:test:payload"
+  f() {
+    eval "$(hs_extract_token f __et_tok "$@")" || return $?
+    [[ "$__et_tok" == "HS2:test:payload" ]]
+  }
+  run -0 f -S my_token
+}
+
+# bats test_tags=hs_extract_token,issue-136
+@test "hs_extract_token — empty token variable yields empty local" {
+  local my_token=""
+  f() {
+    eval "$(hs_extract_token f __et_tok "$@")" || return $?
+    [[ -z "$__et_tok" ]]
+  }
+  run -0 f -S my_token
+}
+
+# bats test_tags=hs_extract_token,issue-136
+@test "hs_extract_token — returns HS_ERR_STATE_VAR_UNINITIALIZED when -S absent" {
+  f() { eval "$(hs_extract_token f __et_tok "$@")"; }
+  run --separate-stderr f
+  [[ "$status" -eq "$HS_ERR_STATE_VAR_UNINITIALIZED" ]]
+  [[ "$stderr" == *"state variable is uninitialized"* ]]
+}
+
+# bats test_tags=hs_extract_token,issue-136
+@test "hs_extract_token — returns HS_ERR_MULTIPLE_STATE_INPUTS when -S given twice" {
+  f() { local tok=""; eval "$(hs_extract_token f __et_tok "$@")"; }
+  run --separate-stderr f -S tok -S tok
+  [[ "$status" -eq "$HS_ERR_MULTIPLE_STATE_INPUTS" ]]
+  [[ "$stderr" == *"option -S may only be given once"* ]]
+}
+
+# bats test_tags=hs_extract_token,issue-136
+@test "hs_extract_token — returns HS_ERR_INVALID_VAR_NAME for invalid -S identifier" {
+  f() { eval "$(hs_extract_token f __et_tok "$@")"; }
+  run f -S '1invalid'
+  [[ "$status" -eq "$HS_ERR_INVALID_VAR_NAME" ]]
+}
+
+# bats test_tags=hs_extract_token,issue-136
+@test "hs_extract_token — returns HS_ERR_RESERVED_VAR_NAME for each reserved name" {
+  f() { eval "$(hs_extract_token hs_extract_token __et_tok "$@")"; }
+  local name
+  while IFS= read -r name; do
+    run --separate-stderr f -S "$name"
+    [[ "$status" -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || {
+      printf 'expected HS_ERR_RESERVED_VAR_NAME for -S %s but got %d\n' "$name" "$status" >&2
+      return 1
+    }
+    [[ "$stderr" == *"is reserved"* ]]
+  done < <(hs_extract_token --list-reserved)
+}
+
+# bats test_tags=hs_extract_token,issue-136
+@test "hs_extract_token --list-reserved exits 0 with non-empty output" {
+  run -0 hs_extract_token --list-reserved
+  [[ -n "$output" ]]
+}
+
+# bats test_tags=hs_extract_token,issue-136
+@test "hs_extract_token --list-reserved output identical to hs_persist_state --list-reserved" {
+  local out_et out_ps
+  run -0 hs_extract_token --list-reserved
+  [[ -n "$output" ]]
+  out_et="$output"
+  run -0 hs_persist_state --list-reserved
+  out_ps="$output"
+  [[ "$out_et" == "$out_ps" ]]
+}
+
+# bats test_tags=hs_extract_token,issue-136
+@test "hs_extract_token eval-code --list-reserved form emits list_reserved sentinel and empty token local" {
+  ro_entry_point() {
+    eval "$(hs_extract_token ro_entry_point __ro_tok "$@")" || return $?
+    [[ -n "${list_reserved@A}" ]] || { echo "list_reserved not declared" >&2; return 1; }
+    [[ -n "${__ro_tok@A}" ]]     || { echo "__ro_tok not declared" >&2; return 1; }
+    # list_reserved holds actual reserved names, not just a boolean flag.
+    [[ "$list_reserved" == *"__hs_remaining"* ]] || { echo "list_reserved missing __hs_remaining" >&2; return 1; }
+    [[ "$list_reserved" == *"__hs_processed"* ]] || { echo "list_reserved missing __hs_processed" >&2; return 1; }
+    echo "__ro_tok"
+  }
+  run -0 --separate-stderr ro_entry_point --list-reserved
+  [[ "$output" == "__ro_tok" ]]
+}
+
+# bats test_tags=hs_extract_token,issue-136
+@test "hs_extract_token eval-code --list-reserved form rejects extra arguments" {
+  f() { eval "$(hs_extract_token f __et_tok "$@")"; }
+  run -"$HS_ERR_INVALID_ARGUMENT_TYPE" --separate-stderr f --list-reserved extra
+  [[ "$stderr" == *"--list-reserved takes no other arguments"* ]]
+}
+
+# bats test_tags=hs_extract_token,issue-136
+@test "hs_extract_token collision scenario — eval form reads outer caller value not shadowing local" {
+  # This test verifies the eval pattern prevents the collision bug.
+  # A local named __hs_remaining exists before the eval; if the subshell
+  # incorrectly resolved -S __hs_remaining to the local's unset copy, the
+  # extracted value would be empty instead of the real token.
+  outer_collision_test() {
+    local __hs_remaining="should-not-be-seen"
+    local outer_tok="real-token-value"
+    eval "$(hs_extract_token outer_collision_test __et_tok "$@")" || return $?
+    [[ "$__et_tok" == "real-token-value" ]]
+  }
+  run -0 outer_collision_test -S outer_tok
+}
+
+# bats test_tags=hs_extract_token,issue-136
+@test "hs_extract_token — local name equals -S variable name: extracted value is preserved" {
+  # Validates that hs_extract_token __tok -S __tok works correctly when the
+  # destination local and the state variable share the same name.  The subshell
+  # reads the outer __tok value before eval declares the new local, so the
+  # extracted value must equal the original state variable value.
+  f() {
+    local __tok="token-value"
+    eval "$(hs_extract_token f __tok "$@")" || return $?
+    [[ "$__tok" == "token-value" ]]
+  }
+  run -0 f -S __tok
+}
+
+# ---------------------------------------------------------------------------
+# hs_write_token
+# ---------------------------------------------------------------------------
+
+# bats test_tags=hs_write_token,issue-136
+@test "hs_write_token — writes source local value into caller state variable" {
+  write_test_helper() {
+    local dest_tok="old"
+    eval "$(hs_extract_token write_test_helper __wt_tok "$@")" || return $?
+    __wt_tok="new-value"
+    eval "$(hs_write_token write_test_helper __wt_tok "$@")" || return $?
+    [[ "$dest_tok" == "new-value" ]]
+  }
+  run -0 write_test_helper -S dest_tok
+}
+
+# bats test_tags=hs_write_token,issue-136
+@test "hs_write_token — returns HS_ERR_STATE_VAR_UNINITIALIZED when -S absent" {
+  f() { eval "$(hs_write_token f __wt_tok "$@")"; }
+  run f
+  [[ "$status" -eq "$HS_ERR_STATE_VAR_UNINITIALIZED" ]]
+}
+
+# bats test_tags=hs_write_token,issue-136
+@test "hs_write_token — returns HS_ERR_RESERVED_VAR_NAME when -S names a reserved variable" {
+  f() { eval "$(hs_write_token hs_persist_state __wt_tok "$@")"; }
+  local name
+  while IFS= read -r name; do
+    run --separate-stderr f -S "$name"
+    [[ "$status" -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || {
+      printf 'expected HS_ERR_RESERVED_VAR_NAME for -S %s but got %d\n' "$name" "$status" >&2
+      return 1
+    }
+    [[ "$stderr" == *"is reserved"* ]]
+  done < <(hs_persist_state --list-reserved)
+}
+
+# bats test_tags=hs_write_token,issue-136
+@test "hs_write_token --list-reserved includes source local name" {
+  run -0 hs_write_token entry_func __wt_tok --list-reserved
+  [[ "$output" == *"__wt_tok"* ]]
+}
+
+# bats test_tags=hs_extract_token,hs_write_token,issue-136
+@test "entry point --list-reserved equals hs_persist_state --list-reserved plus source local" {
+  # hs_persist_state --list-reserved is the canonical enumeration of the
+  # shared parsing machinery's collision surface.  An entry point built on
+  # the token utilities must report exactly that set plus its own source
+  # local: any missing canonical name is an under-report that lets a caller
+  # pick a -S name the machinery shadows (silent state corruption); any
+  # extra name is an unjustified new reservation.  Exact set equality is
+  # asserted in both directions (PR #140 thread on the former superset test).
+  rw_entry() {
+    eval "$(hs_extract_token rw_entry __rw_tok "$@")" || return $?
+    eval "$(hs_write_token rw_entry __rw_tok "$@")" || return $?
+  }
+  local name
+  local -A expected=() reported=()
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && expected["$name"]=1
+  done < <(hs_persist_state --list-reserved)
+  expected["__rw_tok"]=1
+  run -0 --separate-stderr rw_entry --list-reserved
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && reported["$name"]=1
+  done <<< "$output"
+  for name in "${!expected[@]}"; do
+    [[ -n "${reported[$name]+x}" ]] || {
+      printf 'reserved name %s missing from rw_entry --list-reserved output\n' "$name" >&2
+      return 1
+    }
+  done
+  for name in "${!reported[@]}"; do
+    [[ -n "${expected[$name]+x}" ]] || {
+      printf 'extra name %s reported beyond hs_persist_state surface plus source local\n' "$name" >&2
+      return 1
+    }
+  done
+}
+
+# bats test_tags=hs_write_token,issue-136
+@test "hs_write_token --list-reserved direct query exits 0 with non-empty output" {
+  run -0 hs_write_token --list-reserved
+  [[ -n "$output" ]]
+}
+
+# bats test_tags=hs_write_token,issue-136
+@test "hs_write_token --list-reserved direct query rejects extra arguments" {
+  f() { hs_write_token --list-reserved extra; }
+  run --separate-stderr f
+  [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
+  [[ "$stderr" == *"--list-reserved takes no other arguments"* ]]
+}
+
+# bats test_tags=hs_write_token,issue-136
+@test "hs_write_token eval-code --list-reserved form rejects extra arguments when source local given" {
+  f() { eval "$(hs_write_token f __wt_tok --list-reserved extra)"; }
+  run --separate-stderr f
+  [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
+  [[ "$stderr" == *"--list-reserved takes no other arguments"* ]]
+}
+
+# bats test_tags=hs_extract_token,hs_write_token,issue-136
+@test "hs_write_token eval-code --list-reserved form merges hs_extract_token surface and source local" {
+  rw_entry_point() {
+    eval "$(hs_extract_token rw_entry_point __rw_tok "$@")" || return $?
+    if ! local -p list_reserved >/dev/null 2>&1; then
+      :
+    fi
+    eval "$(hs_write_token rw_entry_point __rw_tok "$@")" || return $?
+  }
+  run -0 --separate-stderr rw_entry_point --list-reserved
+  [[ "$output" == *"__hs_remaining"* ]]
+  [[ "$output" == *"__hs_processed"* ]]
+  [[ "$output" == *"__rw_tok"* ]]
+}
+
+# bats test_tags=hs_extract_token,hs_write_token,issue-136
+@test "--list-reserved collision-surface size — hs_extract_token reports less than 2 names" {
+  local count=0 name
+  while IFS= read -r name; do
+    (( ++count ))
+    # In-loop regression guard: fail fast on runaway --list-reserved output
+    # instead of spinning until the test timeout (see the hs_persist_state
+    # collision-surface size test).
+    [[ "$count" -le 2 ]] || {
+      printf 'more than 2 reserved names reported: runaway or grown --list-reserved output\n' >&2
+      return 1
+    }
+  done < <(hs_extract_token --list-reserved)
+  [[ "$count" -ge 1 ]]
+}
+
 return 0
 
 # --- Change History -------------------------------------------------------
@@ -1604,3 +1933,5 @@ return 0
 # | #108  | fix shellcheck linter errors in bats file [closes #107]        |
 # | #109  | reduce nameref collision surface [closes #104]                 |
 # | #110  | document HS_ERR_MULTIPLE_STATE_INPUTS for all entry points     |
+# | #140  | add hs_extract_token and hs_write_token; entry-point pattern        |
+# | #140  | fix --list-reserved merge for read-write entry points [closes #136] |

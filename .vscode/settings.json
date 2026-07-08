@@ -16,5 +16,8 @@
     ],
     "git.branchProtectionPrompt": "always",
     "files.readonlyFromPermissions": true,
-    "shellcheck.useWorkspaceRootAsCwd": false
+    "shellcheck.useWorkspaceRootAsCwd": false,
+    "workbench.editor.autoLockGroups": {
+        "workbench.editor.browser": true
+    }
 }

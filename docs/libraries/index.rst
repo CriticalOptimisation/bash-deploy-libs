@@ -11,11 +11,16 @@ pieces they ship.
    command_guard
    remote_run
 
-..
+Change History
+--------------
 
-   Change History
+.. list-table::
+   :header-rows: 1
+   :widths: 10 90
 
-   PR     Summary
-   -----  -----------------------------------------------------------------
-   #8     add command_guard to library index
-   #109   reduce nameref collision surface [closes #104]
+   * - PR
+     - Summary
+   * - #8
+     - add command_guard to library index
+   * - #109
+     - reduce nameref collision surface [closes #104]

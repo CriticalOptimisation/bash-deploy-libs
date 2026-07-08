@@ -429,10 +429,14 @@ values unless the semantics are identical and confusion is impossible.
   could not be resolved by ``guard`` at source time.  The library failed to
   load entirely; no ``rr_*`` functions are available.
 
-..
+Change History
+--------------
 
-   Change History
+.. list-table::
+   :header-rows: 1
+   :widths: 10 90
 
-   PR     Summary
-   -----  -----------------------------------------------------------------
-   #TBD   add Error Codes section; fix nc dependency note; fix exit-code table
+   * - PR
+     - Summary
+   * - #TBD
+     - add Error Codes section; fix nc dependency note; fix exit-code table

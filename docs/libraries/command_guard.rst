@@ -913,15 +913,24 @@ Source Listing
    :language: bash
    :linenos:
 
-..
+Change History
+--------------
 
-   Change History
+.. list-table::
+   :header-rows: 1
+   :widths: 10 90
 
-   PR     Summary
-   -----  -----------------------------------------------------------------
-   #8     initial documentation
-   #23    feature/skills update
-   #113   name=path guard token syntax [closes #111]
-   #114   PATH enforcement API -- cg_safe_run, cg_unsafe [closes #112]
-   #118   name filter and snap search API [closes #116, #117]
-   #127   gated trap-EXIT wrapper for async kill-propagation [closes #127]
+   * - PR
+     - Summary
+   * - #8
+     - initial documentation
+   * - #23
+     - feature/skills update
+   * - #113
+     - name=path guard token syntax [closes #111]
+   * - #114
+     - PATH enforcement API -- cg_safe_run, cg_unsafe [closes #112]
+   * - #118
+     - name filter and snap search API [closes #116, #117]
+   * - #127
+     - gated trap-EXIT wrapper for async kill-propagation [closes #127]

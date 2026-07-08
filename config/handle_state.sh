@@ -411,6 +411,155 @@ hs_read_persisted_state() {
     fi
 }
 
+# --- hs_extract_token ---------------------------------------------------------
+# Function:
+#   hs_extract_token --list-reserved
+#   hs_extract_token <API_function> <local_name> --list-reserved
+#   hs_extract_token <API_function> <local_name> [forwarded opts] -S <statevar>
+# Description:
+#   Direct query form ($1 == --list-reserved, no further args):
+#     Prints every local in this function's own frame, one per line; identical
+#     output to hs_persist_state --list-reserved. Names are derived from local -p
+#     so future edits are automatically reflected.
+#
+#   Eval-code --list-reserved form ($1 is API function name, $2 is local_name, $3 == --list-reserved, no $4):
+#     eval "$(hs_extract_token mod_entry_point __mod_state_token --list-reserved)"
+#     Emits two sentinel declarations for the calling entry-point frame:
+#       local list_reserved=""     -- marks --list-reserved mode
+#       local <local_name>=''     -- token local pre-declared so it appears in
+#                                    the lp_snapshot the entry-point takes next
+#     Returns HS_ERR_INVALID_ARGUMENT_TYPE if any $4.. are present.
+#     The entry-point detects list_reserved with _hs_local_exists, then takes
+#     a combined lp_snapshot and calls _hs_print_reserved_names to report every
+#     local except list_reserved (lp_snapshot excluded by the combined form).
+#
+#   Normal eval form ($1 is API function name, $2 is local_name, $3 is not --list-reserved):
+#     eval "$(hs_extract_token mod_entry_point __mod_state_token "$@")"
+#     Parses -S <statevar> from forwarded opts ($3..) and prints either:
+#       local <local_name>='<token_value>'   on success
+#       bash -c 'exit N'                     on error (causes eval to return N)
+#     Runs in a subshell: no caller local visible at fork, collision space = 0.
+# Arguments:
+#   $1  - --list-reserved (direct query) OR name of the calling API function
+#   $2  - name of the local to declare (eval forms only)
+#   $3  - --list-reserved (eval-code mode, no further args) OR first forwarded opt
+#   $4..- forwarded parameter list (normal eval form only)
+hs_extract_token() {
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    if [[ "${1-}" == "--list-reserved" ]]; then
+        if [[ $# -gt 1 ]]; then
+            echo "[ERROR] hs_extract_token: --list-reserved takes no other arguments." >&2
+            return "$HS_ERR_INVALID_ARGUMENT_TYPE"
+        fi
+        # Direct query form: print own collision surface, one name per line.
+        # shellcheck disable=SC2155
+        local lp_snapshot="$(local -p)"
+        _hs_print_reserved_names "$lp_snapshot"
+        return 0
+    fi
+    if [[ "${3-}" == "--list-reserved" ]]; then
+        if [[ $# -gt 3 ]]; then
+            echo "[ERROR] $1: --list-reserved takes no other arguments." >&2
+            printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_ARGUMENT_TYPE"
+            return 0
+        fi
+        # Eval-code --list-reserved form: emit sentinels into the entry-point frame.
+        # list_reserved holds own reserved names so hs_write_token can merge them;
+        # local $2='' ensures the token local is declared in the entry-point frame.
+        # shellcheck disable=SC2155
+        local lp_snapshot="$(local -p)"
+        local hs_et_names
+        hs_et_names="$(_hs_print_reserved_names "$lp_snapshot")"
+        printf 'local list_reserved=%s\n' "$(printf '%q' "$hs_et_names")"
+        printf 'local %s=%s\n' "$2" "''"
+        return 0
+    fi
+    _hs_resolve_state_inputs "$1" S: "${@:3}" \
+        || { printf 'bash -c '\''exit %d'\''\n' "$?"; return 0; }
+    # shellcheck disable=SC2155  # value read from inherited frame; name checked above
+    local __hs_et_value="${!__hs_processed[state]}"
+    printf 'local %s=%s\n' "$2" "$(printf '%q' "$__hs_et_value")"
+}
+
+# --- hs_write_token -----------------------------------------------------------
+# Function:
+#   hs_write_token --list-reserved
+#   hs_write_token <API_function> <source_local> --list-reserved
+#   hs_write_token <API_function> <source_local> [forwarded options] -S <statevar>
+# Description:
+#   Direct query form ($1 == --list-reserved, no further args):
+#     Prints every local in this function's own frame, one per line; identical
+#     output to hs_persist_state --list-reserved.  Called automatically by
+#     _hs_resolve_state_inputs to build the collision-section guard.
+#     Returns HS_ERR_INVALID_ARGUMENT_TYPE if any extra arguments are present.
+#
+#   Eval-code --list-reserved form ($1 is API function name, $2 is source_local, $3 == --list-reserved):
+#     Computes own surface, merges with list_reserved from the inherited entry-point frame
+#     (populated by hs_extract_token in read-write patterns), adds $2, and emits eval-code
+#     that prints all merged names and returns 0 from the entry-point.
+#     Returns HS_ERR_INVALID_ARGUMENT_TYPE (via eval-code) if any $4.. present.
+#
+#   Normal eval form ($1 is API function name, $2 is source_local, $3 is not --list-reserved):
+#     eval "$(hs_write_token mod_entry_point __mod_state_token "$@")"
+#     Parses -S <statevar> from forwarded opts ($3..) and prints either:
+#       <statevar>='<updated_value>'   on success (plain assignment, not local)
+#       bash -c 'exit N'              on error (causes eval to return N)
+#     Runs in a subshell: no caller local visible at fork, collision space = 0.
+# Arguments:
+#   $1          - --list-reserved (direct query) OR name of the calling API function
+#   $2          - name of the local holding the updated token value (eval forms only)
+#   $3          - --list-reserved (with-source-local mode, no further args) OR first forwarded opt
+#   $4..        - forwarded parameter list (normal eval form: must contain -S)
+hs_write_token() {
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    if [[ "${1-}" == "--list-reserved" ]]; then
+        if [[ $# -gt 1 ]]; then
+            echo "[ERROR] hs_write_token: --list-reserved takes no other arguments." >&2
+            return "$HS_ERR_INVALID_ARGUMENT_TYPE"
+        fi
+        # Direct query form: print own collision surface, one name per line.
+        # shellcheck disable=SC2155
+        local lp_snapshot="$(local -p)"
+        _hs_print_reserved_names "$lp_snapshot"
+        return 0
+    fi
+    if [[ "${3-}" == "--list-reserved" ]]; then
+        if [[ $# -gt 3 ]]; then
+            echo "[ERROR] $1: --list-reserved takes no other arguments." >&2
+            printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_ARGUMENT_TYPE"
+            return 0
+        fi
+        # Eval-code --list-reserved form: compute own surface, merge with
+        # list_reserved from the entry-point frame (set by hs_extract_token in
+        # read-write patterns), add source-local, emit printf + return 0.
+        # shellcheck disable=SC2155
+        local lp_snapshot="$(local -p)"
+        local hs_wt_names _hs_name
+        hs_wt_names="$(_hs_print_reserved_names "$lp_snapshot")"
+        local -A _hs_merged=()
+        while IFS= read -r _hs_name; do
+            [[ -n "$_hs_name" ]] && _hs_merged["$_hs_name"]=1
+        done <<< "$hs_wt_names"
+        if [[ -v list_reserved ]]; then
+            while IFS= read -r _hs_name; do
+                [[ -n "$_hs_name" ]] && _hs_merged["$_hs_name"]=1
+            done <<< "$list_reserved"
+        fi
+        _hs_merged["$2"]=1
+        printf "printf '%%s\\n'"
+        for _hs_name in "${!_hs_merged[@]}"; do
+            printf ' %s' "$(printf '%q' "$_hs_name")"
+        done
+        printf '\nreturn 0\n'
+        return 0
+    fi
+    _hs_resolve_state_inputs "$1" S: "${@:3}" \
+        || { printf 'bash -c '\''exit %d'\''\n' "$?"; return 0; }
+    printf '%s=%s\n' "${__hs_processed[state]}" "$(printf '%q' "${!2}")"
+}
+
 # _hs_rr_explicit_stmts <state_var> <quiet> <vars_str>
 # Validates all requested variables (declared and unset in dynamic scope), then
 # prints one assignment statement per variable to stdout. The caller evals the
@@ -837,3 +986,5 @@ _hs_hs2_parse() {
 # | #109  | reduce nameref collision surface [closes #104]                 |
 # | #110  | document HS_ERR_MULTIPLE_STATE_INPUTS for all entry points     |
 # | #134  | remove top-level return 0 — fixes SC2317 in sourcing files [closes #133] |
+# | #140  | add hs_extract_token and hs_write_token; API_function name as $1 [closes #136] |
+# | #140  | fix --list-reserved merge for read-write entry points             |
