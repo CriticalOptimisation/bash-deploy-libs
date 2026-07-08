@@ -11,7 +11,10 @@ setup_file() {
     return 1
   fi
   export BATS_TEST_TMPDIR
-  export BATS_TEST_TIMEOUT=30
+  # 2 s covers setup + any legitimate test in this file; the failure mode this
+  # guards against is the --list-reserved re-entry fork bomb (issue #136),
+  # which otherwise burns ~15 s per test saturating the fork budget.
+  export BATS_TEST_TIMEOUT=2
 }
 setup() {
   # `builtin source` bypasses any test-installed override of `source` (the
@@ -1643,20 +1646,20 @@ EOF
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — extracts token value into named local" {
   local my_token="HS2:test:payload"
-  eval "$(hs_extract_token test_func __et_tok -S my_token)" || return $?
+  eval "$(hs_extract_token hs_extract_token __et_tok -S my_token)" || return $?
   [[ "$__et_tok" == "HS2:test:payload" ]]
 }
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — empty token variable yields empty local" {
   local my_token=""
-  eval "$(hs_extract_token test_func __et_tok -S my_token)" || return $?
+  eval "$(hs_extract_token hs_extract_token __et_tok -S my_token)" || return $?
   [[ -z "$__et_tok" ]]
 }
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — returns HS_ERR_STATE_VAR_UNINITIALIZED when -S absent" {
-  f() { eval "$(hs_extract_token f __et_tok)"; }
+  f() { eval "$(hs_extract_token f __et_tok "$@")"; }
   run --separate-stderr f
   [[ "$status" -eq "$HS_ERR_STATE_VAR_UNINITIALIZED" ]]
   [[ "$stderr" == *"state variable is uninitialized"* ]]
@@ -1664,16 +1667,16 @@ EOF
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — returns HS_ERR_MULTIPLE_STATE_INPUTS when -S given twice" {
-  f() { local tok=""; eval "$(hs_extract_token f __et_tok -S tok -S tok)"; }
-  run --separate-stderr f
+  f() { local tok=""; eval "$(hs_extract_token f __et_tok "$@")"; }
+  run --separate-stderr f -S tok -S tok
   [[ "$status" -eq "$HS_ERR_MULTIPLE_STATE_INPUTS" ]]
   [[ "$stderr" == *"option -S may only be given once"* ]]
 }
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — returns HS_ERR_INVALID_VAR_NAME for invalid -S identifier" {
-  f() { eval "$(hs_extract_token f __et_tok -S '1invalid')"; }
-  run f
+  f() { eval "$(hs_extract_token f __et_tok "$@")"; }
+  run f -S '1invalid'
   [[ "$status" -eq "$HS_ERR_INVALID_VAR_NAME" ]]
 }
 
@@ -1683,7 +1686,7 @@ EOF
   while IFS= read -r name; do
     local dummy=""
     rc=0
-    eval "$(hs_extract_token test_func __et_tok -S "$name")" || rc=$?
+    eval "$(hs_extract_token hs_extract_token __et_tok -S "$name")" || rc=$?
     [[ "$rc" -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || {
       printf 'expected HS_ERR_RESERVED_VAR_NAME for -S %s but got %d\n' "$name" "$rc" >&2
       return 1
@@ -1737,10 +1740,10 @@ EOF
   outer_collision_test() {
     local __hs_remaining="should-not-be-seen"
     local outer_tok="real-token-value"
-    eval "$(hs_extract_token outer_collision_test __et_tok -S outer_tok)" || return $?
+    eval "$(hs_extract_token outer_collision_test __et_tok "$@")" || return $?
     [[ "$__et_tok" == "real-token-value" ]]
   }
-  run -0 outer_collision_test
+  run -0 outer_collision_test -S outer_tok
 }
 
 # bats test_tags=hs_extract_token,issue-136
@@ -1751,10 +1754,10 @@ EOF
   # extracted value must equal the original state variable value.
   f() {
     local __tok="token-value"
-    eval "$(hs_extract_token f __tok -S __tok)" || return $?
+    eval "$(hs_extract_token f __tok "$@")" || return $?
     [[ "$__tok" == "token-value" ]]
   }
-  f
+  f -S __tok
 }
 
 # ---------------------------------------------------------------------------
@@ -1765,17 +1768,17 @@ EOF
 @test "hs_write_token — writes source local value into caller state variable" {
   write_test_helper() {
     local dest_tok="old"
-    eval "$(hs_extract_token write_test_helper __wt_tok -S dest_tok)" || return $?
+    eval "$(hs_extract_token write_test_helper __wt_tok "$@")" || return $?
     __wt_tok="new-value"
-    eval "$(hs_write_token write_test_helper __wt_tok -S dest_tok)" || return $?
+    eval "$(hs_write_token write_test_helper __wt_tok "$@")" || return $?
     [[ "$dest_tok" == "new-value" ]]
   }
-  run -0 write_test_helper
+  run -0 write_test_helper -S dest_tok
 }
 
 # bats test_tags=hs_write_token,issue-136
 @test "hs_write_token — returns HS_ERR_STATE_VAR_UNINITIALIZED when -S absent" {
-  f() { eval "$(hs_write_token f __wt_tok)"; }
+  f() { eval "$(hs_write_token f __wt_tok "$@")"; }
   run f
   [[ "$status" -eq "$HS_ERR_STATE_VAR_UNINITIALIZED" ]]
 }
@@ -1786,7 +1789,7 @@ EOF
   while IFS= read -r name; do
     local dummy=""
     rc=0
-    eval "$(hs_write_token test_func __wt_tok -S "$name")" || rc=$?
+    eval "$(hs_write_token hs_persist_state __wt_tok -S "$name")" || rc=$?
     [[ "$rc" -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || {
       printf 'expected HS_ERR_RESERVED_VAR_NAME for -S %s but got %d\n' "$name" "$rc" >&2
       return 1
