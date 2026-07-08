@@ -1660,22 +1660,22 @@ EOF
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — extracts token value into named local" {
+  local my_token="HS2:test:payload"
   f() {
-    local my_token="HS2:test:payload"
-    eval "$(hs_extract_token hs_extract_token __et_tok -S my_token)" || return $?
+    eval "$(hs_extract_token f __et_tok "$@")" || return $?
     [[ "$__et_tok" == "HS2:test:payload" ]]
   }
-  run -0 f
+  run -0 f -S my_token
 }
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — empty token variable yields empty local" {
+  local my_token=""
   f() {
-    local my_token=""
-    eval "$(hs_extract_token hs_extract_token __et_tok -S my_token)" || return $?
+    eval "$(hs_extract_token f __et_tok "$@")" || return $?
     [[ -z "$__et_tok" ]]
   }
-  run -0 f
+  run -0 f -S my_token
 }
 
 # bats test_tags=hs_extract_token,issue-136
@@ -1703,10 +1703,10 @@ EOF
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — returns HS_ERR_RESERVED_VAR_NAME for each reserved name" {
-  f() { eval "$(hs_extract_token hs_extract_token __et_tok -S "$1")"; }
+  f() { eval "$(hs_extract_token hs_extract_token __et_tok "$@")"; }
   local name
   while IFS= read -r name; do
-    run --separate-stderr f "$name"
+    run --separate-stderr f -S "$name"
     [[ "$status" -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || {
       printf 'expected HS_ERR_RESERVED_VAR_NAME for -S %s but got %d\n' "$name" "$status" >&2
       return 1
@@ -1808,10 +1808,10 @@ EOF
 
 # bats test_tags=hs_write_token,issue-136
 @test "hs_write_token — returns HS_ERR_RESERVED_VAR_NAME when -S names a reserved variable" {
-  f() { eval "$(hs_write_token hs_persist_state __wt_tok -S "$1")"; }
+  f() { eval "$(hs_write_token hs_persist_state __wt_tok "$@")"; }
   local name
   while IFS= read -r name; do
-    run --separate-stderr f "$name"
+    run --separate-stderr f -S "$name"
     [[ "$status" -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || {
       printf 'expected HS_ERR_RESERVED_VAR_NAME for -S %s but got %d\n' "$name" "$status" >&2
       return 1
