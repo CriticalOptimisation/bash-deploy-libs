@@ -1553,18 +1553,26 @@ hs2_corrupt_state() {
 
 # bats test_tags=hs_persist_state
 @test "hs_persist_state --list-reserved output names all start with __hs_" {
-  local name
+  local name count=0
   while IFS= read -r name; do
+    (( ++count ))
     [[ "$name" == __hs_* ]] || { printf 'unexpected name: %s\n' "$name" >&2; return 1; }
   done < <(hs_persist_state --list-reserved)
+  [[ "$count" -ge 1 ]]  # guards against vacuous pass when --list-reserved is broken
 }
 
 # bats test_tags=hs_persist_state,hs_read_persisted_state,hs_destroy_state
 @test "--list-reserved produces identical output from all three API entry points" {
+  # run -0 also pins the exit status and non-emptiness: with bare command
+  # substitutions a broken --list-reserved would compare empty == empty.
   local out_persist out_read out_destroy
-  out_persist=$(hs_persist_state --list-reserved)
-  out_read=$(hs_read_persisted_state --list-reserved)
-  out_destroy=$(hs_destroy_state --list-reserved)
+  run -0 hs_persist_state --list-reserved
+  [[ -n "$output" ]]
+  out_persist="$output"
+  run -0 hs_read_persisted_state --list-reserved
+  out_read="$output"
+  run -0 hs_destroy_state --list-reserved
+  out_destroy="$output"
   [[ "$out_persist" == "$out_read" ]]
   [[ "$out_persist" == "$out_destroy" ]]
 }
@@ -1586,9 +1594,16 @@ hs2_corrupt_state() {
   local name count=0
   while IFS= read -r name; do
     (( ++count ))
+    # Regression guard inside the loop: the process substitution streams into
+    # read in parallel, so an endless-output regression would otherwise spin
+    # here until the test timeout.  Target is exactly 2 names
+    # (__hs_remaining, __hs_processed).
+    [[ "$count" -le 2 ]] || {
+      printf 'more than 2 reserved names reported: runaway or grown --list-reserved output\n' >&2
+      return 1
+    }
   done < <(hs_persist_state --list-reserved)
   [[ "$count" -ge 1 ]]  # guards against vacuous pass when --list-reserved is broken
-  [[ "$count" -le 2 ]]  # regression guard: target is exactly 2 (__hs_remaining, __hs_processed)
 }
 
 # ---------------------------------------------------------------------------
@@ -1645,16 +1660,22 @@ EOF
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — extracts token value into named local" {
-  local my_token="HS2:test:payload"
-  eval "$(hs_extract_token hs_extract_token __et_tok -S my_token)" || return $?
-  [[ "$__et_tok" == "HS2:test:payload" ]]
+  f() {
+    local my_token="HS2:test:payload"
+    eval "$(hs_extract_token hs_extract_token __et_tok -S my_token)" || return $?
+    [[ "$__et_tok" == "HS2:test:payload" ]]
+  }
+  run -0 f
 }
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — empty token variable yields empty local" {
-  local my_token=""
-  eval "$(hs_extract_token hs_extract_token __et_tok -S my_token)" || return $?
-  [[ -z "$__et_tok" ]]
+  f() {
+    local my_token=""
+    eval "$(hs_extract_token hs_extract_token __et_tok -S my_token)" || return $?
+    [[ -z "$__et_tok" ]]
+  }
+  run -0 f
 }
 
 # bats test_tags=hs_extract_token,issue-136
@@ -1682,15 +1703,15 @@ EOF
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token — returns HS_ERR_RESERVED_VAR_NAME for each reserved name" {
-  local name rc
+  f() { eval "$(hs_extract_token hs_extract_token __et_tok -S "$1")"; }
+  local name
   while IFS= read -r name; do
-    local dummy=""
-    rc=0
-    eval "$(hs_extract_token hs_extract_token __et_tok -S "$name")" || rc=$?
-    [[ "$rc" -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || {
-      printf 'expected HS_ERR_RESERVED_VAR_NAME for -S %s but got %d\n' "$name" "$rc" >&2
+    run --separate-stderr f "$name"
+    [[ "$status" -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || {
+      printf 'expected HS_ERR_RESERVED_VAR_NAME for -S %s but got %d\n' "$name" "$status" >&2
       return 1
     }
+    [[ "$stderr" == *"is reserved"* ]]
   done < <(hs_extract_token --list-reserved)
 }
 
@@ -1703,8 +1724,11 @@ EOF
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token --list-reserved output identical to hs_persist_state --list-reserved" {
   local out_et out_ps
-  out_et="$(hs_extract_token --list-reserved)"
-  out_ps="$(hs_persist_state --list-reserved)"
+  run -0 hs_extract_token --list-reserved
+  [[ -n "$output" ]]
+  out_et="$output"
+  run -0 hs_persist_state --list-reserved
+  out_ps="$output"
   [[ "$out_et" == "$out_ps" ]]
 }
 
@@ -1725,9 +1749,8 @@ EOF
 
 # bats test_tags=hs_extract_token,issue-136
 @test "hs_extract_token eval-code --list-reserved form rejects extra arguments" {
-  f() { eval "$(hs_extract_token f __et_tok --list-reserved extra)"; }
-  run --separate-stderr f
-  [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
+  f() { eval "$(hs_extract_token f __et_tok "$@")"; }
+  run -"$HS_ERR_INVALID_ARGUMENT_TYPE" --separate-stderr f --list-reserved extra
   [[ "$stderr" == *"--list-reserved takes no other arguments"* ]]
 }
 
@@ -1757,7 +1780,7 @@ EOF
     eval "$(hs_extract_token f __tok "$@")" || return $?
     [[ "$__tok" == "token-value" ]]
   }
-  f -S __tok
+  run -0 f -S __tok
 }
 
 # ---------------------------------------------------------------------------
@@ -1785,15 +1808,15 @@ EOF
 
 # bats test_tags=hs_write_token,issue-136
 @test "hs_write_token — returns HS_ERR_RESERVED_VAR_NAME when -S names a reserved variable" {
-  local name rc
+  f() { eval "$(hs_write_token hs_persist_state __wt_tok -S "$1")"; }
+  local name
   while IFS= read -r name; do
-    local dummy=""
-    rc=0
-    eval "$(hs_write_token hs_persist_state __wt_tok -S "$name")" || rc=$?
-    [[ "$rc" -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || {
-      printf 'expected HS_ERR_RESERVED_VAR_NAME for -S %s but got %d\n' "$name" "$rc" >&2
+    run --separate-stderr f "$name"
+    [[ "$status" -eq "$HS_ERR_RESERVED_VAR_NAME" ]] || {
+      printf 'expected HS_ERR_RESERVED_VAR_NAME for -S %s but got %d\n' "$name" "$status" >&2
       return 1
     }
+    [[ "$stderr" == *"is reserved"* ]]
   done < <(hs_persist_state --list-reserved)
 }
 
@@ -1880,9 +1903,17 @@ EOF
 # bats test_tags=hs_extract_token,hs_write_token,issue-136
 @test "--list-reserved collision-surface size — hs_extract_token reports less than 2 names" {
   local count=0 name
-  while IFS= read -r name; do (( ++count )); done < <(hs_extract_token --list-reserved)
+  while IFS= read -r name; do
+    (( ++count ))
+    # In-loop regression guard: fail fast on runaway --list-reserved output
+    # instead of spinning until the test timeout (see the hs_persist_state
+    # collision-surface size test).
+    [[ "$count" -le 2 ]] || {
+      printf 'more than 2 reserved names reported: runaway or grown --list-reserved output\n' >&2
+      return 1
+    }
+  done < <(hs_extract_token --list-reserved)
   [[ "$count" -ge 1 ]]
-  [[ "$count" -le 2 ]]
 }
 
 return 0
