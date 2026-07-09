@@ -1916,6 +1916,133 @@ EOF
   [[ "$count" -ge 1 ]]
 }
 
+# ---------------------------------------------------------------------------
+# issue #143 — token-borne --list-reserved mode (preliminary tests)
+# These illustrate the documented new behaviour and are expected to FAIL until
+# the implementation lands (hs_finalize_token, hs_is_list_reserved_mode,
+# hs_read_only, the HS2 mode-token marker, and HS_ERR_LIST_RESERVED_TOKEN).
+# ---------------------------------------------------------------------------
+
+# bats test_tags=issue-143
+@test "HS_ERR_LIST_RESERVED_TOKEN is defined as 13" {
+  [[ -n "${HS_ERR_LIST_RESERVED_TOKEN:-}" ]] && [[ "$HS_ERR_LIST_RESERVED_TOKEN" -eq 13 ]]
+}
+
+# bats test_tags=hs_extract_token,issue-143
+@test "hs_extract_token --list-reserved mints a mode token carrying reserved_names" {
+  f() {
+    eval "$(hs_extract_token f __tok "$@")" || return $?
+    [[ "$__tok" == HS2:mode=list-reserved:* ]] || { echo "marker: $__tok" >&2; return 1; }
+    [[ "$__tok" == *reserved_names* ]]         || { echo "payload: $__tok" >&2; return 1; }
+  }
+  run -0 --separate-stderr f --list-reserved
+}
+
+# bats test_tags=hs_is_list_reserved_mode,issue-143
+@test "hs_is_list_reserved_mode distinguishes a mode token from a real token" {
+  f() {
+    eval "$(hs_extract_token f __tok "$@")" || return $?
+    hs_is_list_reserved_mode -S __tok && echo MODE || echo NORMAL
+  }
+  run -0 --separate-stderr f --list-reserved
+  [[ "$output" == MODE ]]
+
+  producer() { local x=1; hs_persist_state "$@" -- x; }
+  local state=""
+  producer -S state
+  g() {
+    eval "$(hs_extract_token g __tok "$@")" || return $?
+    hs_is_list_reserved_mode -S __tok && echo MODE || echo NORMAL
+  }
+  run -0 --separate-stderr g -S state
+  [[ "$output" == NORMAL ]]
+}
+
+# bats test_tags=hs_finalize_token,issue-143
+@test "hs_finalize_token writes the updated token back to the -S state variable" {
+  f() {
+    local dest="old"
+    eval "$(hs_extract_token f __tok "$@")" || return $?
+    __tok="new-value"
+    eval "$(hs_finalize_token f __tok "$@")" || return $?
+    [[ "$dest" == "new-value" ]]
+  }
+  run -0 f -S dest
+}
+
+# bats test_tags=hs_finalize_token,issue-143
+@test "entry point --list-reserved includes the token local when read-write" {
+  rw() {
+    eval "$(hs_extract_token rw __rwtok "$@")" || return $?
+    hs_is_list_reserved_mode -S __rwtok || { _rw "$@" || return $?; }
+    eval "$(hs_finalize_token rw __rwtok "$@")" || return $?
+  }
+  _rw() { :; }
+  run -0 --separate-stderr rw --list-reserved
+  [[ "$output" == *"__rwtok"* ]]
+  [[ "$output" == *"__hs_processed"* ]]
+}
+
+# bats test_tags=hs_read_only,issue-143
+@test "entry point --list-reserved excludes the token local when read-only" {
+  ro() {
+    eval "$(hs_extract_token ro __rotok "$@")" || return $?
+    eval "$(hs_read_only     ro __rotok "$@")"
+    hs_is_list_reserved_mode -S __rotok || { _ro "$@" || return $?; }
+    eval "$(hs_finalize_token ro __rotok "$@")" || return $?
+  }
+  _ro() { :; }
+  run -0 --separate-stderr ro --list-reserved
+  [[ "$output" == *"__hs_processed"* ]]
+  [[ "$output" != *"__rotok"* ]]
+}
+
+# bats test_tags=hs_extract_token,issue-143
+@test "list-reserved report captures a stray local declared before extract" {
+  f() {
+    local leaked_before=1
+    eval "$(hs_extract_token f __tok "$@")" || return $?
+    hs_is_list_reserved_mode -S __tok || { :; }
+    eval "$(hs_finalize_token f __tok "$@")" || return $?
+  }
+  run -0 --separate-stderr f --list-reserved
+  [[ "$output" == *"leaked_before"* ]]
+}
+
+# bats test_tags=hs_finalize_token,issue-143
+@test "list-reserved report captures a stray local declared between the evals" {
+  f() {
+    eval "$(hs_extract_token f __tok "$@")" || return $?
+    local leaked_between=1
+    hs_is_list_reserved_mode -S __tok || { :; }
+    eval "$(hs_finalize_token f __tok "$@")" || return $?
+  }
+  run -0 --separate-stderr f --list-reserved
+  [[ "$output" == *"leaked_between"* ]]
+}
+
+# bats test_tags=hs_persist_state,issue-143
+@test "a mode token handed to hs_persist_state is rejected discriminably" {
+  f() {
+    eval "$(hs_extract_token f __tok "$@")" || return $?   # __tok becomes a mode token
+    local x=1
+    hs_persist_state -S __tok -- x
+  }
+  run f --list-reserved
+  [[ "$status" -eq "${HS_ERR_LIST_RESERVED_TOKEN:-13}" ]]
+}
+
+# bats test_tags=hs_read_only,issue-143
+@test "hs_read_only strips -S from the argument list in normal mode" {
+  f() {
+    eval "$(hs_extract_token f __tok "$@")" || return $?
+    eval "$(hs_read_only     f __tok "$@")"
+    printf '%s' "$*"
+  }
+  run -0 --separate-stderr f -S dest
+  [[ "$output" != *"-S"* ]]
+}
+
 return 0
 
 # --- Change History -------------------------------------------------------
