@@ -1101,18 +1101,18 @@ hs2_corrupt_state() {
   [[ "$stderr" == *"str_target"* ]]
 }
 
-# bats test_tags=hs_persist_state,hs_extract_token,hs_write_token,hs_destroy_state,issue-136
+# bats test_tags=hs_persist_state,hs_extract_token,hs_finalize_token,hs_destroy_state,issue-136,issue-143
 @test "read-modify-write — entry point updates one variable in an existing state token" {
-  # Full read/modify/write cycle using the hs_extract_token / hs_write_token
+  # Full read/modify/write cycle using the hs_extract_token / hs_finalize_token
   # entry-point pattern.  The test verifies that:
   #   1. init persists two vars (counter, label).
   #   2. update_counter uses hs_extract_token + hs_destroy_state + hs_persist_state
-  #      + hs_write_token to increment counter without touching label.
+  #      + hs_finalize_token to increment counter without touching label.
   #   3. read_back restores both vars and confirms the update landed correctly.
   # hs_destroy_state is required before re-persisting because hs_persist_state
   # rejects names already present in the token (HS_ERR_VAR_NAME_COLLISION).
   # Because Bash is sequential and subshells cannot write back to the parent
-  # shell's variables, the token update is safe: hs_write_token runs in a
+  # shell's variables, the token update is safe: hs_finalize_token runs in a
   # subshell only to emit the assignment code; eval in the entry-point frame
   # performs the actual write atomically.
   # shellcheck disable=SC2329
@@ -1122,10 +1122,10 @@ hs2_corrupt_state() {
       hs_persist_state -S "$1" -- counter label || return $?
     }
     update_counter() {
-      # Entry-point: zero collision surface before eval.
+      # Canonical skeleton: extract -> body-unless-listing -> finalize.
       eval "$(hs_extract_token update_counter __uc_tok "$@")" || return $?
-      _update_counter_body "$@" || return $?
-      eval "$(hs_write_token update_counter __uc_tok "$@")" || return $?
+      hs_is_list_reserved_mode -S __uc_tok || { _update_counter_body "$@" || return $?; }
+      eval "$(hs_finalize_token update_counter __uc_tok "$@")" || return $?
     }
     _update_counter_body() {
       local counter label
@@ -1732,19 +1732,19 @@ EOF
   [[ "$out_et" == "$out_ps" ]]
 }
 
-# bats test_tags=hs_extract_token,issue-136
-@test "hs_extract_token eval-code --list-reserved form emits list_reserved sentinel and empty token local" {
+# bats test_tags=hs_extract_token,issue-143
+@test "hs_extract_token eval-code --list-reserved form declares no list_reserved local and mints a mode token" {
   ro_entry_point() {
     eval "$(hs_extract_token ro_entry_point __ro_tok "$@")" || return $?
-    [[ -n "${list_reserved@A}" ]] || { echo "list_reserved not declared" >&2; return 1; }
-    [[ -n "${__ro_tok@A}" ]]     || { echo "__ro_tok not declared" >&2; return 1; }
-    # list_reserved holds actual reserved names, not just a boolean flag.
-    [[ "$list_reserved" == *"__hs_remaining"* ]] || { echo "list_reserved missing __hs_remaining" >&2; return 1; }
-    [[ "$list_reserved" == *"__hs_processed"* ]] || { echo "list_reserved missing __hs_processed" >&2; return 1; }
-    echo "__ro_tok"
+    # No list_reserved sentinel local is declared anywhere (old design removed).
+    [[ -z "${list_reserved@A}" ]] || { echo "list_reserved was declared" >&2; return 1; }
+    # The token local carries a mode token, not an empty string.
+    [[ "$__ro_tok" == HS2:mode=list-reserved:* ]] || { echo "not a mode token: $__ro_tok" >&2; return 1; }
+    [[ "$__ro_tok" == *"reserved_names"* ]]        || { echo "no reserved_names payload: $__ro_tok" >&2; return 1; }
+    echo OK
   }
   run -0 --separate-stderr ro_entry_point --list-reserved
-  [[ "$output" == "__ro_tok" ]]
+  [[ "$output" == "OK" ]]
 }
 
 # bats test_tags=hs_extract_token,issue-136
@@ -1784,31 +1784,25 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# hs_write_token
+# hs_finalize_token
 # ---------------------------------------------------------------------------
 
-# bats test_tags=hs_write_token,issue-136
-@test "hs_write_token — writes source local value into caller state variable" {
-  write_test_helper() {
-    local dest_tok="old"
-    eval "$(hs_extract_token write_test_helper __wt_tok "$@")" || return $?
-    __wt_tok="new-value"
-    eval "$(hs_write_token write_test_helper __wt_tok "$@")" || return $?
-    [[ "$dest_tok" == "new-value" ]]
+# bats test_tags=hs_finalize_token,issue-143
+@test "hs_finalize_token without -S is a read-only no-op returning success" {
+  # -S-optional relaxation: a normal token with no -S writes nothing and
+  # succeeds (read-only w.r.t. external state), rather than erroring as the
+  # former hs_write_token did with HS_ERR_STATE_VAR_UNINITIALIZED.
+  f() {
+    local __wt_tok=""
+    eval "$(hs_finalize_token f __wt_tok)" || return $?
   }
-  run -0 write_test_helper -S dest_tok
+  run -0 --separate-stderr f
+  [[ -z "$output" ]]
 }
 
-# bats test_tags=hs_write_token,issue-136
-@test "hs_write_token — returns HS_ERR_STATE_VAR_UNINITIALIZED when -S absent" {
-  f() { eval "$(hs_write_token f __wt_tok "$@")"; }
-  run f
-  [[ "$status" -eq "$HS_ERR_STATE_VAR_UNINITIALIZED" ]]
-}
-
-# bats test_tags=hs_write_token,issue-136
-@test "hs_write_token — returns HS_ERR_RESERVED_VAR_NAME when -S names a reserved variable" {
-  f() { eval "$(hs_write_token hs_persist_state __wt_tok "$@")"; }
+# bats test_tags=hs_finalize_token,issue-143
+@test "hs_finalize_token — returns HS_ERR_RESERVED_VAR_NAME when -S names a reserved variable" {
+  f() { eval "$(hs_finalize_token hs_persist_state __wt_tok "$@")"; }
   local name
   while IFS= read -r name; do
     run --separate-stderr f -S "$name"
@@ -1820,24 +1814,18 @@ EOF
   done < <(hs_persist_state --list-reserved)
 }
 
-# bats test_tags=hs_write_token,issue-136
-@test "hs_write_token --list-reserved includes source local name" {
-  run -0 hs_write_token entry_func __wt_tok --list-reserved
-  [[ "$output" == *"__wt_tok"* ]]
-}
-
-# bats test_tags=hs_extract_token,hs_write_token,issue-136
-@test "entry point --list-reserved equals hs_persist_state --list-reserved plus source local" {
+# bats test_tags=hs_extract_token,hs_finalize_token,issue-143
+@test "entry point --list-reserved equals hs_persist_state --list-reserved plus token local" {
   # hs_persist_state --list-reserved is the canonical enumeration of the
-  # shared parsing machinery's collision surface.  An entry point built on
-  # the token utilities must report exactly that set plus its own source
-  # local: any missing canonical name is an under-report that lets a caller
-  # pick a -S name the machinery shadows (silent state corruption); any
+  # shared parsing machinery's collision surface.  A read-write entry point
+  # built on the token utilities must report exactly that set plus its own
+  # token local: any missing canonical name is an under-report that lets a
+  # caller pick a -S name the machinery shadows (silent state corruption); any
   # extra name is an unjustified new reservation.  Exact set equality is
   # asserted in both directions (PR #140 thread on the former superset test).
   rw_entry() {
     eval "$(hs_extract_token rw_entry __rw_tok "$@")" || return $?
-    eval "$(hs_write_token rw_entry __rw_tok "$@")" || return $?
+    eval "$(hs_finalize_token rw_entry __rw_tok "$@")" || return $?
   }
   local name
   local -A expected=() reported=()
@@ -1857,50 +1845,27 @@ EOF
   done
   for name in "${!reported[@]}"; do
     [[ -n "${expected[$name]+x}" ]] || {
-      printf 'extra name %s reported beyond hs_persist_state surface plus source local\n' "$name" >&2
+      printf 'extra name %s reported beyond hs_persist_state surface plus token local\n' "$name" >&2
       return 1
     }
   done
 }
 
-# bats test_tags=hs_write_token,issue-136
-@test "hs_write_token --list-reserved direct query exits 0 with non-empty output" {
-  run -0 hs_write_token --list-reserved
+# bats test_tags=hs_finalize_token,issue-143
+@test "hs_finalize_token --list-reserved direct query exits 0 with non-empty output" {
+  run -0 hs_finalize_token --list-reserved
   [[ -n "$output" ]]
 }
 
-# bats test_tags=hs_write_token,issue-136
-@test "hs_write_token --list-reserved direct query rejects extra arguments" {
-  f() { hs_write_token --list-reserved extra; }
+# bats test_tags=hs_finalize_token,issue-143
+@test "hs_finalize_token --list-reserved direct query rejects extra arguments" {
+  f() { hs_finalize_token --list-reserved extra; }
   run --separate-stderr f
   [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
   [[ "$stderr" == *"--list-reserved takes no other arguments"* ]]
 }
 
-# bats test_tags=hs_write_token,issue-136
-@test "hs_write_token eval-code --list-reserved form rejects extra arguments when source local given" {
-  f() { eval "$(hs_write_token f __wt_tok --list-reserved extra)"; }
-  run --separate-stderr f
-  [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
-  [[ "$stderr" == *"--list-reserved takes no other arguments"* ]]
-}
-
-# bats test_tags=hs_extract_token,hs_write_token,issue-136
-@test "hs_write_token eval-code --list-reserved form merges hs_extract_token surface and source local" {
-  rw_entry_point() {
-    eval "$(hs_extract_token rw_entry_point __rw_tok "$@")" || return $?
-    if ! local -p list_reserved >/dev/null 2>&1; then
-      :
-    fi
-    eval "$(hs_write_token rw_entry_point __rw_tok "$@")" || return $?
-  }
-  run -0 --separate-stderr rw_entry_point --list-reserved
-  [[ "$output" == *"__hs_remaining"* ]]
-  [[ "$output" == *"__hs_processed"* ]]
-  [[ "$output" == *"__rw_tok"* ]]
-}
-
-# bats test_tags=hs_extract_token,hs_write_token,issue-136
+# bats test_tags=hs_extract_token,issue-136
 @test "--list-reserved collision-surface size — hs_extract_token reports less than 2 names" {
   local count=0 name
   while IFS= read -r name; do
@@ -1940,47 +1905,31 @@ EOF
 
 # bats test_tags=hs_is_list_reserved_mode,issue-143
 @test "hs_is_list_reserved_mode distinguishes a mode token from a real token" {
+  producer() { local x=1; hs_persist_state "$@" -- x; }
+  local state=""
+  producer -S state
+  # One entry point exercises both cases: --list-reserved yields a mode token,
+  # -S <real state> yields an ordinary token.
   f() {
     eval "$(hs_extract_token f __tok "$@")" || return $?
     hs_is_list_reserved_mode -S __tok && echo MODE || echo NORMAL
   }
   run -0 --separate-stderr f --list-reserved
   [[ "$output" == MODE ]]
-
-  producer() { local x=1; hs_persist_state "$@" -- x; }
-  local state=""
-  producer -S state
-  g() {
-    eval "$(hs_extract_token g __tok "$@")" || return $?
-    hs_is_list_reserved_mode -S __tok && echo MODE || echo NORMAL
-  }
-  run -0 --separate-stderr g -S state
+  run -0 --separate-stderr f -S state
   [[ "$output" == NORMAL ]]
 }
 
 # bats test_tags=hs_finalize_token,issue-143
-@test "hs_finalize_token writes the updated token back to the -S state variable" {
+@test "hs_finalize_token writes the updated token back through dynamic scope" {
+  local dest="old"                       # declared in the caller frame, before f
   f() {
-    local dest="old"
     eval "$(hs_extract_token f __tok "$@")" || return $?
     __tok="new-value"
     eval "$(hs_finalize_token f __tok "$@")" || return $?
-    [[ "$dest" == "new-value" ]]
   }
-  run -0 f -S dest
-}
-
-# bats test_tags=hs_finalize_token,issue-143
-@test "entry point --list-reserved includes the token local when read-write" {
-  rw() {
-    eval "$(hs_extract_token rw __rwtok "$@")" || return $?
-    hs_is_list_reserved_mode -S __rwtok || { _rw "$@" || return $?; }
-    eval "$(hs_finalize_token rw __rwtok "$@")" || return $?
-  }
-  _rw() { :; }
-  run -0 --separate-stderr rw --list-reserved
-  [[ "$output" == *"__rwtok"* ]]
-  [[ "$output" == *"__hs_processed"* ]]
+  f -S dest                              # called directly (no run subshell) so the write is observable
+  [[ "$dest" == "new-value" ]]           # finalize wrote into the caller-frame variable via dynamic scope
 }
 
 # bats test_tags=hs_read_only,issue-143
@@ -2021,15 +1970,31 @@ EOF
   [[ "$output" == *"leaked_between"* ]]
 }
 
-# bats test_tags=hs_persist_state,issue-143
-@test "a mode token handed to hs_persist_state is rejected discriminably" {
+# bats test_tags=hs_persist_state,hs_read_persisted_state,issue-143
+@test "a mode token handed to a normal consumer is rejected with a stderr diagnostic" {
+  # Handing a mode token to a normal consumer is a structural (programmer) error,
+  # so the library must both return HS_ERR_LIST_RESERVED_TOKEN and print a
+  # diagnostic explaining the problem on stderr.
+  # hs_persist_state has no -q: the diagnostic is always printed.
   f() {
     eval "$(hs_extract_token f __tok "$@")" || return $?   # __tok becomes a mode token
     local x=1
     hs_persist_state -S __tok -- x
   }
-  run f --list-reserved
+  run --separate-stderr f --list-reserved
   [[ "$status" -eq "${HS_ERR_LIST_RESERVED_TOKEN:-13}" ]]
+  [[ "$stderr" == *"list-reserved"* ]]
+
+  # hs_read_persisted_state has -q; -q suppresses missing-variable warnings, not
+  # this structural error, so the diagnostic is still printed under -q.
+  g() {
+    eval "$(hs_extract_token g __tok "$@")" || return $?
+    local y
+    hs_read_persisted_state -q -S __tok -- y
+  }
+  run --separate-stderr g --list-reserved
+  [[ "$status" -eq "${HS_ERR_LIST_RESERVED_TOKEN:-13}" ]]
+  [[ "$stderr" == *"list-reserved"* ]]
 }
 
 # bats test_tags=hs_read_only,issue-143
