@@ -1142,3 +1142,4 @@ _hs_hs2_parse() {
 # | #134  | remove top-level return 0 — fixes SC2317 in sourcing files [closes #133] |
 # | #140  | add hs_extract_token and hs_write_token; API_function name as $1 [closes #136] |
 # | #140  | fix --list-reserved merge for read-write entry points             |
+# | #145  | token-borne --list-reserved; hs_write_token->hs_finalize_token [closes #143] |

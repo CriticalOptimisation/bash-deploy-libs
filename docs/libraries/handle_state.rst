@@ -709,6 +709,8 @@ Change History
      - add hs_extract_token and hs_write_token; entry-point pattern (issue #136)
    * - #140
      - fix --list-reserved merge for read-write entry points
+   * - #145
+     - token-borne --list-reserved mode; hs_finalize_token, hs_is_list_reserved_mode, hs_read_only (issue #143)
    * - #99
      - error on undeclared variable names [closes #1]
    * - #102

@@ -2088,3 +2088,4 @@ return 0
 # | #110  | document HS_ERR_MULTIPLE_STATE_INPUTS for all entry points     |
 # | #140  | add hs_extract_token and hs_write_token; entry-point pattern        |
 # | #140  | fix --list-reserved merge for read-write entry points [closes #136] |
+# | #145  | token-borne --list-reserved; hs_finalize_token/hs_read_only [closes #143] |
