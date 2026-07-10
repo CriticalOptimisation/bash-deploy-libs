@@ -19,7 +19,14 @@ readonly HS_ERR_INVALID_ARGUMENT_TYPE=9
 readonly HS_ERR_UNKNOWN_VAR_NAME=10
 readonly HS_ERR_VAR_ALREADY_SET=11
 readonly HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12
+readonly HS_ERR_LIST_RESERVED_TOKEN=13
 readonly HS_ERR_DEPENDENCY_MISSING=19
+
+# --- Internal constants --------------------------------------------------------
+# A list-reserved "mode token" replaces the numeric checksum field of an HS2
+# object with this marker, which cksum output (digits only) can never equal.
+# hs_read_only appends "-ro" to it; hs_is_list_reserved_mode matches the prefix.
+readonly _HS_LIST_RESERVED_MARK='mode=list-reserved'
 
 # Source command guard for secure external command usage
 # shellcheck disable=SC2317  # Linter complains that the error handler is unreachable.
@@ -424,14 +431,11 @@ hs_read_persisted_state() {
 #
 #   Eval-code --list-reserved form ($1 is API function name, $2 is local_name, $3 == --list-reserved, no $4):
 #     eval "$(hs_extract_token mod_entry_point __mod_state_token --list-reserved)"
-#     Emits two sentinel declarations for the calling entry-point frame:
-#       local list_reserved=""     -- marks --list-reserved mode
-#       local <local_name>=''     -- token local pre-declared so it appears in
-#                                    the lp_snapshot the entry-point takes next
+#     Declares the token local (late, so it is absent from its own capture) and
+#     assigns it a mode token: HS2:mode=list-reserved:<reserved_names payload>,
+#     minted by _hs_mint_list_reserved_token from this function's own surface plus
+#     a capture of the entry-point frame. No list_reserved local is declared.
 #     Returns HS_ERR_INVALID_ARGUMENT_TYPE if any $4.. are present.
-#     The entry-point detects list_reserved with _hs_local_exists, then takes
-#     a combined lp_snapshot and calls _hs_print_reserved_names to report every
-#     local except list_reserved (lp_snapshot excluded by the combined form).
 #
 #   Normal eval form ($1 is API function name, $2 is local_name, $3 is not --list-reserved):
 #     eval "$(hs_extract_token mod_entry_point __mod_state_token "$@")"
@@ -464,15 +468,21 @@ hs_extract_token() {
             printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_ARGUMENT_TYPE"
             return 0
         fi
-        # Eval-code --list-reserved form: emit sentinels into the entry-point frame.
-        # list_reserved holds own reserved names so hs_write_token can merge them;
-        # local $2='' ensures the token local is declared in the entry-point frame.
+        # Eval-code --list-reserved form: emit code that declares the token local
+        # (late — so it is absent from its own capture) and assigns it a mode token
+        # minted from this function's own surface plus a fresh capture of the
+        # entry-point frame. hs_finalize_token later merges another capture and
+        # decides whether the token local itself belongs in the report.
         # shellcheck disable=SC2155
         local lp_snapshot="$(local -p)"
-        local hs_et_names
-        hs_et_names="$(_hs_print_reserved_names "$lp_snapshot")"
-        printf 'local list_reserved=%s\n' "$(printf '%q' "$hs_et_names")"
         printf 'local %s=%s\n' "$2" "''"
+        printf '%s="$(_hs_mint_list_reserved_token %s "$(local -p)"' \
+            "$2" "$(printf '%q' "$2")"
+        local __hs_et_name
+        while IFS= read -r __hs_et_name; do
+            [[ -n "$__hs_et_name" ]] && printf ' %s' "$(printf '%q' "$__hs_et_name")"
+        done < <(_hs_print_reserved_names "$lp_snapshot")
+        printf ')"\n'
         return 0
     fi
     _hs_resolve_state_inputs "$1" S: "${@:3}" \
@@ -482,41 +492,36 @@ hs_extract_token() {
     printf 'local %s=%s\n' "$2" "$(printf '%q' "$__hs_et_value")"
 }
 
-# --- hs_write_token -----------------------------------------------------------
+# --- hs_finalize_token --------------------------------------------------------
 # Function:
-#   hs_write_token --list-reserved
-#   hs_write_token <API_function> <source_local> --list-reserved
-#   hs_write_token <API_function> <source_local> [forwarded options] -S <statevar>
+#   hs_finalize_token --list-reserved
+#   hs_finalize_token <API_function> <token_local> [forwarded options]
 # Description:
+#   The terminal step of every entry point, always called. Its behaviour is
+#   driven by the token in <token_local>, never by re-parsing $@.
+#
 #   Direct query form ($1 == --list-reserved, no further args):
 #     Prints every local in this function's own frame, one per line; identical
-#     output to hs_persist_state --list-reserved.  Called automatically by
-#     _hs_resolve_state_inputs to build the collision-section guard.
+#     output to hs_persist_state --list-reserved.
 #     Returns HS_ERR_INVALID_ARGUMENT_TYPE if any extra arguments are present.
 #
-#   Eval-code --list-reserved form ($1 is API function name, $2 is source_local, $3 == --list-reserved):
-#     Computes own surface, merges with list_reserved from the inherited entry-point frame
-#     (populated by hs_extract_token in read-write patterns), adds $2, and emits eval-code
-#     that prints all merged names and returns 0 from the entry-point.
-#     Returns HS_ERR_INVALID_ARGUMENT_TYPE (via eval-code) if any $4.. present.
-#
-#   Normal eval form ($1 is API function name, $2 is source_local, $3 is not --list-reserved):
-#     eval "$(hs_write_token mod_entry_point __mod_state_token "$@")"
-#     Parses -S <statevar> from forwarded opts ($3..) and prints either:
-#       <statevar>='<updated_value>'   on success (plain assignment, not local)
-#       bash -c 'exit N'              on error (causes eval to return N)
+#   Eval form ($1 is API function name, $2 is token_local):
+#     eval "$(hs_finalize_token mod_entry_point __mod_state_token "$@")"
+#     Mode token (checksum field starts with "mode="): emits code that captures
+#       the entry-point frame afresh and prints the merged collision surface —
+#       reserved_names read from the token, the fresh capture, and $2 unless the
+#       marker ends in "-ro" — then returns 0.
+#     Normal token with -S <statevar> in the forwarded args: prints
+#       <statevar>='<value>' (plain assignment) to write the token back.
+#     Normal token with no -S: emits nothing and returns 0 (read-only).
+#     On error while parsing -S: prints bash -c 'exit N'.
 #     Runs in a subshell: no caller local visible at fork, collision space = 0.
-# Arguments:
-#   $1          - --list-reserved (direct query) OR name of the calling API function
-#   $2          - name of the local holding the updated token value (eval forms only)
-#   $3          - --list-reserved (with-source-local mode, no further args) OR first forwarded opt
-#   $4..        - forwarded parameter list (normal eval form: must contain -S)
-hs_write_token() {
+hs_finalize_token() {
     local -a __hs_remaining=()
     local -A __hs_processed=()
     if [[ "${1-}" == "--list-reserved" ]]; then
         if [[ $# -gt 1 ]]; then
-            echo "[ERROR] hs_write_token: --list-reserved takes no other arguments." >&2
+            echo "[ERROR] hs_finalize_token: --list-reserved takes no other arguments." >&2
             return "$HS_ERR_INVALID_ARGUMENT_TYPE"
         fi
         # Direct query form: print own collision surface, one name per line.
@@ -525,39 +530,126 @@ hs_write_token() {
         _hs_print_reserved_names "$lp_snapshot"
         return 0
     fi
-    if [[ "${3-}" == "--list-reserved" ]]; then
-        if [[ $# -gt 3 ]]; then
-            echo "[ERROR] $1: --list-reserved takes no other arguments." >&2
-            printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_ARGUMENT_TYPE"
+    # shellcheck disable=SC2155  # value read from inherited frame by position
+    local __hs_ft_tok="${!2}"
+    if [[ "$__hs_ft_tok" == HS2:* ]]; then
+        local __hs_ft_field="${__hs_ft_tok#HS2:}"
+        __hs_ft_field="${__hs_ft_field%%:*}"
+        if [[ "$__hs_ft_field" == mode=* ]]; then
+            # Report path: recover reserved_names from the payload, then emit code
+            # that merges it with a fresh entry-point-frame capture, adding the
+            # token local ($2) unless the marker carries the read-only suffix.
+            local __hs_ft_payload="${__hs_ft_tok#HS2:*:}"
+            local -a reserved_names=()
+            eval "$__hs_ft_payload"
+            local __hs_ft_excl=''
+            [[ "$__hs_ft_field" == *-ro ]] && __hs_ft_excl="$2"
+            printf '_hs_emit_reserved %s "$(local -p)"' "$(printf '%q' "$__hs_ft_excl")"
+            local __hs_ft_name
+            for __hs_ft_name in "${reserved_names[@]}"; do
+                printf ' %s' "$(printf '%q' "$__hs_ft_name")"
+            done
+            printf '\nreturn 0\n'
             return 0
         fi
-        # Eval-code --list-reserved form: compute own surface, merge with
-        # list_reserved from the entry-point frame (set by hs_extract_token in
-        # read-write patterns), add source-local, emit printf + return 0.
-        # shellcheck disable=SC2155
-        local lp_snapshot="$(local -p)"
-        local hs_wt_names _hs_name
-        hs_wt_names="$(_hs_print_reserved_names "$lp_snapshot")"
-        local -A _hs_merged=()
-        while IFS= read -r _hs_name; do
-            [[ -n "$_hs_name" ]] && _hs_merged["$_hs_name"]=1
-        done <<< "$hs_wt_names"
-        if [[ -v list_reserved ]]; then
-            while IFS= read -r _hs_name; do
-                [[ -n "$_hs_name" ]] && _hs_merged["$_hs_name"]=1
-            done <<< "$list_reserved"
-        fi
-        _hs_merged["$2"]=1
-        printf "printf '%%s\\n'"
-        for _hs_name in "${!_hs_merged[@]}"; do
-            printf ' %s' "$(printf '%q' "$_hs_name")"
-        done
-        printf '\nreturn 0\n'
-        return 0
     fi
+    # Normal token: write back only when the caller passed -S; a missing -S means
+    # the entry point is read-only w.r.t. external state (silent no-op).
+    local __hs_ft_has_s=0 __hs_ft_arg
+    for __hs_ft_arg in "${@:3}"; do
+        [[ "$__hs_ft_arg" == "--" ]] && break
+        [[ "$__hs_ft_arg" == "-S" || "$__hs_ft_arg" == "-S"?* ]] && { __hs_ft_has_s=1; break; }
+    done
+    (( __hs_ft_has_s )) || return 0
     _hs_resolve_state_inputs "$1" S: "${@:3}" \
         || { printf 'bash -c '\''exit %d'\''\n' "$?"; return 0; }
     printf '%s=%s\n' "${__hs_processed[state]}" "$(printf '%q' "${!2}")"
+}
+
+# --- hs_is_list_reserved_mode -------------------------------------------------
+# Function:
+#   hs_is_list_reserved_mode --list-reserved
+#   hs_is_list_reserved_mode -S <token_local>
+# Description:
+#   Body-skip guard for the entry-point skeleton. Returns 0 iff the token named
+#   by -S is a list-reserved mode token (checksum field starts with
+#   "mode=list-reserved", matching both the baseline and the -ro variant), and
+#   non-zero otherwise. Reads the token through dynamic scope; never accesses
+#   external state, so it carries no collision surface of its own.
+#   The direct query form ($1 == --list-reserved) prints its own reserved names.
+hs_is_list_reserved_mode() {
+    local -a __hs_remaining=()
+    local -A __hs_processed=()
+    if [[ "${1-}" == "--list-reserved" ]]; then
+        if [[ $# -gt 1 ]]; then
+            echo "[ERROR] hs_is_list_reserved_mode: --list-reserved takes no other arguments." >&2
+            return "$HS_ERR_INVALID_ARGUMENT_TYPE"
+        fi
+        # shellcheck disable=SC2155
+        local lp_snapshot="$(local -p)"
+        _hs_print_reserved_names "$lp_snapshot"
+        return 0
+    fi
+    _hs_resolve_state_inputs hs_is_list_reserved_mode S: "$@" || return $?
+    local __hs_ilrm_tok="${!__hs_processed[state]}"
+    [[ "$__hs_ilrm_tok" == HS2:* ]] || return 1
+    local __hs_ilrm_field="${__hs_ilrm_tok#HS2:}"
+    __hs_ilrm_field="${__hs_ilrm_field%%:*}"
+    [[ "$__hs_ilrm_field" == "$_HS_LIST_RESERVED_MARK"* ]]
+}
+
+# --- hs_read_only -------------------------------------------------------------
+# Function:
+#   hs_read_only --list-reserved
+#   hs_read_only <API_function> <token_local> [forwarded options]
+# Description:
+#   Optional entry-point line marking the function read-only w.r.t. external
+#   state. Mode-agnostic, keyed on the token's checksum field:
+#     "mode=..." marker  -> emits <token_local>=<token with -ro appended>
+#                           (idempotent), so hs_finalize_token excludes the token
+#                           local from the collision report.
+#     numeric / empty    -> emits `set -- ...` with `-S <var>` stripped from the
+#                           forwarded args, so hs_finalize_token writes nothing.
+#   Runs in a subshell; the entry point evals its output.
+hs_read_only() {
+    if [[ "${1-}" == "--list-reserved" ]]; then
+        if [[ $# -gt 1 ]]; then
+            echo "[ERROR] hs_read_only: --list-reserved takes no other arguments." >&2
+            return "$HS_ERR_INVALID_ARGUMENT_TYPE"
+        fi
+        # shellcheck disable=SC2155
+        local lp_snapshot="$(local -p)"
+        _hs_print_reserved_names "$lp_snapshot"
+        return 0
+    fi
+    # shellcheck disable=SC2155
+    local __hs_ro_tok="${!2}"
+    if [[ "$__hs_ro_tok" == HS2:* ]]; then
+        local __hs_ro_field="${__hs_ro_tok#HS2:}"
+        __hs_ro_field="${__hs_ro_field%%:*}"
+        if [[ "$__hs_ro_field" == mode=* ]]; then
+            if [[ "$__hs_ro_field" != *-ro ]]; then
+                local __hs_ro_payload="${__hs_ro_tok#HS2:*:}"
+                printf '%s=%s\n' "$2" \
+                    "$(printf '%q' "HS2:${__hs_ro_field}-ro:${__hs_ro_payload}")"
+            fi
+            return 0
+        fi
+    fi
+    # Normal token: strip -S <var> from the entry point's positional parameters.
+    local -a __hs_ro_out=()
+    local __hs_ro_skip=0 __hs_ro_arg
+    for __hs_ro_arg in "${@:3}"; do
+        if (( __hs_ro_skip )); then __hs_ro_skip=0; continue; fi
+        if [[ "$__hs_ro_arg" == "-S" ]]; then __hs_ro_skip=1; continue; fi
+        if [[ "$__hs_ro_arg" == "-S"?* ]]; then continue; fi
+        __hs_ro_out+=("$__hs_ro_arg")
+    done
+    printf 'set --'
+    for __hs_ro_arg in "${__hs_ro_out[@]}"; do
+        printf ' %s' "$(printf '%q' "$__hs_ro_arg")"
+    done
+    printf '\n'
 }
 
 # _hs_rr_explicit_stmts <state_var> <quiet> <vars_str>
@@ -722,6 +814,60 @@ _hs_print_reserved_names() {
         [[ -n "$__hs_prn_exclude" && "$name" == "$__hs_prn_exclude" ]] && continue
         printf '%s\n' "$name"
     done <<< "$__hs_prn_snapshot"
+}
+
+# _hs_mint_list_reserved_token <exclude_name> <lp_snapshot> [surface_name ...]
+# Builds a list-reserved mode token and prints it to stdout. The reserved-name
+# set is the union of the names in <lp_snapshot> (the entry-point frame, minus
+# <exclude_name> — the token local) and the trailing <surface_name> arguments
+# (the caller's own collision surface). Runs in a subshell of the emitted
+# extract code; never touches the external state, so it carries no collision
+# surface. Designed to be unfailable: any name that cannot be an associative
+# array key is ignored, and a failed persist yields an empty (non-mode) token.
+_hs_mint_list_reserved_token() {
+    local __hs_mlrt_exclude="$1" __hs_mlrt_snapshot="$2"
+    shift 2
+    local -A __hs_mlrt_seen=()
+    local __hs_mlrt_n
+    for __hs_mlrt_n in "$@"; do
+        [[ -n "$__hs_mlrt_n" ]] && __hs_mlrt_seen["$__hs_mlrt_n"]=1
+    done
+    while IFS= read -r __hs_mlrt_n; do
+        [[ "$__hs_mlrt_n" != declare\ * ]] && continue
+        __hs_mlrt_n="${__hs_mlrt_n#* }"; __hs_mlrt_n="${__hs_mlrt_n#* }"; __hs_mlrt_n="${__hs_mlrt_n%%=*}"
+        [[ -z "$__hs_mlrt_n" || "$__hs_mlrt_n" == "$__hs_mlrt_exclude" ]] && continue
+        __hs_mlrt_seen["$__hs_mlrt_n"]=1
+    done <<< "$__hs_mlrt_snapshot"
+    local reserved_names_state=''
+    local -a reserved_names=("${!__hs_mlrt_seen[@]}")
+    hs_persist_state -S reserved_names_state reserved_names || return 0
+    # Swap the numeric checksum field for the mode marker; the payload is a valid
+    # HS2 payload, so hs_finalize_token can read reserved_names straight back out.
+    printf 'HS2:%s:%s' "$_HS_LIST_RESERVED_MARK" "${reserved_names_state#HS2:*:}"
+}
+
+# _hs_emit_reserved <exclude_name> <lp_snapshot> [static_name ...]
+# Prints, one per line, the deduplicated union of the <static_name> arguments and
+# the names found in <lp_snapshot>, skipping <exclude_name>. Called by the code
+# hs_finalize_token emits into the entry-point frame so the snapshot is a fresh
+# capture of that frame (catching locals declared after hs_extract_token ran).
+_hs_emit_reserved() {
+    local __hs_er_exclude="$1" __hs_er_snapshot="$2"
+    shift 2
+    local -A __hs_er_seen=()
+    local __hs_er_n
+    for __hs_er_n in "$@"; do
+        [[ -n "$__hs_er_n" && "$__hs_er_n" != "$__hs_er_exclude" ]] && __hs_er_seen["$__hs_er_n"]=1
+    done
+    while IFS= read -r __hs_er_n; do
+        [[ "$__hs_er_n" != declare\ * ]] && continue
+        __hs_er_n="${__hs_er_n#* }"; __hs_er_n="${__hs_er_n#* }"; __hs_er_n="${__hs_er_n%%=*}"
+        [[ -z "$__hs_er_n" || "$__hs_er_n" == "$__hs_er_exclude" ]] && continue
+        __hs_er_seen["$__hs_er_n"]=1
+    done <<< "$__hs_er_snapshot"
+    for __hs_er_n in "${!__hs_er_seen[@]}"; do
+        printf '%s\n' "$__hs_er_n"
+    done
 }
 
 # Function:
@@ -950,6 +1096,14 @@ _hs_hs2_parse() {
     local __hs2p_rest="${__hs2p_state#HS2:}"
     local __hs2p_stored="${__hs2p_rest%%:*}"
     local __hs2p_payload="${__hs2p_rest#*:}"
+
+    # A mode token (checksum field replaced by a "mode=" marker) is not ordinary
+    # state; reject it with a discriminable code so callers can tell it apart from
+    # generic corruption. Structural (programmer) error, so it prints to stderr.
+    if [[ "$__hs2p_stored" == mode=* ]]; then
+        echo "[ERROR] ${__hs2p_caller}: '${__hs2p_stored}' token is not usable as ordinary state." >&2
+        return "$HS_ERR_LIST_RESERVED_TOKEN"
+    fi
 
     local __hs2p_computed
     __hs2p_computed=$(printf '%s' "$__hs2p_payload" | cksum)

@@ -381,8 +381,8 @@ Behaviour, selected by the token's checksum field:
   frame** (catching locals declared between the two evals), then print one name
   per line and ``return 0``.  The token local ``$2`` is **included** unless the
   marker ends in ``-ro`` (read-only; see ``hs_read_only``), in which case it is
-  excluded.  The reported name for the token is always the fixed ``$2``,
-  independent of any external ``-S`` name.
+  excluded.  The reported conflicting token name is always ``$2`` — the fixed
+  internal state-token name — independent of any external ``-S`` name.
 - **Normal token** (numeric checksum) with ``-S <statevar>`` present: emit
   ``<statevar>='<token_value>'`` — a plain assignment writing the (possibly
   updated) token back.  Idempotent when the body left the token unchanged.
