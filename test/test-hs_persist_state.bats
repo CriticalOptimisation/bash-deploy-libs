@@ -2008,6 +2008,67 @@ EOF
   [[ "$output" != *"-S"* ]]
 }
 
+# ---------------------------------------------------------------------------
+# issue #143 — edge cases
+# ---------------------------------------------------------------------------
+
+# bats test_tags=hs_read_only,issue-143
+@test "hs_read_only strips the bundled -Svar option form" {
+  f() {
+    eval "$(hs_extract_token f __tok "$@")" || return $?
+    eval "$(hs_read_only     f __tok "$@")"
+    printf '%s' "$*"
+  }
+  run -0 --separate-stderr f -Sdest
+  [[ "$output" != *"-S"* ]]
+}
+
+# bats test_tags=hs_read_only,issue-143
+@test "hs_read_only is idempotent on an already read-only mode token" {
+  ro() {
+    eval "$(hs_extract_token ro __rotok "$@")" || return $?
+    eval "$(hs_read_only     ro __rotok "$@")"   # appends -ro
+    eval "$(hs_read_only     ro __rotok "$@")"   # no-op (already -ro)
+    [[ "$__rotok" == HS2:mode=list-reserved-ro:* ]] || { echo "marker: $__rotok" >&2; return 1; }
+    [[ "$__rotok" != *-ro-ro* ]]                    || { echo "double: $__rotok" >&2; return 1; }
+    echo OK
+  }
+  run -0 --separate-stderr ro --list-reserved
+  [[ "$output" == "OK" ]]
+}
+
+# bats test_tags=hs_read_only,hs_finalize_token,issue-143
+@test "read-only entry point reads state but leaves it unchanged" {
+  producer() { local counter=5; hs_persist_state "$@" -- counter; }
+  local state=""
+  producer -S state
+  local before="$state"
+  ro_entry() {
+    eval "$(hs_extract_token ro_entry __ro_tok "$@")" || return $?
+    eval "$(hs_read_only     ro_entry __ro_tok "$@")"
+    hs_is_list_reserved_mode -S __ro_tok || { _ro_body "$@" || return $?; }
+    eval "$(hs_finalize_token ro_entry __ro_tok "$@")" || return $?
+  }
+  _ro_body() {
+    local counter
+    eval "$(hs_read_persisted_state -S __ro_tok)" || return $?
+    [[ "$counter" == "5" ]]      # read works
+  }
+  ro_entry -S state              # direct call so dynamic-scope writes would be visible
+  [[ "$state" == "$before" ]]    # ... but read-only leaves external state untouched
+}
+
+# bats test_tags=hs_destroy_state,issue-143
+@test "a mode token handed to hs_destroy_state is rejected discriminably" {
+  f() {
+    eval "$(hs_extract_token f __tok "$@")" || return $?
+    hs_destroy_state -S __tok -- x
+  }
+  run --separate-stderr f --list-reserved
+  [[ "$status" -eq "$HS_ERR_LIST_RESERVED_TOKEN" ]]
+  [[ "$stderr" == *"list-reserved"* ]]
+}
+
 return 0
 
 # --- Change History -------------------------------------------------------
