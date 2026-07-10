@@ -17,6 +17,8 @@ This task covers documentation updates and preliminary tests definition.
 - **Activities**:
   - Extend the relevant test suite (`test/...`), keeping new tests close to the projected behavior being implemented (focus on core tests that illustrate new or corrected behaviors, not edge cases).
   - Follow coding standards; use `xfail` tags for tests that are known to fail temporarily.
+  - **Assert on captured stderr.** Whenever a bats test captures stderr (`run --separate-stderr`), assert its expected content: for an error/warning path, match the diagnostic (`[[ "$stderr" == *"..."* ]]`); for a clean/happy path, assert it is empty (`[[ -z "$stderr" ]]`). A captured stream that is never asserted is an untested output.
+  - **Never silently delete a test.** When a change removes or replaces an existing test, either convert it in place or leave a `REVIEW PLACEHOLDER` comment mapping the old test title to the new test(s) that cover it (`old title -> new title`), so reviewers can see nothing was lost. These placeholders are cleaned up at integration (see `integration.md`).
   - Include clear commit messages referencing the issue.
   - When necessary, re-use helper modules such as `bats-support` or `bats-assert` from the `devel` branch.
   - Commit the extended test suite.

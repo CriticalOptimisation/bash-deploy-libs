@@ -19,6 +19,7 @@ This task covers source code implementation, edge-cases tests expansion, testing
 - **Objective**: Expand tests to cover edge cases.
 - **Activities**:
   - Add tests for edge cases based on the implementation.
+  - Apply the same test-writing standards as the preliminary tests (see `test-driven-development.md`): assert on every captured stderr stream (match the diagnostic, or assert empty on a clean path), and leave `REVIEW PLACEHOLDER` comments instead of silently deleting replaced tests.
   - Ensure all tests pass.
 - **Validation**: All tests pass.
 

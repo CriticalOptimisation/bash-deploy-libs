@@ -1745,6 +1745,7 @@ EOF
   }
   run -0 --separate-stderr ro_entry_point --list-reserved
   [[ "$output" == "OK" ]]
+  [[ -z "$stderr" ]]
 }
 
 # bats test_tags=hs_extract_token,issue-136
@@ -1786,6 +1787,19 @@ EOF
 # ---------------------------------------------------------------------------
 # hs_finalize_token
 # ---------------------------------------------------------------------------
+#
+# REVIEW PLACEHOLDER (issue #143 — remove before the PR is finalized): the
+# former hs_write_token tests below were converted or replaced, never silently
+# dropped. old title -> new title:
+#   - "hs_write_token — writes source local value into caller state variable"
+#       -> "hs_finalize_token writes the updated token back through dynamic scope"
+#   - "hs_write_token --list-reserved includes source local name"
+#       -> "entry point --list-reserved equals hs_persist_state --list-reserved plus token local"
+#   - "hs_write_token eval-code --list-reserved form merges hs_extract_token surface and source local"
+#       -> "entry point --list-reserved equals ..." plus the two frame-capture tests
+#   - "hs_write_token eval-code --list-reserved form rejects extra arguments when source local given"
+#       -> obsolete (the $3 == --list-reserved eval-code form is gone; mode now lives in the
+#          token); nearest cover: "hs_finalize_token --list-reserved direct query rejects extra arguments"
 
 # bats test_tags=hs_finalize_token,issue-143
 @test "hs_finalize_token without -S is a read-only no-op returning success" {
@@ -1798,6 +1812,7 @@ EOF
   }
   run -0 --separate-stderr f
   [[ -z "$output" ]]
+  [[ -z "$stderr" ]]     # a clean read-only no-op emits nothing on stderr
 }
 
 # bats test_tags=hs_finalize_token,issue-143
@@ -1834,6 +1849,7 @@ EOF
   done < <(hs_persist_state --list-reserved)
   expected["__rw_tok"]=1
   run -0 --separate-stderr rw_entry --list-reserved
+  [[ -z "$stderr" ]]
   while IFS= read -r name; do
     [[ -n "$name" ]] && reported["$name"]=1
   done <<< "$output"
@@ -1901,6 +1917,7 @@ EOF
     [[ "$__tok" == *reserved_names* ]]         || { echo "payload: $__tok" >&2; return 1; }
   }
   run -0 --separate-stderr f --list-reserved
+  [[ -z "$stderr" ]]
 }
 
 # bats test_tags=hs_is_list_reserved_mode,issue-143
@@ -1916,8 +1933,10 @@ EOF
   }
   run -0 --separate-stderr f --list-reserved
   [[ "$output" == MODE ]]
+  [[ -z "$stderr" ]]
   run -0 --separate-stderr f -S state
   [[ "$output" == NORMAL ]]
+  [[ -z "$stderr" ]]
 }
 
 # bats test_tags=hs_finalize_token,issue-143
@@ -1944,6 +1963,7 @@ EOF
   run -0 --separate-stderr ro --list-reserved
   [[ "$output" == *"__hs_processed"* ]]
   [[ "$output" != *"__rotok"* ]]
+  [[ -z "$stderr" ]]
 }
 
 # bats test_tags=hs_extract_token,issue-143
@@ -1956,6 +1976,7 @@ EOF
   }
   run -0 --separate-stderr f --list-reserved
   [[ "$output" == *"leaked_before"* ]]
+  [[ -z "$stderr" ]]
 }
 
 # bats test_tags=hs_finalize_token,issue-143
@@ -1968,6 +1989,7 @@ EOF
   }
   run -0 --separate-stderr f --list-reserved
   [[ "$output" == *"leaked_between"* ]]
+  [[ -z "$stderr" ]]
 }
 
 # bats test_tags=hs_persist_state,hs_read_persisted_state,issue-143
@@ -2006,6 +2028,7 @@ EOF
   }
   run -0 --separate-stderr f -S dest
   [[ "$output" != *"-S"* ]]
+  [[ -z "$stderr" ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -2021,6 +2044,7 @@ EOF
   }
   run -0 --separate-stderr f -Sdest
   [[ "$output" != *"-S"* ]]
+  [[ -z "$stderr" ]]
 }
 
 # bats test_tags=hs_read_only,issue-143
@@ -2035,6 +2059,7 @@ EOF
   }
   run -0 --separate-stderr ro --list-reserved
   [[ "$output" == "OK" ]]
+  [[ -z "$stderr" ]]
 }
 
 # bats test_tags=hs_read_only,hs_finalize_token,issue-143
