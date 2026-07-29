@@ -17,4 +17,4 @@ from skill content and is not loaded into Claude's context.
 | #43 | —      | templates.md, implementation.md, integration.md | introduce per-file change history sections |
 | #134 | #133  | implementation.md | add new-library checklist: skill command + history.md + structural tests |
 | #145 | #143  | SKILL.md, shared-issue-understanding.md | require posting the Task 2 assessment as an issue comment |
-| #145 | #143  | test-driven-development.md, implementation.md, integration.md | assert captured stderr; REVIEW PLACEHOLDER for replaced tests + integration cleanup |
+| #145 | #143  | test-driven-development.md, implementation.md, integration.md | assert captured stderr; REVIEW PLACEHOLDER for replaced tests, tagged with the issue number, merged as-is and cleared by the next issue instead of at integration |

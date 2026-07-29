@@ -1788,9 +1788,8 @@ EOF
 # hs_finalize_token
 # ---------------------------------------------------------------------------
 #
-# REVIEW PLACEHOLDER (issue #143 — remove before the PR is finalized): the
-# former hs_write_token tests below were converted or replaced, never silently
-# dropped. old title -> new title:
+# REVIEW PLACEHOLDER (issue #143): the former hs_write_token tests below were
+# converted or replaced, never silently dropped. old title -> new title:
 #   - "hs_write_token — writes source local value into caller state variable"
 #       -> "hs_finalize_token writes the updated token back through dynamic scope"
 #   - "hs_write_token --list-reserved includes source local name"
