@@ -520,9 +520,10 @@ hs_extract_token() {
 #   Structural errors (the shape of the call is wrong) print a diagnostic and the
 #   synopsis on stderr, then emit the exit stub so the code reaches the caller:
 #     HS_ERR_INVALID_ARGUMENT_TYPE - $1 is an option other than --list-reserved
-#       (typically a mistyped one), or --list-reserved was given extra arguments.
+#       (typically a mistyped one), $1 is not a usable API function name, or
+#       --list-reserved was given extra arguments.
 #     HS_ERR_MISSING_ARGUMENT      - fewer than two positional arguments.
-#     HS_ERR_INVALID_VAR_NAME      - $1 or $2 is not a valid Bash identifier.
+#     HS_ERR_INVALID_VAR_NAME      - $2 is not a valid Bash identifier.
 hs_finalize_token() {
     local -a __hs_remaining=()
     local -A __hs_processed=()
@@ -557,9 +558,14 @@ hs_finalize_token() {
         printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_MISSING_ARGUMENT"
         return 0
     fi
-    if ! _hs_is_valid_variable_name "$1" || ! _hs_is_valid_variable_name "$2"; then
-        echo "[ERROR] hs_finalize_token: <API_function> and <token_local> must both be" \
-             "valid identifiers." >&2
+    if ! _hs_is_valid_function_name "$1"; then
+        echo "[ERROR] hs_finalize_token: '$1' is not a usable API function name." >&2
+        _hs_usage hs_finalize_token
+        printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_ARGUMENT_TYPE"
+        return 0
+    fi
+    if ! _hs_is_valid_variable_name "$2"; then
+        echo "[ERROR] hs_finalize_token: '$2' is not a valid variable name." >&2
         _hs_usage hs_finalize_token
         printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_VAR_NAME"
         return 0
@@ -650,9 +656,10 @@ hs_is_list_reserved_mode() {
 #   Structural errors (the shape of the call is wrong) print a diagnostic and the
 #   synopsis on stderr, then emit the exit stub:
 #     HS_ERR_INVALID_ARGUMENT_TYPE - $1 is an option other than --list-reserved
-#       (typically a mistyped one), or --list-reserved was given extra arguments.
+#       (typically a mistyped one), $1 is not a usable API function name, or
+#       --list-reserved was given extra arguments.
 #     HS_ERR_MISSING_ARGUMENT      - fewer than two positional arguments.
-#     HS_ERR_INVALID_VAR_NAME      - $1 or $2 is not a valid Bash identifier.
+#     HS_ERR_INVALID_VAR_NAME      - $2 is not a valid Bash identifier.
 hs_read_only() {
     if [[ "${1-}" == "--list-reserved" ]]; then
         if [[ $# -gt 1 ]]; then
@@ -680,9 +687,14 @@ hs_read_only() {
         printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_MISSING_ARGUMENT"
         return 0
     fi
-    if ! _hs_is_valid_variable_name "$1" || ! _hs_is_valid_variable_name "$2"; then
-        echo "[ERROR] hs_read_only: <API_function> and <token_local> must both be" \
-             "valid identifiers." >&2
+    if ! _hs_is_valid_function_name "$1"; then
+        echo "[ERROR] hs_read_only: '$1' is not a usable API function name." >&2
+        _hs_usage hs_read_only
+        printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_ARGUMENT_TYPE"
+        return 0
+    fi
+    if ! _hs_is_valid_variable_name "$2"; then
+        echo "[ERROR] hs_read_only: '$2' is not a valid variable name." >&2
         _hs_usage hs_read_only
         printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_VAR_NAME"
         return 0
@@ -863,6 +875,28 @@ _hs_is_valid_variable_name() {
     [[ "${1-}" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]
 }
 
+# _hs_is_valid_function_name <name>
+# True when <name> is usable as an API function name. Deliberately distinct from
+# _hs_is_valid_variable_name in both directions.
+#
+# More permissive: dotted and colon-separated forms (obj.method, a.b.c, ns::func)
+# are accepted. Once state lives in a token, a dispatch layer becomes possible --
+# a command-not-found handler decodes <object>.<method>, reads the class out of
+# <object>.__token, and forwards to <class>.<method> -S <object>.__token "$@".
+# Requiring a plain identifier here would foreclose that design for no benefit:
+# $1 is a label used in diagnostics, never a variable name and never eval'd.
+#
+# Narrower than Bash itself, which rejects only a leading '-' and an embedded '='
+# -- `foo*`, `foo[1]`, `foo#bar` and `foo!bar` are all legal function names.
+# Glob and expansion metacharacters are excluded because the name is interpolated
+# into diagnostics; admitting them would require quoting discipline at every use
+# site for a gain nobody wants.
+#
+# First character: letter or underscore. Thereafter also digits and . : + @ -
+_hs_is_valid_function_name() {
+    [[ "${1-}" =~ ^[a-zA-Z_][a-zA-Z0-9_.:+@-]*$ ]]
+}
+
 # _hs_usage <function_name>
 # Prints the synopsis of <function_name> on stderr, one call form per line.
 #
@@ -890,12 +924,10 @@ _hs_is_valid_variable_name() {
 _hs_usage() {
     case "${1-}" in
         hs_finalize_token)
-            echo 'Usage: hs_finalize_token --list-reserved' >&2
-            echo '       eval "$(hs_finalize_token <API_function> <token_local> "$@")" || return $?' >&2
+            echo 'Usage: eval "$(hs_finalize_token <API_function> <token_local> "$@")" || return $?' >&2
             ;;
         hs_read_only)
-            echo 'Usage: hs_read_only --list-reserved' >&2
-            echo '       eval "$(hs_read_only <API_function> <token_local> "$@")" || return $?' >&2
+            echo 'Usage: eval "$(hs_read_only <API_function> <token_local> "$@")" || return $?' >&2
             ;;
         *)
             echo "[ERROR] _hs_usage: no synopsis recorded for '${1-}'." >&2
@@ -1250,3 +1282,4 @@ _hs_hs2_parse() {
 # | #140  | fix --list-reserved merge for read-write entry points             |
 # | #145  | token-borne --list-reserved; hs_write_token->hs_finalize_token [closes #143] |
 # | #145  | _hs_usage + structural call checks in hs_finalize_token/hs_read_only |
+# | #145  | _hs_is_valid_function_name: API function names allow obj.method forms |

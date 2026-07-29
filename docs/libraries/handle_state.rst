@@ -363,8 +363,7 @@ hs_finalize_token
 ~~~~~~~~~~~~~~~~~
 
 ``hs_finalize_token`` terminates every entry point.  It is **always** called
-(replacing the former ``hs_write_token``), and its behaviour is driven entirely
-by the token it is handed — never by re-sniffing ``$@``.
+, and its behaviour is driven entirely by the token it is handed — never by re-sniffing ``$@``.
 
 - Usage: ``eval "$(hs_finalize_token <API_function> <token_local> "$@")"``.
 - ``$1`` is the calling API function name (used in error messages).
@@ -389,6 +388,27 @@ Behaviour, selected by the token's checksum field:
 - **Normal token** with no ``-S``: emit nothing and ``return 0`` — the entry
   point is read-only with respect to external state.
 - On error: prints ``bash -c 'exit N'``.
+
+Structural errors — those where the *shape* of the call is wrong, as opposed to a
+well-formed call whose request fails — are checked before the token is read, and
+print both a diagnostic and the synopsis on stderr.  No option is consulted on
+these paths: ``-q`` belongs to the functional domain, and a malformed argument
+list is precisely what must not be trusted to carry an option.
+
+- ``HS_ERR_INVALID_ARGUMENT_TYPE=9``: ``$1`` is an option other than
+  ``--list-reserved`` (typically a mistyped one), ``$1`` is not a usable API
+  function name, or ``--list-reserved`` was given extra arguments.
+- ``HS_ERR_MISSING_ARGUMENT=8``: fewer than two positional arguments.
+- ``HS_ERR_INVALID_VAR_NAME=5``: ``$2`` is not a valid Bash identifier.
+
+``$1`` and ``$2`` are validated against **different** rules.  ``$2`` names a
+variable and must be a plain identifier.  ``$1`` names a function, so dotted and
+colon-separated forms (``obj.method``, ``a.b.c``, ``ns::func``) are accepted —
+they are legal Bash function names, and they are the shape a dispatch layer built
+on top of tokens would use.  The accepted set is narrower than Bash's own, which
+also admits ``foo*``, ``foo[1]`` and ``foo#bar``: glob and expansion
+metacharacters are excluded because the name is interpolated into diagnostics.
+First character a letter or underscore, then also digits and ``. : + @ -``.
 
 See `Entry-Point Pattern`_ for canonical usage examples.
 
@@ -421,6 +441,13 @@ Its single, mode-agnostic rule inspects the token's checksum field:
 
 Because the rule keys only on the ``mode=`` prefix, every present and future
 mode gains a read-only variant (``mode=X`` → ``mode=X-ro``) for free.
+
+``hs_read_only`` performs the same structural checks as ``hs_finalize_token``,
+with the same codes and the same rules for ``$1`` and ``$2``; see above.  They
+matter more here: unchecked, a malformed call falls through to the normal-token
+path and emits a bare ``set --``, silently discarding the entry point's
+positional parameters.  Its skeleton line therefore carries ``|| return $?`` like
+the other two, so the emitted exit stub reaches the caller.
 
 Entry-Point Pattern
 ~~~~~~~~~~~~~~~~~~~
@@ -713,6 +740,8 @@ Change History
      - token-borne --list-reserved mode; hs_finalize_token, hs_is_list_reserved_mode, hs_read_only (issue #143)
    * - #145
      - usage on structural call errors; hs_read_only skeleton line gains ``|| return $?`` (issue #146)
+   * - #145
+     - API function names validated as function names, not identifiers (obj.method)
    * - #99
      - error on undeclared variable names [closes #1]
    * - #102

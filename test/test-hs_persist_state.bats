@@ -2105,7 +2105,7 @@ EOF
   run --separate-stderr f
   [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
   [[ "$stderr" == *"unknown option '--list_reserved'"* ]]
-  [[ "$stderr" == *"Usage: hs_finalize_token --list-reserved"* ]]
+  [[ "$stderr" == *'Usage: eval "$(hs_finalize_token'* ]]
 }
 
 # bats test_tags=hs_usage,issue-143
@@ -2119,7 +2119,7 @@ EOF
   [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
   [[ -z "$output" ]]
   [[ "$stderr" == *"unknown option '--list_reserved'"* ]]
-  [[ "$stderr" == *"Usage: hs_read_only --list-reserved"* ]]
+  [[ "$stderr" == *'Usage: eval "$(hs_read_only'* ]]
 }
 
 # bats test_tags=hs_usage,issue-143
@@ -2141,7 +2141,7 @@ EOF
   run --separate-stderr f
   [[ "$status" -eq "$HS_ERR_MISSING_ARGUMENT" ]]
   [[ "$stderr" == *"requires <API_function> <token_local>"* ]]
-  [[ "$stderr" == *"Usage: hs_finalize_token"* ]]
+  [[ "$stderr" == *'Usage: eval "$(hs_finalize_token'* ]]
 }
 
 # bats test_tags=hs_usage,issue-143
@@ -2152,7 +2152,7 @@ EOF
   run --separate-stderr f
   [[ "$status" -eq "$HS_ERR_MISSING_ARGUMENT" ]]
   [[ "$stderr" == *"requires <API_function> <token_local>"* ]]
-  [[ "$stderr" == *"Usage: hs_read_only"* ]]
+  [[ "$stderr" == *'Usage: eval "$(hs_read_only'* ]]
 }
 
 # bats test_tags=hs_usage,issue-143
@@ -2162,19 +2162,44 @@ EOF
   }
   run --separate-stderr f
   [[ "$status" -eq "$HS_ERR_INVALID_VAR_NAME" ]]
-  [[ "$stderr" == *"valid identifiers"* ]]
-  [[ "$stderr" == *"Usage: hs_finalize_token"* ]]
+  [[ "$stderr" == *"is not a valid variable name"* ]]
+  [[ "$stderr" == *"Usage:"* ]]
 }
 
 # bats test_tags=hs_usage,issue-143
-@test "hs_read_only rejects an API function name that is not a Bash identifier" {
+@test "hs_read_only rejects an API function name Bash itself could not define" {
   f() {
     eval "$(hs_read_only 'not a name' __tok)" || return $?
   }
   run --separate-stderr f
-  [[ "$status" -eq "$HS_ERR_INVALID_VAR_NAME" ]]
-  [[ "$stderr" == *"valid identifiers"* ]]
-  [[ "$stderr" == *"Usage: hs_read_only"* ]]
+  [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
+  [[ "$stderr" == *"is not a usable API function name"* ]]
+  [[ "$stderr" == *"Usage:"* ]]
+}
+
+# bats test_tags=hs_usage,issue-143
+@test "a dotted API function name is accepted" {
+  # The API function name is validated as a function name, not as a variable
+  # name: obj.method, a.b.c and ns::func are legal Bash function names and are
+  # the shape a future object-dispatch layer would use.
+  f() {
+    local __tok=""
+    eval "$(hs_finalize_token obj.method __tok)" || return $?
+  }
+  run -0 --separate-stderr f
+  [[ -z "$stderr" ]]
+}
+
+# bats test_tags=hs_usage,issue-143
+@test "an API function name carrying a glob metacharacter is rejected" {
+  # Bash would accept `obj*` as a function name; the library is deliberately
+  # narrower, because the name is interpolated into diagnostics.
+  f() {
+    eval "$(hs_finalize_token 'obj*' __tok)" || return $?
+  }
+  run --separate-stderr f
+  [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
+  [[ "$stderr" == *"is not a usable API function name"* ]]
 }
 
 # bats test_tags=hs_usage,issue-143
@@ -2195,23 +2220,29 @@ EOF
   }
   run --separate-stderr f
   [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
-  [[ "$stderr" == *"Usage: hs_finalize_token"* ]]
+  [[ "$stderr" == *'Usage: eval "$(hs_finalize_token'* ]]
 }
 
 # bats test_tags=hs_usage,issue-143
-@test "the emitted synopsis matches the Function header block of the source" {
+@test "every emitted synopsis line appears verbatim in the Function header block" {
   # Anti-drift: the usage text and the "# Function:" header are two copies of the
-  # same synopsis.  Generalised to every public entry point by issue #146.
-  local fn header emitted
+  # same synopsis.  Inclusion, not equality: the header documents every call form,
+  # while the usage message shows only the one a caller who just made a structural
+  # mistake needs -- --list-reserved is a testing-only query and is deliberately
+  # left out of it.  Generalised to every public entry point by issue #146.
+  local fn header line
   for fn in hs_finalize_token hs_read_only; do
-    header="$(awk -v fn="$fn" '
+    header="$(awk '
       $0 == "# Function:" { collecting = 1; next }
       collecting && /^#   / { sub(/^#   /, ""); print; next }
       collecting { collecting = 0 }
     ' "$LIB" | grep -F "$fn")"
-    emitted="$(_hs_usage "$fn" 2>&1 | sed -E 's/^(Usage: |       )//')"
     [[ -n "$header" ]]
-    [[ "$emitted" == "$header" ]]
+    while IFS= read -r line; do
+      line="${line#Usage: }"
+      [[ -n "$line" ]] || continue
+      [[ "$header" == *"$line"* ]]
+    done < <(_hs_usage "$fn" 2>&1)
   done
 }
 
@@ -2236,3 +2267,4 @@ return 0
 # | #140  | fix --list-reserved merge for read-write entry points [closes #136] |
 # | #145  | token-borne --list-reserved; hs_finalize_token/hs_read_only [closes #143] |
 # | #145  | structural call errors: usage on stderr, synopsis anti-drift test    |
+# | #145  | dotted API function names accepted; glob metacharacters rejected     |
