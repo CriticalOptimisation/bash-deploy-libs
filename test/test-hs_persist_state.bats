@@ -2093,6 +2093,128 @@ EOF
   [[ "$stderr" == *"list-reserved"* ]]
 }
 
+# ---------------------------------------------------------------------------
+# Structural call errors -- _hs_usage
+# ---------------------------------------------------------------------------
+
+# bats test_tags=hs_usage,issue-143
+@test "hs_finalize_token rejects a mistyped --list-reserved instead of silently succeeding" {
+  f() {
+    eval "$(hs_finalize_token --list_reserved)" || return $?
+  }
+  run --separate-stderr f
+  [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
+  [[ "$stderr" == *"unknown option '--list_reserved'"* ]]
+  [[ "$stderr" == *"Usage: hs_finalize_token --list-reserved"* ]]
+}
+
+# bats test_tags=hs_usage,issue-143
+@test "hs_read_only rejects a mistyped --list-reserved and leaves the positional parameters intact" {
+  f() {
+    eval "$(hs_read_only --list_reserved)" || return $?
+    # Unreached: the stub above exits.  Guards against a regression to `set --`.
+    printf '%s' "$#"
+  }
+  run --separate-stderr f keep1 keep2 keep3
+  [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
+  [[ -z "$output" ]]
+  [[ "$stderr" == *"unknown option '--list_reserved'"* ]]
+  [[ "$stderr" == *"Usage: hs_read_only --list-reserved"* ]]
+}
+
+# bats test_tags=hs_usage,issue-143
+@test "hs_read_only does not wipe the caller positional parameters on a malformed call" {
+  f() {
+    local __tok=""
+    eval "$(hs_read_only --list_reserved)" || true
+    printf '%s' "$#"
+  }
+  run --separate-stderr f keep1 keep2 keep3
+  [[ "$output" == "3" ]]
+}
+
+# bats test_tags=hs_usage,issue-143
+@test "hs_finalize_token with a single positional argument reports a missing argument" {
+  f() {
+    eval "$(hs_finalize_token f)" || return $?
+  }
+  run --separate-stderr f
+  [[ "$status" -eq "$HS_ERR_MISSING_ARGUMENT" ]]
+  [[ "$stderr" == *"requires <API_function> <token_local>"* ]]
+  [[ "$stderr" == *"Usage: hs_finalize_token"* ]]
+}
+
+# bats test_tags=hs_usage,issue-143
+@test "hs_read_only with a single positional argument reports a missing argument" {
+  f() {
+    eval "$(hs_read_only f)" || return $?
+  }
+  run --separate-stderr f
+  [[ "$status" -eq "$HS_ERR_MISSING_ARGUMENT" ]]
+  [[ "$stderr" == *"requires <API_function> <token_local>"* ]]
+  [[ "$stderr" == *"Usage: hs_read_only"* ]]
+}
+
+# bats test_tags=hs_usage,issue-143
+@test "hs_finalize_token rejects a token local that is not a Bash identifier" {
+  f() {
+    eval "$(hs_finalize_token f 'not a name')" || return $?
+  }
+  run --separate-stderr f
+  [[ "$status" -eq "$HS_ERR_INVALID_VAR_NAME" ]]
+  [[ "$stderr" == *"valid identifiers"* ]]
+  [[ "$stderr" == *"Usage: hs_finalize_token"* ]]
+}
+
+# bats test_tags=hs_usage,issue-143
+@test "hs_read_only rejects an API function name that is not a Bash identifier" {
+  f() {
+    eval "$(hs_read_only 'not a name' __tok)" || return $?
+  }
+  run --separate-stderr f
+  [[ "$status" -eq "$HS_ERR_INVALID_VAR_NAME" ]]
+  [[ "$stderr" == *"valid identifiers"* ]]
+  [[ "$stderr" == *"Usage: hs_read_only"* ]]
+}
+
+# bats test_tags=hs_usage,issue-143
+@test "a usage message goes to stderr only and never to stdout" {
+  run --separate-stderr _hs_usage hs_finalize_token
+  [[ "$status" -eq 0 ]]
+  [[ -z "$output" ]]
+  [[ -n "$stderr" ]]
+}
+
+# bats test_tags=hs_usage,issue-143
+@test "an option is not honoured on a structurally malformed call" {
+  # -q belongs to the functional domain; a malformed argument list is precisely
+  # what must not be trusted to carry an option, so it is reported like any other
+  # unknown option rather than silencing the report.
+  f() {
+    eval "$(hs_finalize_token -q)" || return $?
+  }
+  run --separate-stderr f
+  [[ "$status" -eq "$HS_ERR_INVALID_ARGUMENT_TYPE" ]]
+  [[ "$stderr" == *"Usage: hs_finalize_token"* ]]
+}
+
+# bats test_tags=hs_usage,issue-143
+@test "the emitted synopsis matches the Function header block of the source" {
+  # Anti-drift: the usage text and the "# Function:" header are two copies of the
+  # same synopsis.  Generalised to every public entry point by issue #146.
+  local fn header emitted
+  for fn in hs_finalize_token hs_read_only; do
+    header="$(awk -v fn="$fn" '
+      $0 == "# Function:" { collecting = 1; next }
+      collecting && /^#   / { sub(/^#   /, ""); print; next }
+      collecting { collecting = 0 }
+    ' "$LIB" | grep -F "$fn")"
+    emitted="$(_hs_usage "$fn" 2>&1 | sed -E 's/^(Usage: |       )//')"
+    [[ -n "$header" ]]
+    [[ "$emitted" == "$header" ]]
+  done
+}
+
 return 0
 
 # --- Change History -------------------------------------------------------
@@ -2113,3 +2235,4 @@ return 0
 # | #140  | add hs_extract_token and hs_write_token; entry-point pattern        |
 # | #140  | fix --list-reserved merge for read-write entry points [closes #136] |
 # | #145  | token-borne --list-reserved; hs_finalize_token/hs_read_only [closes #143] |
+# | #145  | structural call errors: usage on stderr, synopsis anti-drift test    |

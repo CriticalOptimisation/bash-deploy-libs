@@ -421,8 +421,8 @@ hs_read_persisted_state() {
 # --- hs_extract_token ---------------------------------------------------------
 # Function:
 #   hs_extract_token --list-reserved
-#   hs_extract_token <API_function> <local_name> --list-reserved
-#   hs_extract_token <API_function> <local_name> [forwarded opts] -S <statevar>
+#   eval "$(hs_extract_token <API_function> <local_name> --list-reserved)" || return $?
+#   eval "$(hs_extract_token <API_function> <local_name> "$@")" || return $?
 # Description:
 #   Direct query form ($1 == --list-reserved, no further args):
 #     Prints every local in this function's own frame, one per line; identical
@@ -495,7 +495,7 @@ hs_extract_token() {
 # --- hs_finalize_token --------------------------------------------------------
 # Function:
 #   hs_finalize_token --list-reserved
-#   hs_finalize_token <API_function> <token_local> [forwarded options]
+#   eval "$(hs_finalize_token <API_function> <token_local> "$@")" || return $?
 # Description:
 #   The terminal step of every entry point, always called. Its behaviour is
 #   driven by the token in <token_local>, never by re-parsing $@.
@@ -516,6 +516,13 @@ hs_extract_token() {
 #     Normal token with no -S: emits nothing and returns 0 (read-only).
 #     On error while parsing -S: prints bash -c 'exit N'.
 #     Runs in a subshell: no caller local visible at fork, collision space = 0.
+#
+#   Structural errors (the shape of the call is wrong) print a diagnostic and the
+#   synopsis on stderr, then emit the exit stub so the code reaches the caller:
+#     HS_ERR_INVALID_ARGUMENT_TYPE - $1 is an option other than --list-reserved
+#       (typically a mistyped one), or --list-reserved was given extra arguments.
+#     HS_ERR_MISSING_ARGUMENT      - fewer than two positional arguments.
+#     HS_ERR_INVALID_VAR_NAME      - $1 or $2 is not a valid Bash identifier.
 hs_finalize_token() {
     local -a __hs_remaining=()
     local -A __hs_processed=()
@@ -528,6 +535,33 @@ hs_finalize_token() {
         # shellcheck disable=SC2155
         local lp_snapshot="$(local -p)"
         _hs_print_reserved_names "$lp_snapshot"
+        return 0
+    fi
+    # Eval form: <API_function> and <token_local> are both mandatory. The -S
+    # relaxation means the token-driven paths below can no longer rely on
+    # _hs_resolve_state_inputs to reject a malformed call: with $2 absent, "${!2}"
+    # is the empty string, which is indistinguishable from a legitimate read-only
+    # call and would be silently accepted. Check the call shape here instead.
+    # Errors are emitted as an exit stub, never as a return status: this function
+    # runs inside $( ), so eval discards its status and only emitted code reaches
+    # the caller.
+    if [[ "${1-}" == -* ]]; then
+        echo "[ERROR] hs_finalize_token: unknown option '$1'." >&2
+        _hs_usage hs_finalize_token
+        printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_ARGUMENT_TYPE"
+        return 0
+    fi
+    if [[ $# -lt 2 ]]; then
+        echo "[ERROR] hs_finalize_token: eval form requires <API_function> <token_local>." >&2
+        _hs_usage hs_finalize_token
+        printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_MISSING_ARGUMENT"
+        return 0
+    fi
+    if ! _hs_is_valid_variable_name "$1" || ! _hs_is_valid_variable_name "$2"; then
+        echo "[ERROR] hs_finalize_token: <API_function> and <token_local> must both be" \
+             "valid identifiers." >&2
+        _hs_usage hs_finalize_token
+        printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_VAR_NAME"
         return 0
     fi
     # shellcheck disable=SC2155  # value read from inherited frame by position
@@ -601,7 +635,7 @@ hs_is_list_reserved_mode() {
 # --- hs_read_only -------------------------------------------------------------
 # Function:
 #   hs_read_only --list-reserved
-#   hs_read_only <API_function> <token_local> [forwarded options]
+#   eval "$(hs_read_only <API_function> <token_local> "$@")" || return $?
 # Description:
 #   Optional entry-point line marking the function read-only w.r.t. external
 #   state. Mode-agnostic, keyed on the token's checksum field:
@@ -610,7 +644,15 @@ hs_is_list_reserved_mode() {
 #                           local from the collision report.
 #     numeric / empty    -> emits `set -- ...` with `-S <var>` stripped from the
 #                           forwarded args, so hs_finalize_token writes nothing.
-#   Runs in a subshell; the entry point evals its output.
+#   Runs in a subshell; the entry point evals its output, which must therefore be
+#   followed by `|| return $?` so a structural error reaches the caller.
+#
+#   Structural errors (the shape of the call is wrong) print a diagnostic and the
+#   synopsis on stderr, then emit the exit stub:
+#     HS_ERR_INVALID_ARGUMENT_TYPE - $1 is an option other than --list-reserved
+#       (typically a mistyped one), or --list-reserved was given extra arguments.
+#     HS_ERR_MISSING_ARGUMENT      - fewer than two positional arguments.
+#     HS_ERR_INVALID_VAR_NAME      - $1 or $2 is not a valid Bash identifier.
 hs_read_only() {
     if [[ "${1-}" == "--list-reserved" ]]; then
         if [[ $# -gt 1 ]]; then
@@ -620,6 +662,29 @@ hs_read_only() {
         # shellcheck disable=SC2155
         local lp_snapshot="$(local -p)"
         _hs_print_reserved_names "$lp_snapshot"
+        return 0
+    fi
+    # Eval form: same structural checks as hs_finalize_token, and for the same
+    # reason. Unchecked, hs_read_only "$1" alone falls through to the normal-token
+    # path and emits a bare `set --`, which wipes the entry point's positional
+    # parameters silently -- a mistyped --list-reserved would destroy "$@".
+    if [[ "${1-}" == -* ]]; then
+        echo "[ERROR] hs_read_only: unknown option '$1'." >&2
+        _hs_usage hs_read_only
+        printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_ARGUMENT_TYPE"
+        return 0
+    fi
+    if [[ $# -lt 2 ]]; then
+        echo "[ERROR] hs_read_only: eval form requires <API_function> <token_local>." >&2
+        _hs_usage hs_read_only
+        printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_MISSING_ARGUMENT"
+        return 0
+    fi
+    if ! _hs_is_valid_variable_name "$1" || ! _hs_is_valid_variable_name "$2"; then
+        echo "[ERROR] hs_read_only: <API_function> and <token_local> must both be" \
+             "valid identifiers." >&2
+        _hs_usage hs_read_only
+        printf 'bash -c '\''exit %d'\''\n' "$HS_ERR_INVALID_VAR_NAME"
         return 0
     fi
     # shellcheck disable=SC2155
@@ -796,6 +861,47 @@ _hs_local_exists() {
 
 _hs_is_valid_variable_name() {
     [[ "${1-}" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]
+}
+
+# _hs_usage <function_name>
+# Prints the synopsis of <function_name> on stderr, one call form per line.
+#
+# Called from structural error paths only -- those where the shape of the call is
+# wrong (missing or malformed positional, unknown option, extra arguments) -- and
+# never from functional ones, where the call is well formed and the request itself
+# fails. A synopsis on a functional error would be noise on every legitimate
+# runtime failure.
+#
+# Unconditional -- but that is a consequence of "structural", not a second rule.
+# -q belongs to the functional domain: it suppresses warnings about variables
+# absent from the state. It has no jurisdiction over a structural error, and
+# cannot have any: a malformed argument list is precisely what must not be trusted
+# to carry an option. Nothing in this helper or its callers reads -q.
+#
+# Additive: callers print this *and* return their discriminable error code.
+#
+# Works from an eval-form function: command substitution captures stdout only, so
+# this reaches the terminal even from inside $(hs_finalize_token ...).
+#
+# The text must stay identical to the "# Function:" header block of the named
+# function; test-hs_persist_state.bats asserts that it does. Only the entry points
+# whose call-syntax checks exist today are covered; issue #146 generalises this
+# helper to every public entry point of the three libraries.
+_hs_usage() {
+    case "${1-}" in
+        hs_finalize_token)
+            echo 'Usage: hs_finalize_token --list-reserved' >&2
+            echo '       eval "$(hs_finalize_token <API_function> <token_local> "$@")" || return $?' >&2
+            ;;
+        hs_read_only)
+            echo 'Usage: hs_read_only --list-reserved' >&2
+            echo '       eval "$(hs_read_only <API_function> <token_local> "$@")" || return $?' >&2
+            ;;
+        *)
+            echo "[ERROR] _hs_usage: no synopsis recorded for '${1-}'." >&2
+            return "$HS_ERR_INVALID_ARGUMENT_TYPE"
+            ;;
+    esac
 }
 
 # _hs_print_reserved_names <lp_snapshot> [exclude]
@@ -1143,3 +1249,4 @@ _hs_hs2_parse() {
 # | #140  | add hs_extract_token and hs_write_token; API_function name as $1 [closes #136] |
 # | #140  | fix --list-reserved merge for read-write entry points             |
 # | #145  | token-borne --list-reserved; hs_write_token->hs_finalize_token [closes #143] |
+# | #145  | _hs_usage + structural call checks in hs_finalize_token/hs_read_only |

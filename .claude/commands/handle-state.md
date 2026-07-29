@@ -102,7 +102,7 @@ True iff the token is a list-reserved mode token. See RST `hs_is_list_reserved_m
 ### `hs_read_only` — optional read-only marker (read-only entry points only)
 
 ```bash
-eval "$(hs_read_only mylib_func __mylib_state_token "$@")"
+eval "$(hs_read_only mylib_func __mylib_state_token "$@")" || return $?
 ```
 Strips `-S` from `$@` (normal token) or appends `-ro` to the mode marker, so `hs_finalize_token`
 does no write-back and excludes the token local. See RST `hs_read_only`.
@@ -114,7 +114,7 @@ One skeleton for every stateful entry point (read-write, read/modify/write, read
 ```bash
 mylib_func() {
     eval "$(hs_extract_token  mylib_func __mylib_state_token "$@")" || return $?
-    # eval "$(hs_read_only    mylib_func __mylib_state_token "$@")"   # <-- uncomment iff read-only
+    # eval "$(hs_read_only    mylib_func __mylib_state_token "$@")" || return $?   # <-- uncomment iff read-only
     hs_is_list_reserved_mode -S __mylib_state_token || { _mylib_func "$@" || return $?; }
     eval "$(hs_finalize_token mylib_func __mylib_state_token "$@")" || return $?
 }

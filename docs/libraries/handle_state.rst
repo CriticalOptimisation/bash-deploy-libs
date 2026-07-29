@@ -433,7 +433,7 @@ skeleton, regardless of whether it reads, writes, or both:
 
    mylib_func() {
        eval "$(hs_extract_token  mylib_func __mylib_state_token "$@")" || return $?
-       # eval "$(hs_read_only    mylib_func __mylib_state_token "$@")"   # <-- uncomment iff this entry point never writes state back
+       # eval "$(hs_read_only    mylib_func __mylib_state_token "$@")" || return $?   # <-- uncomment iff this entry point never writes state back
        hs_is_list_reserved_mode -S __mylib_state_token || { _mylib_func "$@" || return $?; }
        eval "$(hs_finalize_token mylib_func __mylib_state_token "$@")" || return $?
    }
@@ -711,6 +711,8 @@ Change History
      - fix --list-reserved merge for read-write entry points
    * - #145
      - token-borne --list-reserved mode; hs_finalize_token, hs_is_list_reserved_mode, hs_read_only (issue #143)
+   * - #145
+     - usage on structural call errors; hs_read_only skeleton line gains ``|| return $?`` (issue #146)
    * - #99
      - error on undeclared variable names [closes #1]
    * - #102
