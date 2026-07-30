@@ -132,21 +132,43 @@ rr_init
 
 .. code-block:: text
 
-   rr_init [-S <var>] [--allow <path>] [--ssh-opt <opt>]
+   rr_init -S <var> [--allow <path>] [--ssh-opt <opt>]
 
-Optional. Captures default options into a ``handle_state`` vector by name.
-Calling ``rr_run`` without a prior ``rr_init`` is valid;
-built-in defaults are used.
+Captures default options into a ``handle_state`` vector by name.  Calling
+``rr_init`` at all is optional — ``rr_run`` works without it and falls back to
+built-in defaults — but when it is called, ``-S`` is mandatory.  The state
+vector is the only output ``rr_init`` produces, so a call without ``-S`` would
+discard every option it was given.
 
 ``-S <var>``
-    Name of the caller-owned variable that will receive the updated state
-    vector.  Declare ``local <var>`` before calling ``rr_init``.
+    **Mandatory.**  Name of the caller-owned variable that will receive the
+    updated state vector.  Declare ``local <var>`` before calling ``rr_init``.
+    Omitting it, supplying it without a value, or supplying it twice is a
+    structural call error: the function prints a diagnostic and its synopsis on
+    stderr, returns a named error constant, and leaves the state variable
+    untouched.
 
 ``--allow <path>``
     Default whitelist entry.  May be repeated.
 
 ``--ssh-opt <opt>``
     Default SSH option.  May be repeated.
+
+**Exit code**
+
++------------------------------------+-------------------------------------------+
+| Constant                           | Condition                                 |
++====================================+===========================================+
+| ``RR_ERR_MULTIPLE_STATE_INPUTS``   | ``-S`` supplied more than once            |
++------------------------------------+-------------------------------------------+
+| ``RR_ERR_MISSING_STATE_VAR``       | ``-S`` absent                             |
++------------------------------------+-------------------------------------------+
+| ``RR_ERR_MISSING_ARGUMENT``        | ``-S`` supplied without a value           |
++------------------------------------+-------------------------------------------+
+| ``RR_ERR_UNKNOWN_ARGUMENT``        | Unrecognised option in the option loop    |
++------------------------------------+-------------------------------------------+
+| ``RR_ERR_PATH_RESOLUTION_FAILED``  | ``realpath`` failed on an ``--allow`` arg |
++------------------------------------+-------------------------------------------+
 
 rr_run
 ~~~~~~
@@ -199,7 +221,9 @@ constants defined in the **Error Codes** section below:
 +====================================+===========================================+
 | ``RR_ERR_UNKNOWN_ARGUMENT``        | Unrecognised option in the option loop    |
 +------------------------------------+-------------------------------------------+
-| ``RR_ERR_MISSING_ARGUMENT``        | ``<user@host>`` or ``<script>`` absent    |
+| ``RR_ERR_MISSING_ARGUMENT``        | ``<user@host>`` absent                    |
++------------------------------------+-------------------------------------------+
+| ``RR_ERR_MISSING_SCRIPT_ARGUMENT`` | ``<script.sh>`` absent                    |
 +------------------------------------+-------------------------------------------+
 | ``RR_ERR_PATH_RESOLUTION_FAILED``  | ``realpath`` failed on an ``--allow`` arg |
 +------------------------------------+-------------------------------------------+
@@ -252,11 +276,30 @@ rr_cleanup
 
 .. code-block:: text
 
-   rr_cleanup [-S <var>]
+   rr_cleanup -S <var>
 
 Removes rr-managed variables from the named shared state object so the same
 state variable can be reused safely by a later ``rr_init`` call.  Reserved for
 future ControlMaster teardown as well.
+
+``-S <var>``
+    **Mandatory.**  Name of the state variable to strip.  As for ``rr_init``,
+    omitting it, supplying it without a value, or supplying it twice is a
+    structural call error rather than a silent no-op.
+
+**Exit code**
+
++------------------------------------+-------------------------------------------+
+| Constant                           | Condition                                 |
++====================================+===========================================+
+| ``RR_ERR_MULTIPLE_STATE_INPUTS``   | ``-S`` supplied more than once            |
++------------------------------------+-------------------------------------------+
+| ``RR_ERR_MISSING_STATE_VAR``       | ``-S`` absent                             |
++------------------------------------+-------------------------------------------+
+| ``RR_ERR_MISSING_ARGUMENT``        | ``-S`` supplied without a value           |
++------------------------------------+-------------------------------------------+
+| ``RR_ERR_UNKNOWN_ARGUMENT``        | Unrecognised option in the option loop    |
++------------------------------------+-------------------------------------------+
 
 Remote Script Categories
 ------------------------
@@ -405,9 +448,14 @@ is sourced.  Values 1–12 are reserved for ``handle_state.sh`` error codes
 that may propagate via ``|| return $?``; no ``RR_ERR_*`` constant uses those
 values unless the semantics are identical and confusion is impossible.
 
+- ``RR_ERR_MULTIPLE_STATE_INPUTS=3``: ``-S`` was supplied more than once.  The
+  call is rejected outright rather than letting the last occurrence win, which
+  would silently write the state into a variable the caller is not watching.
+  Aligned with ``HS_ERR_MULTIPLE_STATE_INPUTS``.
 - ``RR_ERR_MISSING_STATE_VAR=7``: ``-S`` was required but not supplied.
   Aligned with ``HS_ERR_STATE_VAR_UNINITIALIZED``.
-- ``RR_ERR_MISSING_ARGUMENT=8``: a required positional argument is absent.
+- ``RR_ERR_MISSING_ARGUMENT=8``: a required argument is absent — either a
+  positional argument of ``rr_run``, or the value of an option such as ``-S``.
   Aligned with ``HS_ERR_MISSING_ARGUMENT`` and ``CG_ERR_MISSING_ARGUMENT``.
 - ``RR_ERR_UNKNOWN_ARGUMENT=9``: an unrecognised token appeared in the
   option-parsing loop.  Not limited to dash-prefixed tokens.  Aligned with
@@ -428,6 +476,9 @@ values unless the semantics are identical and confusion is impossible.
   ``base64``, ``realpath``, ``mktemp``, ``dirname``, ``cat``, or ``sleep``)
   could not be resolved by ``guard`` at source time.  The library failed to
   load entirely; no ``rr_*`` functions are available.
+- ``RR_ERR_MISSING_SCRIPT_ARGUMENT=20``: the ``<script.sh>`` positional
+  argument of ``rr_run`` is absent.  Distinct from ``RR_ERR_MISSING_ARGUMENT``,
+  which reports a missing ``<user@host>``.
 
 Change History
 --------------
@@ -438,5 +489,9 @@ Change History
 
    * - PR
      - Summary
-   * - #TBD
+   * - #126
      - add Error Codes section; fix nc dependency note; fix exit-code table
+   * - #TBD
+     - -S mandatory for rr_init and rr_cleanup; per-function exit-code tables;
+       document RR_ERR_MULTIPLE_STATE_INPUTS and RR_ERR_MISSING_SCRIPT_ARGUMENT
+       [closes #120]

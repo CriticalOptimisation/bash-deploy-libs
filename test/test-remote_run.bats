@@ -269,9 +269,11 @@ _rr_fixture() {
 }
 
 # bats test_tags=remote_run,local
-@test "rr_init: can be called without arguments [no-setup]" {
-    run rr_init
-    [[ "$status" -eq 0 ]]
+@test "rr_init: without -S returns RR_ERR_MISSING_STATE_VAR [no-setup]" {
+    # Issue #120: this call used to return 0 while silently discarding every
+    # option, leaving the caller with no state and no diagnostic.
+    run -"$RR_ERR_MISSING_STATE_VAR" --separate-stderr rr_init --ssh-opt "-i /tmp/k"
+    [[ "$stderr" == *"-S"* ]]
 }
 
 # bats test_tags=remote_run,local
@@ -302,9 +304,10 @@ _rr_fixture() {
 }
 
 # bats test_tags=remote_run,local
-@test "rr_cleanup: is a no-op [no-setup]" {
-    run rr_cleanup
-    [[ "$status" -eq 0 ]]
+@test "rr_cleanup: without -S returns RR_ERR_MISSING_STATE_VAR [no-setup]" {
+    # Issue #120: same silent no-op as rr_init, kept symmetrical on purpose.
+    run -"$RR_ERR_MISSING_STATE_VAR" --separate-stderr rr_cleanup
+    [[ "$stderr" == *"-S"* ]]
 }
 
 # bats test_tags=remote_run,local
@@ -753,6 +756,91 @@ OVERRIDE
     [[ "$status" -eq "$RR_ERR_UNKNOWN_ARGUMENT" ]]
 }
 
+# ---------------------------------------------------------------------------
+# Issue #120 — the four silent paths of the -S option.
+# Every failure path below carries its own code: 3 duplicate, 7 absent,
+# 8 present without a value.  All of them used to return 0.
+# ---------------------------------------------------------------------------
+
+# bats test_tags=remote_run,error_codes
+@test "remote_run: the two issue 120 error constants are defined and aligned [no-setup]" {
+    # Checked on its own so the red state names the missing piece: without these
+    # constants the tests below degrade into a bats usage error on `run -`.
+    [[ -n "${RR_ERR_MULTIPLE_STATE_INPUTS:-}" ]]
+    [[ -n "${RR_ERR_MISSING_STATE_VAR:-}" ]]
+    # Aligned with handle_state.sh, the project's numeric reference.
+    [[ "$RR_ERR_MULTIPLE_STATE_INPUTS" -eq 3 ]]
+    [[ "$RR_ERR_MISSING_STATE_VAR" -eq 7 ]]
+}
+
+# bats test_tags=remote_run,error_codes
+@test "rr_init: -S at end of line returns RR_ERR_MISSING_ARGUMENT [no-setup]" {
+    run -"$RR_ERR_MISSING_ARGUMENT" --separate-stderr rr_init -S
+    [[ "$stderr" == *"-S"* ]]
+}
+
+# bats test_tags=remote_run,error_codes
+@test "rr_init: -S with an empty value returns RR_ERR_MISSING_ARGUMENT [no-setup]" {
+    run -"$RR_ERR_MISSING_ARGUMENT" --separate-stderr rr_init -S ""
+    [[ "$stderr" == *"-S"* ]]
+}
+
+# bats test_tags=remote_run,error_codes
+@test "rr_init: duplicate -S returns RR_ERR_MULTIPLE_STATE_INPUTS and writes neither variable [no-setup]" {
+    # The dangerous case: last-wins used to send the state into a variable the
+    # caller never named as its destination.
+    _rr_dup_s_writes_nothing() {
+        local first="" second="" st=0
+        rr_init -S first -S second --ssh-opt "-i /tmp/k"
+        st=$?
+        [[ "$st" -eq "$RR_ERR_MULTIPLE_STATE_INPUTS" ]] || return 1
+        [[ -z "$first" ]] || return 2
+        [[ -z "$second" ]] || return 3
+    }
+    run -0 _rr_dup_s_writes_nothing
+}
+
+# bats test_tags=remote_run,error_codes
+@test "rr_cleanup: -S at end of line returns RR_ERR_MISSING_ARGUMENT [no-setup]" {
+    run -"$RR_ERR_MISSING_ARGUMENT" --separate-stderr rr_cleanup -S
+    [[ "$stderr" == *"-S"* ]]
+}
+
+# bats test_tags=remote_run,error_codes
+@test "rr_cleanup: -S with an empty value returns RR_ERR_MISSING_ARGUMENT [no-setup]" {
+    run -"$RR_ERR_MISSING_ARGUMENT" --separate-stderr rr_cleanup -S ""
+    [[ "$stderr" == *"-S"* ]]
+}
+
+# bats test_tags=remote_run,error_codes
+@test "rr_cleanup: duplicate -S returns RR_ERR_MULTIPLE_STATE_INPUTS [no-setup]" {
+    run -"$RR_ERR_MULTIPLE_STATE_INPUTS" --separate-stderr rr_cleanup -S first -S second
+    [[ "$stderr" == *"-S"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# Issue #120 — _rr_usage: structural call errors print the correct calling form
+# on stderr, after the [ERROR] diagnostic.
+# ---------------------------------------------------------------------------
+
+# bats test_tags=remote_run,error_codes
+@test "rr_init: missing -S prints the synopsis on stderr [no-setup]" {
+    run -"$RR_ERR_MISSING_STATE_VAR" --separate-stderr rr_init
+    [[ "$stderr" == *"Usage: rr_init -S <var>"* ]]
+}
+
+# bats test_tags=remote_run,error_codes
+@test "rr_init: unknown option prints the synopsis on stderr [no-setup]" {
+    run -"$RR_ERR_UNKNOWN_ARGUMENT" --separate-stderr rr_init --no-such-option
+    [[ "$stderr" == *"Usage: rr_init -S <var>"* ]]
+}
+
+# bats test_tags=remote_run,error_codes
+@test "rr_cleanup: missing -S prints the synopsis on stderr [no-setup]" {
+    run -"$RR_ERR_MISSING_STATE_VAR" --separate-stderr rr_cleanup
+    [[ "$stderr" == *"Usage: rr_cleanup -S <var>"* ]]
+}
+
 # bats test_tags=remote_run,error_codes
 @test "rr_run: missing host argument returns RR_ERR_MISSING_ARGUMENT [no-setup]" {
     run rr_run
@@ -799,5 +887,7 @@ return 0
 # --- Change History -------------------------------------------------------
 # | PR     | Summary                                                       |
 # |--------|---------------------------------------------------------------|
-# | #TBD   | replace dead nc test; add xfail error-code tests (issues      |
+# | #126   | replace dead nc test; add xfail error-code tests (issues      |
 # |        | #122, #123)                                                   |
+# | #TBD   | invert the two -S no-op tests; add the four silent -S paths   |
+# |        | and the _rr_usage synopsis assertions [closes #120]           |
