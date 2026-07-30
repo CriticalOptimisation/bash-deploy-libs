@@ -32,7 +32,7 @@ Dependencies
 |                        | commands ``docker``, ``apt-get``, ``apt-cache``, |
 |                        | ``curl``, ``id``.                                |
 +------------------------+--------------------------------------------------+
-| ``handle_state.sh``    | Layer 2 functions only.  Sourced automatically  |
+| ``handle_state.sh``    | Layer 2 functions only.  Sourced automatically   |
 |                        | by ``ensure_docker.sh``.                         |
 +------------------------+--------------------------------------------------+
 | Docker CE APT repo     | Required by ``ed_install_docker`` on             |
