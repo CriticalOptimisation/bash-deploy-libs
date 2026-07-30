@@ -328,139 +328,160 @@ argument list:
 from ``${@:3}`` and emits ``local __mod_state_token='<token_value>'`` on
 success or ``bash -c 'exit N'`` on error.  Runs in a ``$(...)`` subshell; the
 collision surface at fork time consists of ``hs_extract_token``'s own
-locals.
+locals.  ``-S`` is **mandatory**: omitting it is a structural error
+(``HS_ERR_STATE_VAR_UNINITIALIZED``, printed to stderr).
 
-*Auto --list-reserved mode* (``$3 == --list-reserved``): activated when the
-caller passes ``--list-reserved`` as their first argument (so ``${@:3}`` of
-``hs_extract_token`` is exactly ``--list-reserved``).  Emits two sentinels into the
-entry-point frame:
+*List-reserved mode* (``$3 == --list-reserved``): activated when the caller
+passes ``--list-reserved`` as their first argument (so ``${@:3}`` of
+``hs_extract_token`` is exactly ``--list-reserved``).  Instead of extracting a
+state value, it emits eval-code that declares the token local and assigns it a
+**mode token** — a real HS2 object whose checksum field is replaced by a
+non-numeric marker only ``hs_extract_token`` can emit:
 
-.. code-block:: bash
+.. code-block:: text
 
-   local list_reserved=$'__hs_processed\n__hs_remaining'  # own reserved names; merged by hs_write_token
-   local __mod_state_token=''   # token local pre-declared for frame inspection
+   HS2:mode=list-reserved:declare -a reserved_names=([0]="__hs_processed" [1]="__hs_remaining" ...)
 
-No further arguments are valid in this mode.  The entry-point detects
-``list_reserved`` with ``local -p list_reserved >/dev/null 2>&1`` (returns 0
-when the variable is declared as a local).  In a read-write pattern,
-``hs_write_token`` reads ``list_reserved`` from the inherited frame, merges it
-with its own names and the source-local name, and emits a ``printf`` statement
-plus ``return 0`` so that ``eval`` prints all names and exits the entry point.
+The payload (a ``reserved_names`` array) is built with ``hs_persist_state`` and
+carries the merged collision surface: ``hs_extract_token``'s own names **plus a
+capture of the entry-point frame** taken at eval time (so locals the entry
+point declared *before* the eval are included).  The token local (``$2``) is
+declared **last, immediately before assignment**, so it never appears in its
+own capture; whether ``$2`` belongs in the reported surface is decided later by
+``hs_finalize_token`` (see below), not here.  No further arguments are valid in
+this mode.
 
-Errors: same set as the shared option parser; no new codes.
+Because the marker replaces the numeric checksum, a normal token can never
+equal a mode token: every non-token-utility consumer rejects it with the
+discriminable ``HS_ERR_LIST_RESERVED_TOKEN`` (see `Error Codes`_), and
+``hs_is_list_reserved_mode`` / ``hs_finalize_token`` recognise it structurally.
 
-hs_write_token
-~~~~~~~~~~~~~~
+Errors: same set as the shared option parser; ``-S`` is mandatory in normal
+mode.
 
-``hs_write_token`` writes an updated state token value back to the caller's variable.
+hs_finalize_token
+~~~~~~~~~~~~~~~~~
 
-- Usage: ``eval "$(hs_write_token <API_function> <source_local> "$@")"`` where ``${@:3}``
-  from the entry point's perspective contains ``-S <statevar>``.
-- ``$1`` is the name of the calling API function (used in error messages).
-- ``$2`` is the name of the local holding the updated token (accessed by position).
-- The forwarded parameter list (``${@:3}``) must contain ``-S <statevar>``.
-- Runs in a ``$(...)`` subshell, inheriting the calling frame read-only.
-- ``--list-reserved`` (when ``${@:3}`` is exactly ``--list-reserved``): computes
-  own collision surface, merges it with ``list_reserved`` from the inherited
-  entry-point frame (set by ``hs_extract_token``'s eval-code form when present),
-  adds ``$2`` (the source-local name), and emits eval-code that prints all merged
-  names and returns 0.  After ``eval``, the entry-point prints the complete
-  collision surface and exits.
+``hs_finalize_token`` terminates every entry point.  It is **always** called
+, and its behaviour is driven entirely by the token it is handed — never by re-sniffing ``$@``.
 
-Behaviour:
+- Usage: ``eval "$(hs_finalize_token <API_function> <token_local> "$@")"``.
+- ``$1`` is the calling API function name (used in error messages).
+- ``$2`` is the name of the local holding the token (accessed by position).
+- Runs in a ``$(...)`` subshell, inheriting the calling frame read-only for the
+  write path; the list-reserved report path emits code that runs in the
+  entry-point frame so it can capture that frame afresh.
 
-- Parses ``-S`` from the forwarded arguments.
-- On success: prints ``<statevar>='<updated_value>'`` — a plain assignment (not ``local``)
-  that ``eval`` executes to write the token back.
+Behaviour, selected by the token's checksum field:
+
+- **Mode token** (field starts with ``mode=``): emit the collision-surface
+  report — read ``reserved_names`` back out of the token, merge it with
+  ``hs_finalize_token``'s own surface **and a fresh capture of the entry-point
+  frame** (catching locals declared between the two evals), then print one name
+  per line and ``return 0``.  The token local ``$2`` is **included** unless the
+  marker ends in ``-ro`` (read-only; see ``hs_read_only``), in which case it is
+  excluded.  The reported conflicting token name is always ``$2`` — the fixed
+  internal state-token name — independent of any external ``-S`` name.
+- **Normal token** (numeric checksum) with ``-S <statevar>`` present: emit
+  ``<statevar>='<token_value>'`` — a plain assignment writing the (possibly
+  updated) token back.  Idempotent when the body left the token unchanged.
+- **Normal token** with no ``-S``: emit nothing and ``return 0`` — the entry
+  point is read-only with respect to external state.
 - On error: prints ``bash -c 'exit N'``.
 
-The collision surface includes at minimum the source-local name (``$2``) plus
-``hs_extract_token``'s own locals.  Any other locals declared in the entry-point frame
-before this call also add to the surface.  When the body-helper pattern is followed
-strictly — where the body helper (not the entry point) declares and updates the token local
-— only those minimum names appear.
+Structural errors — those where the *shape* of the call is wrong, as opposed to a
+well-formed call whose request fails — are checked before the token is read, and
+print both a diagnostic and the synopsis on stderr.  No option is consulted on
+these paths: ``-q`` belongs to the functional domain, and a malformed argument
+list is precisely what must not be trusted to carry an option.
 
-.. note::
+- ``HS_ERR_INVALID_ARGUMENT_TYPE=9``: ``$1`` is an option other than
+  ``--list-reserved`` (typically a mistyped one), ``$1`` is not a usable API
+  function name, or ``--list-reserved`` was given extra arguments.
+- ``HS_ERR_MISSING_ARGUMENT=8``: fewer than two positional arguments.
+- ``HS_ERR_INVALID_VAR_NAME=5``: ``$2`` is not a valid Bash identifier.
 
-   ``hs_write_token`` cannot avoid a name collision when the ``-S`` state variable
-   and the source local share the same name.  This edge case is addressed in issue #139.
+``$1`` and ``$2`` are validated against **different** rules.  ``$2`` names a
+variable and must be a plain identifier.  ``$1`` names a function, so dotted and
+colon-separated forms (``obj.method``, ``a.b.c``, ``ns::func``) are accepted —
+they are legal Bash function names, and they are the shape a dispatch layer built
+on top of tokens would use.  The accepted set is narrower than Bash's own, which
+also admits ``foo*``, ``foo[1]`` and ``foo#bar``: glob and expansion
+metacharacters are excluded because the name is interpolated into diagnostics.
+First character a letter or underscore, then also digits and ``. : + @ -``.
 
-Errors: same set as the shared option parser; ``HS_ERR_MISSING_ARGUMENT`` if
-``$1`` is absent.
+See `Entry-Point Pattern`_ for canonical usage examples.
 
-See `Entry-Point Pattern`_ for canonical usage examples of both functions.
+hs_is_list_reserved_mode
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``hs_is_list_reserved_mode -S <token_local>`` returns 0 iff the named token is a
+list-reserved mode token (checksum field starts with ``mode=list-reserved``,
+matching both the read-write baseline and the ``-ro`` variant), non-zero
+otherwise.  It reads the token through dynamic scope and never accesses external
+state, so it carries no collision surface of its own.  It is the body-skip guard
+in the canonical skeleton: the entry-point body runs only when the token is a
+real state token.
+
+hs_read_only
+~~~~~~~~~~~~
+
+``hs_read_only <API_function> <token_local> "$@"`` marks an entry point as
+read-only with respect to external state.  It is an **optional** line in the
+canonical skeleton; include it only in entry points that never write state back.
+Its single, mode-agnostic rule inspects the token's checksum field:
+
+- **numeric checksum** (a normal state token, or an empty / non-HS2 token):
+  strip ``-S <var>`` from ``$@`` (emit ``set -- …``) so ``hs_finalize_token``
+  performs no write-back.
+- **``mode=…`` marker** (any mode): append ``-ro`` to the marker
+  (idempotently — never a double ``-ro``), leaving the payload untouched, so
+  ``hs_finalize_token`` excludes the token local ``$2`` from the reported
+  surface.
+
+Because the rule keys only on the ``mode=`` prefix, every present and future
+mode gains a read-only variant (``mode=X`` → ``mode=X-ro``) for free.
+
+``hs_read_only`` performs the same structural checks as ``hs_finalize_token``,
+with the same codes and the same rules for ``$1`` and ``$2``; see above.  They
+matter more here: unchecked, a malformed call falls through to the normal-token
+path and emits a bare ``set --``, silently discarding the entry point's
+positional parameters.  Its skeleton line therefore carries ``|| return $?`` like
+the other two, so the emitted exit stub reaches the caller.
 
 Entry-Point Pattern
 ~~~~~~~~~~~~~~~~~~~
 
 Libraries that expose ``-S <statevar>`` and use ``handle_state.sh`` internally
-should structure each stateful entry point as follows to minimize name collision
-risk.
-
-**Read-write entry point** (restores and persists state):
+should structure **every** stateful entry point with the same three-line
+skeleton, regardless of whether it reads, writes, or both:
 
 .. code-block:: bash
 
    mylib_func() {
-       # No extra locals; hs_extract_token emits __mylib_state_token via eval.
-       eval "$(hs_extract_token mylib_func __mylib_state_token "$@")" || return $?
-       if ! local -p list_reserved >/dev/null 2>&1; then
-           # Body helper reads from and persists to __mylib_state_token via dynamic scoping.
-           _mylib_func "$@" || return $?
-       fi
-       # hs_write_token handles --list-reserved when active; otherwise writes the token back.
-       eval "$(hs_write_token mylib_func __mylib_state_token "$@")" || return $?
+       eval "$(hs_extract_token  mylib_func __mylib_state_token "$@")" || return $?
+       # eval "$(hs_read_only    mylib_func __mylib_state_token "$@")" || return $?   # <-- uncomment iff this entry point never writes state back
+       hs_is_list_reserved_mode -S __mylib_state_token || { _mylib_func "$@" || return $?; }
+       eval "$(hs_finalize_token mylib_func __mylib_state_token "$@")" || return $?
    }
+
+The three steps are always *extract → body-unless-listing → finalize*:
+
+#. ``hs_extract_token`` populates the token local — either the caller's state
+   (normal mode) or a mode token (``--list-reserved``).
+#. ``hs_is_list_reserved_mode`` skips the body helper whenever the token is a
+   mode token, so no business logic runs during a ``--list-reserved`` query
+   (any read or persist attempted there would hit the mode token and fail with
+   ``HS_ERR_LIST_RESERVED_TOKEN``).
+#. ``hs_finalize_token`` writes the token back (normal mode) or emits the
+   collision report (list-reserved mode).
+
+**Read-write** and **read/modify/write** entry points use the skeleton as shown.
+The body helper reads from and persists to the token local via dynamic scoping:
+
+.. code-block:: bash
 
    _mylib_func() {
-       local var1 var2
-       eval "$(hs_read_persisted_state -S __mylib_state_token)" || return $?   # implicit form preferred
-       # ... work ...
-       hs_destroy_state -S __mylib_state_token -- var1 var2 || return $?
-       hs_persist_state -S __mylib_state_token -- var1 var2 || return $?
-   }
-
-**Read-only entry point** (restores state but does not persist):
-
-A well-designed read-only entry point has the same collision surface as
-``hs_extract_token``.  It delegates ``--list-reserved`` reporting directly
-to ``hs_extract_token --list-reserved``.
-
-.. code-block:: bash
-
-   mylib_ro_func() {
-       eval "$(hs_extract_token mylib_ro_func __mylib_state_token "$@")" || return $?
-       local -p list_reserved >/dev/null 2>&1 && { hs_extract_token --list-reserved; return 0; }
-       _mylib_ro_func "$@" || return $?
-   }
-
-   _mylib_ro_func() {
-       local var1 var2
-       eval "$(hs_read_persisted_state -S __mylib_state_token)" || return $?   # implicit form preferred
-       # ... read-only work ...
-   }
-
-**Read/modify/write entry point** (updates one or more variables inside an
-existing token without replacing the whole state):
-
-When a function must change variables that are already stored in an opaque
-token it received from its caller, it must destroy and re-persist those
-variables — it cannot overwrite them in place.  Using ``hs_extract_token``
-and ``hs_write_token`` keeps the operation atomic from the caller's
-perspective: the token variable is either fully updated or left unchanged.
-
-.. code-block:: bash
-
-   mylib_update_func() {
-       # No extra locals; hs_extract_token emits __mylib_state_token via eval.
-       eval "$(hs_extract_token mylib_update_func __mylib_state_token "$@")" || return $?
-       if ! local -p list_reserved >/dev/null 2>&1; then
-           _mylib_update_func "$@" || return $?
-       fi
-       eval "$(hs_write_token mylib_update_func __mylib_state_token "$@")" || return $?
-   }
-
-   _mylib_update_func() {
        local var1 var2
        eval "$(hs_read_persisted_state -S __mylib_state_token)" || return $?   # implicit form preferred
        # ... mutate var1, var2 as needed ...
@@ -469,13 +490,31 @@ perspective: the token variable is either fully updated or left unchanged.
        hs_persist_state -S __mylib_state_token -- var1 var2 || return $?
    }
 
+**Read-only** entry points uncomment the ``hs_read_only`` line.  In normal mode
+it strips ``-S`` so ``hs_finalize_token`` performs no write-back; in
+list-reserved mode it appends ``-ro`` to the token marker so the report excludes
+the token local.  The body helper simply omits the destroy/persist calls:
+
+.. code-block:: bash
+
+   _mylib_ro_func() {
+       local var1 var2
+       eval "$(hs_read_persisted_state -S __mylib_state_token)" || return $?   # implicit form preferred
+       # ... read-only work ...
+   }
+
+Whether a call ultimately modifies the state is a **runtime** property of the
+body — the finalizer simply serialises whatever the token holds — so a helper
+that conditionally mutates state needs no special flag and no branch in the
+entry point.
+
 .. warning::
 
    ``hs_destroy_state`` modifies the token **in the caller's variable**
    immediately.  If ``hs_persist_state`` subsequently fails, the destroyed
    variables are lost from the token.  Always call both functions in the
    same body helper so that any error causes the whole entry point to abort
-   via ``return $?`` before ``hs_write_token`` propagates an incomplete
+   via ``return $?`` before ``hs_finalize_token`` propagates an incomplete
    token back to the caller.  Bash's sequential execution model and the
    fact that subshells cannot write back to the parent shell's variables
    make this pattern safe under normal control flow: there is no concurrent
@@ -492,12 +531,16 @@ perspective: the token variable is either fully updated or left unchanged.
    subshell (e.g. to capture their output) cannot update the caller's token
    even if they call ``hs_persist_state`` successfully.
 
-The ``--list-reserved`` output differs by entry-point type:
+The ``--list-reserved`` output differs by entry-point type, because
+``hs_finalize_token`` includes the token local only when the mode marker lacks
+the ``-ro`` suffix:
 
-- **Read-only** (delegates to ``hs_extract_token --list-reserved``): prints only
-  ``__hs_processed`` and ``__hs_remaining``.
-- **Read-write** (delegates to ``hs_write_token mylib_func __mylib_state_token --list-reserved``):
-  prints ``__hs_processed``, ``__hs_remaining``, and ``__mylib_state_token``.
+- **Read-write / read-modify-write** (no ``hs_read_only``; marker
+  ``mode=list-reserved``): prints ``__hs_processed``, ``__hs_remaining``, and
+  ``__mylib_state_token``.
+- **Read-only** (``hs_read_only`` uncommented; marker ``mode=list-reserved-ro``):
+  prints only ``__hs_processed`` and ``__hs_remaining`` — the token local is
+  excluded because no write-back can shadow the caller's ``-S`` name.
 
 Developer Reference
 -------------------
@@ -551,6 +594,12 @@ Error Codes
 - ``HS_ERR_UNKNOWN_VAR_NAME=10``
 - ``HS_ERR_VAR_ALREADY_SET=11``
 - ``HS_ERR_NAMEREF_TARGET_NOT_PERSISTED=12``
+- ``HS_ERR_LIST_RESERVED_TOKEN=13``: a list-reserved **mode token** (checksum
+  field starting with ``mode=``) was handed to a normal state consumer
+  (``hs_persist_state``, ``hs_destroy_state``, ``hs_read_persisted_state``).
+  A mode token carries only the reserved-name surface and is not usable as
+  state; this code is distinct from ``HS_ERR_CORRUPT_STATE`` so callers can tell
+  the two apart.  It signals programmer misuse and is printed to stderr.
 
 Known Limitations
 -----------------
@@ -687,6 +736,12 @@ Change History
      - add hs_extract_token and hs_write_token; entry-point pattern (issue #136)
    * - #140
      - fix --list-reserved merge for read-write entry points
+   * - #145
+     - token-borne --list-reserved mode; hs_finalize_token, hs_is_list_reserved_mode, hs_read_only (issue #143)
+   * - #145
+     - usage on structural call errors; hs_read_only skeleton line gains ``|| return $?`` (issue #146)
+   * - #145
+     - API function names validated as function names, not identifiers (obj.method)
    * - #99
      - error on undeclared variable names [closes #1]
    * - #102

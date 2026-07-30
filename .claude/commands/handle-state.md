@@ -16,7 +16,8 @@ API, warnings, and limitations.
 ## Quick Workflow
 
 - Source `config/handle_state.sh` once in the main script or library entrypoint.
-- Use `hs_extract_token` + `hs_write_token` in entry points to minimize name collision risk.
+- Wrap entry points in the single skeleton (`hs_extract_token` → `hs_is_list_reserved_mode` guard
+  → `hs_finalize_token`) to minimize name collision risk.
 - In body helpers, call `hs_persist_state -S __mylib_state_token -- <local1> <local2> ...`
   to save state and `hs_read_persisted_state -S __mylib_state_token -- <local1> <local2> ...`
   to restore it. Body helpers hardcode the state variable name because it is a library
@@ -73,134 +74,54 @@ hs_destroy_state -S __mylib_state_token -- var1 var2 || return $?
 Removes named entries from the state vector. Required before re-initializing against the
 same token.
 
-### `hs_extract_token` — token extraction for entry points
+### `hs_extract_token` — populate the entry-point token local
 
-Two call forms:
-
-**Form 1 — direct query** (`$1 == --list-reserved`):
-```bash
-hs_extract_token --list-reserved
-```
-Prints the names forming the collision surface of `hs_extract_token` itself, one per line.
-As of the current release the output is:
-
-```
-__hs_processed
-__hs_remaining
-```
-
-**Form 2 — eval form** (`$1` is calling function name, `$2` is local name, `${@:3}` are the forwarded args):
 ```bash
 eval "$(hs_extract_token mylib_func __mylib_state_token "$@")" || return $?
+hs_extract_token --list-reserved     # direct query: own reserved names
 ```
-The eval form has two operational modes selected automatically by the caller's argument list:
+Normal mode extracts the `-S` state into the token local (`-S` mandatory). With `--list-reserved`
+in the caller's args it mints a mode token (`HS2:mode=list-reserved:…`) carrying the reserved-name
+surface. See RST `hs_extract_token`.
 
-- **Normal mode** (`$3` is not `--list-reserved`): parses `-S <statevar>` from `${@:3}`
-  and emits `local __mylib_state_token='<value>'` on success, or `bash -c 'exit N'` on error.
-  The collision surface at fork time consists of `hs_extract_token`'s own locals only.
+### `hs_finalize_token` — finalize the entry point (always the last line)
 
-- **Auto `--list-reserved` mode** (`$3 == --list-reserved`): activated when the caller passes
-  `--list-reserved` as their first argument, making `$3` of `hs_extract_token` equal to
-  `--list-reserved`. Emits two sentinels into the entry-point frame:
-  ```bash
-  local list_reserved=$'__hs_processed\n__hs_remaining'  # own reserved names; merged by hs_write_token
-  local __mylib_state_token=''
-  ```
-  No further arguments are valid in this mode.
-
-### `hs_write_token` — token write-back for entry points
-
-**Normal eval form**:
 ```bash
-eval "$(hs_write_token mylib_func __mylib_state_token "$@")" || return $?
+eval "$(hs_finalize_token mylib_func __mylib_state_token "$@")" || return $?
 ```
-Parses `-S <statevar>` from `${@:3}` (the forwarded args, which include `-S`) and emits
-`<statevar>='<value>'` (plain assignment, not `local`) on success, or `bash -c 'exit N'`
-on error. The collision surface includes at minimum `__mylib_state_token` plus
-`hs_extract_token`'s own locals. Any other locals declared in the entry-point frame before
-this call also add to the surface. When the body-helper pattern is followed strictly, only
-the token local is declared, keeping the surface to those three names.
+Replaces `hs_write_token`. Token-driven: writes a normal token back to `-S` (nothing if no `-S`),
+or emits the collision report for a mode token. See RST `hs_finalize_token`.
 
-**`--list-reserved` form** (when `$3 == --list-reserved`):
-Computes own collision surface, merges it with `list_reserved` from the inherited
-entry-point frame (set by `hs_extract_token`'s eval-code form when present), adds `$2`
-(the source-local name), and emits eval-code that prints all merged names and returns 0.
-After `eval`, the entry-point prints the complete collision surface and exits.
+### `hs_is_list_reserved_mode` — body-skip guard
 
-Note: `hs_write_token` cannot avoid a name collision if the `-S` state variable and the
-source local share a name. This edge case is addressed in issue #139.
+```bash
+hs_is_list_reserved_mode -S __mylib_state_token || { _mylib_func "$@" || return $?; }
+```
+True iff the token is a list-reserved mode token. See RST `hs_is_list_reserved_mode`.
 
-## Entry-Point Patterns
+### `hs_read_only` — optional read-only marker (read-only entry points only)
 
-### Read-write entry point (restores and persists state)
+```bash
+eval "$(hs_read_only mylib_func __mylib_state_token "$@")" || return $?
+```
+Strips `-S` from `$@` (normal token) or appends `-ro` to the mode marker, so `hs_finalize_token`
+does no write-back and excludes the token local. See RST `hs_read_only`.
+
+## Entry-Point Pattern
+
+One skeleton for every stateful entry point (read-write, read/modify/write, read-only):
 
 ```bash
 mylib_func() {
-    # No extra locals; hs_extract_token emits __mylib_state_token via eval.
-    eval "$(hs_extract_token mylib_func __mylib_state_token "$@")" || return $?
-    if ! local -p list_reserved >/dev/null 2>&1; then
-        # __mylib_state_token accessible by _mylib_func via dynamic scoping.
-        # Body helper calls hs_read_persisted_state and hs_persist_state -S __mylib_state_token directly.
-        _mylib_func "$@" || return $?
-    fi
-    # hs_write_token handles --list-reserved when active; otherwise writes the token back.
-    eval "$(hs_write_token mylib_func __mylib_state_token "$@")" || return $?
-}
-
-_mylib_func() {
-    local var1 var2
-    eval "$(hs_read_persisted_state -S __mylib_state_token)" || return $?   # implicit form preferred
-    # ... work ...
-    hs_destroy_state -S __mylib_state_token -- var1 var2 || return $?
-    hs_persist_state  -S __mylib_state_token -- var1 var2 || return $?
+    eval "$(hs_extract_token  mylib_func __mylib_state_token "$@")" || return $?
+    # eval "$(hs_read_only    mylib_func __mylib_state_token "$@")" || return $?   # <-- uncomment iff read-only
+    hs_is_list_reserved_mode -S __mylib_state_token || { _mylib_func "$@" || return $?; }
+    eval "$(hs_finalize_token mylib_func __mylib_state_token "$@")" || return $?
 }
 ```
-
-### Read-only entry point (restores state, does not persist)
-
-A well-designed read-only entry point has the same collision surface as `hs_extract_token`,
-so it delegates `--list-reserved` reporting directly to `hs_extract_token --list-reserved`.
-
-```bash
-mylib_ro_func() {
-    eval "$(hs_extract_token mylib_ro_func __mylib_state_token "$@")" || return $?
-    local -p list_reserved >/dev/null 2>&1 && { hs_extract_token --list-reserved; return 0; }
-    _mylib_ro_func "$@" || return $?
-}
-
-_mylib_ro_func() {
-    local var1 var2
-    eval "$(hs_read_persisted_state -S __mylib_state_token)" || return $?   # implicit form preferred
-    # ... read-only work ...
-}
-```
-
-### Read/modify/write entry point (updates variables inside an existing token)
-
-When a function must mutate variables already stored in a token it received
-from its caller, it must destroy those variables before re-persisting them.
-`hs_destroy_state` modifies the token immediately, so always pair it with
-`hs_persist_state` in the same body helper so a failure aborts before
-`hs_write_token` propagates an incomplete token back.
-
-```bash
-mylib_update_func() {
-    # No extra locals; hs_extract_token emits __mylib_state_token via eval.
-    eval "$(hs_extract_token mylib_update_func __mylib_state_token "$@")" || return $?
-    if ! local -p list_reserved >/dev/null 2>&1; then
-        _mylib_update_func "$@" || return $?
-    fi
-    eval "$(hs_write_token mylib_update_func __mylib_state_token "$@")" || return $?
-}
-
-_mylib_update_func() {
-    local var1 var2
-    hs_read_persisted_state -S __mylib_state_token -- var1 var2 || return $?
-    # ... mutate var1, var2 ...
-    hs_destroy_state -S __mylib_state_token -- var1 var2 || return $?
-    hs_persist_state  -S __mylib_state_token -- var1 var2 || return $?
-}
-```
+The body helper `_mylib_func` does the `hs_read_persisted_state` / `hs_destroy_state` /
+`hs_persist_state` work (read-only helpers omit destroy/persist). Full patterns, body-helper
+examples, and `--list-reserved` output rules: see RST **Entry-Point Pattern**.
 
 ### Plain init/cleanup (no entry-point wrapper needed)
 
@@ -253,6 +174,7 @@ All Bash variable types are supported:
 | 10 | `HS_ERR_UNKNOWN_VAR_NAME` | Name not declared in scope, or is a function |
 | 11 | `HS_ERR_VAR_ALREADY_SET` | Explicit restore target is already set |
 | 12 | `HS_ERR_NAMEREF_TARGET_NOT_PERSISTED` | Nameref target not in state |
+| 13 | `HS_ERR_LIST_RESERVED_TOKEN` | Mode token (`mode=…`) passed to a normal state consumer |
 | 19 | `HS_ERR_DEPENDENCY_MISSING` | `command_guard.sh` not loadable |
 
 ## Safety Notes
@@ -271,7 +193,7 @@ All Bash variable types are supported:
   modified. Functions that run in a subshell cannot advance library state even if they call
   `hs_persist_state` successfully. Design stateful code paths to run directly in the shell
   process, not inside command substitutions.
-- **To emit results from a subshell**, use the `hs_write_token` eval pattern: inside
+- **To emit results from a subshell**, use the `hs_finalize_token` eval pattern: inside
   `$(...)` emit `<statevar>='<value>'` to stdout so the caller's `eval` writes the result
   back. On error emit `bash -c 'exit N'` so the caller's `eval` propagates the exit code.
   Example:
